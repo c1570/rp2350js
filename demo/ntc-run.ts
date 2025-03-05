@@ -14,14 +14,16 @@ const readline = require('readline');
 
 import * as fs from 'fs';
 import { RP2040 } from '../src';
+import { RP2350 } from '../src';
 import { GPIOPinState } from '../src/gpio-pin';
 import { bootromB1 } from './bootrom';
+import { bootrom_rp2350_A2 } from './bootrom_rp2350';
 import { loadHex } from './intelhex';
 
 const homedir = require('os').homedir();
 
-const hex_files = [["MAIN", homedir + '/project/connomore64/PicoDVI/software/build/apps/cnm64_main/cnm64_main.hex'],
-                   ["VIC", homedir + '/project/connomore64/PicoDVI/software/build/apps/cnm64_vic/cnm64_vic.hex'],
+const hex_files = [["MAIN", homedir + '/project/connomore64/src/main/cnm64_main.hex'],
+                   ["VIC", homedir + '/project/connomore64/src/vic/cnm64_vic.hex'],
                    ["OUTPUT", homedir + '/project/connomore64/PicoDVI/software/build/apps/cnm64_output/cnm64_output.hex'],
                    ["CIA1", homedir + '/project/connomore64/PicoDVI/software/build/apps/cnm64_cia/cnm64_cia1.hex'],
                    ["CIA2", homedir + '/project/connomore64/PicoDVI/software/build/apps/cnm64_cia/cnm64_cia2.hex']];
@@ -29,15 +31,23 @@ const hex_files = [["MAIN", homedir + '/project/connomore64/PicoDVI/software/bui
 const pin_gpio: number[] = [2,3,4,5,6,7,8,9,10];
 const pin_label: string[] = ["clock", "d0", "d1", "d2", "d3", "d4", "d5", "d6", "d7"];
 
-const mcu = new Array(hex_files.length).fill(null).map(() => new RP2040());
+const mcu = new Array(hex_files.length).fill(null);
 
 for(let i = 0; i < hex_files.length; i++) {
-  mcu[i].loadBootrom(bootromB1);
+  if(i >= 2) {
+    mcu[i] = new RP2040();
+    mcu[i].loadBootrom(bootromB1);
+    mcu[i].core0.PC = 0x10000000;
+    mcu[i].core1.PC = 0x10000000;
+    mcu[i].core1.waiting = true;
+  } else {
+    mcu[i] = new RP2350();
+    mcu[i].loadBootrom(bootrom_rp2350_A2);
+    mcu[i].core0.pc = 0x10000036;
+    mcu[i].core1.pc = 0x10000036;
+  }
   loadHex(fs.readFileSync(hex_files[i][1], 'utf-8'), mcu[i].flash, 0x10000000);
-  mcu[i].core0.PC = 0x10000000;
-  mcu[i].core1.PC = 0x10000000;
-  mcu[i].core1.waiting = true;
-  mcu[i].uart[0].onByte = (value) => { process.stdout.write(new Uint8Array([value])); };
+  mcu[i].uart[0].onByte = (value: number) => { process.stdout.write(new Uint8Array([value])); };
 }
 
 const mcu_main = mcu[0];
@@ -358,7 +368,7 @@ async function run_mcus() {
         for(let mcu_id = 0; mcu_id < hex_files.length; mcu_id++) {
           if(pio_cycles_behind[mcu_id] > 0) {
             pio_cycles_behind[mcu_id] -= 1;
-            mcu[mcu_id].stepPios(1);
+            mcu[mcu_id].stepThings(1);
           }
         }
 
@@ -452,7 +462,7 @@ async function run_mcus() {
       console.error(`6510 cycle ${l.cycle6510}, ARM cycle ${l.startCycle}, VIC tick/idle ${l.duration}/${l.idle} cycles, render idle ${l.idle2} cycles, vic_l ${l.vic_l}, vic_h ${l.vic_h}`);
     }
     write_pic("/tmp/cnm64.gif");
-    process.exit(e.message.startsWith("Debug ")?0:1);
+    process.exit((e as Error).message.startsWith("Debug ")?0:1);
   }
 }
 

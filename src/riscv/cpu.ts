@@ -35,8 +35,14 @@ export class CPU {
 
   did_just_jump = false;
 
+  profilerTag = "";
+
   constructor(readonly chip: IRPChip, readonly coreLabel: string, readonly mhartid: number) {
     this.reset();
+  }
+
+  get PC() {
+    return this.pc;
   }
 
   get logger() {
