@@ -1,7 +1,6 @@
 import { IClock } from '../clock/clock';
 import { IRPChip } from '../rpchip';
 import { Timer32, Timer32PeriodicAlarm, TimerMode } from '../utils/timer32';
-import { DREQChannel } from './dma';
 import { BasePeripheral, Peripheral } from './peripheral';
 
 /** Control and status register */
@@ -279,7 +278,7 @@ export class RPPWM extends BasePeripheral implements Peripheral {
   gpioValue = 0;
   gpioDirection = 0;
 
-  constructor(readonly rp2040: IRPChip, name: string, readonly pwm_wrap_irq: number) {
+  constructor(readonly rp2040: IRPChip, name: string, readonly pwm_wrap_irq: number, readonly pwm_dreq_base: number) {
     super(rp2040, name);
   }
 
@@ -359,7 +358,7 @@ export class RPPWM extends BasePeripheral implements Peripheral {
     this.checkInterrupts();
 
     // We also set the DMA Request (DREQ) for the channel
-    this.rp2040.dma_setDREQ(DREQChannel.DREQ_PWM_WRAP0 + index);
+    this.rp2040.dma_setDREQ(this.pwm_dreq_base + index);
   }
 
   checkInterrupts() {

@@ -1,6 +1,5 @@
 import { IRPChip } from '../rpchip';
 import { FIFO } from '../utils/fifo';
-import { DREQChannel } from './dma';
 import { BasePeripheral, Peripheral } from './peripheral';
 
 const SSPCR0 = 0x000; // Control register 0, SSPCR0 on page 3-4
@@ -60,8 +59,8 @@ const SSPRTINTR = 1 << 1;
 const SSPRORINTR = 1 << 0;
 
 export interface ISPIDMAChannels {
-  rx: DREQChannel;
-  tx: DREQChannel;
+  rx: number;
+  tx: number;
 }
 
 export class RPSPI extends BasePeripheral implements Peripheral {

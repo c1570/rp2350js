@@ -1,6 +1,5 @@
 import { IRPChip } from '../rpchip';
 import { FIFO } from '../utils/fifo';
-import { DREQChannel } from './dma';
 import { BasePeripheral, Peripheral } from './peripheral';
 
 // Generic registers
@@ -97,31 +96,6 @@ function irqIndex(irq: number, machineIndex: number): number {
   return rel ? (irq & 0x4) | (((irq & 0x3) + machineIndex) & 0x3) : irq & 0x7;
 }
 
-const dreqRx0 = [
-  DREQChannel.DREQ_PIO0_RX0,
-  DREQChannel.DREQ_PIO0_RX1,
-  DREQChannel.DREQ_PIO0_RX2,
-  DREQChannel.DREQ_PIO0_RX3,
-];
-const dreqTx0 = [
-  DREQChannel.DREQ_PIO0_TX0,
-  DREQChannel.DREQ_PIO0_TX1,
-  DREQChannel.DREQ_PIO0_TX2,
-  DREQChannel.DREQ_PIO0_TX3,
-];
-const dreqRx1 = [
-  DREQChannel.DREQ_PIO1_RX0,
-  DREQChannel.DREQ_PIO1_RX1,
-  DREQChannel.DREQ_PIO1_RX2,
-  DREQChannel.DREQ_PIO1_RX3,
-];
-const dreqTx1 = [
-  DREQChannel.DREQ_PIO1_TX0,
-  DREQChannel.DREQ_PIO1_TX1,
-  DREQChannel.DREQ_PIO1_TX2,
-  DREQChannel.DREQ_PIO1_TX3,
-];
-
 export class StateMachine {
   enabled = false;
 
@@ -159,8 +133,8 @@ export class StateMachine {
   waitPolarity = false;
   waitDelay = -1;
 
-  readonly dreqRx = this.pio.dreqRx[this.index];
-  readonly dreqTx = this.pio.dreqTx[this.index];
+  readonly dreqRx = this.pio.dreqRx_base + this.index;
+  readonly dreqTx = this.pio.dreqTx_base + this.index;
 
   constructor(readonly rp2040: IRPChip, readonly pio: RPPIO, readonly index: number) {
     this.updateDMARx();
@@ -934,8 +908,6 @@ export class StateMachine {
 
 export class RPPIO extends BasePeripheral implements Peripheral {
   readonly instructions = new Uint32Array(32);
-  readonly dreqRx = this.index ? dreqRx1 : dreqRx0;
-  readonly dreqTx = this.index ? dreqTx1 : dreqTx0;
   readonly machines = [
     new StateMachine(this.rp2040, this, 0),
     new StateMachine(this.rp2040, this, 1),
@@ -961,7 +933,7 @@ export class RPPIO extends BasePeripheral implements Peripheral {
   irq1IntEnable = 0;
   irq1IntForce = 0;
 
-  constructor(rp2040: IRPChip, name: string, readonly firstIrq: number, readonly index: number) {
+  constructor(rp2040: IRPChip, name: string, readonly firstIrq: number, readonly index: number, readonly dreqRx_base: number, readonly dreqTx_base: number) {
     super(rp2040, name);
     switch(rp2040.identifier) {
       case "rp2040":

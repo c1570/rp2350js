@@ -1,6 +1,5 @@
 import { IRPChip } from '../rpchip';
 import { FIFO } from '../utils/fifo';
-import { DREQChannel } from './dma';
 import { BasePeripheral, Peripheral } from './peripheral';
 
 const UARTDR = 0x0;
@@ -40,8 +39,8 @@ const UARTTXINTR = 1 << 5;
 const UARTRXINTR = 1 << 4;
 
 export interface IUARTDMAChannels {
-  rx: DREQChannel;
-  tx: DREQChannel;
+  rx: number;
+  tx: number;
 }
 
 export class RPUART extends BasePeripheral implements Peripheral {

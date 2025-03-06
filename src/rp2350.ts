@@ -9,8 +9,7 @@ import { RPBUSCTRL } from './peripherals/busctrl';
 import { RPBootRAM } from './peripherals/bootram';
 import { RPPOWMAN } from './peripherals/powman';
 import { RPClocks } from './peripherals/clocks';
-import { RPDMA } from './peripherals/dma_rp2350';
-import { DREQChannel } from './peripherals/dma';
+import { DREQChannel, RPDMA } from './peripherals/dma_rp2350';
 import { RPI2C } from './peripherals/i2c';
 import { RPIO } from './peripherals/io_rp2350';
 import { RPPADS } from './peripherals/pads_rp2350';
@@ -78,8 +77,8 @@ export class RP2350 implements IRPChip {
     }),
   ];
   readonly i2c = [new RPI2C(this, 'I2C0', IRQ.I2C0_IRQ), new RPI2C(this, 'I2C1', IRQ.I2C1_IRQ)];
-  readonly pwm = new RPPWM(this, 'PWM_BASE', IRQ.PWM_IRQ_WRAP_0);
-  readonly adc = new RPADC(this, 'ADC', IRQ.ADC_IRQ_FIFO);
+  readonly pwm = new RPPWM(this, 'PWM_BASE', IRQ.PWM_IRQ_WRAP_0, DREQChannel.DREQ_PWM_WRAP0);
+  readonly adc = new RPADC(this, 'ADC', IRQ.ADC_IRQ_FIFO, DREQChannel.DREQ_ADC);
 
   readonly gpio: Array<GPIOPin> = Array(48).fill(0).map((v,i) => new GPIOPin(this, i));
 
@@ -94,9 +93,9 @@ export class RP2350 implements IRPChip {
 
   readonly dma = new RPDMA(this, 'DMA', IRQ.DMA_IRQ_0);
   readonly pio = [
-    new RPPIO(this, 'PIO0', IRQ.PIO0_IRQ_0, 0),
-    new RPPIO(this, 'PIO1', IRQ.PIO1_IRQ_0, 1),
-    new RPPIO(this, 'PIO2', IRQ.PIO2_IRQ_0, 1),
+    new RPPIO(this, 'PIO0', IRQ.PIO0_IRQ_0, 0, DREQChannel.DREQ_PIO0_RX0, DREQChannel.DREQ_PIO0_TX0),
+    new RPPIO(this, 'PIO1', IRQ.PIO1_IRQ_0, 1, DREQChannel.DREQ_PIO1_RX0, DREQChannel.DREQ_PIO1_TX0),
+    new RPPIO(this, 'PIO2', IRQ.PIO2_IRQ_0, 2, DREQChannel.DREQ_PIO2_RX0, DREQChannel.DREQ_PIO2_TX0),
   ];
   readonly usbCtrl = new RPUSBController(this, 'USB', IRQ.USBCTRL_IRQ);
   readonly spi = [

@@ -76,8 +76,8 @@ export class RP2040 implements IRPChip {
     }),
   ];
   readonly i2c = [new RPI2C(this, 'I2C0', IRQ.I2C0), new RPI2C(this, 'I2C1', IRQ.I2C1)];
-  readonly pwm = new RPPWM(this, 'PWM_BASE', IRQ.PWM_WRAP);
-  readonly adc = new RPADC(this, 'ADC', IRQ.ADC_FIFO);
+  readonly pwm = new RPPWM(this, 'PWM_BASE', IRQ.PWM_WRAP, DREQChannel.DREQ_PWM_WRAP0);
+  readonly adc = new RPADC(this, 'ADC', IRQ.ADC_FIFO, DREQChannel.DREQ_ADC);
 
   readonly gpio: Array<GPIOPin> = Array(30).fill(0).map((v,i) => new GPIOPin(this, i));
 
@@ -92,8 +92,8 @@ export class RP2040 implements IRPChip {
 
   readonly dma = new RPDMA(this, 'DMA', IRQ.DMA_IRQ0);
   readonly pio = [
-    new RPPIO(this, 'PIO0', IRQ.PIO0_IRQ0, 0),
-    new RPPIO(this, 'PIO1', IRQ.PIO1_IRQ0, 1),
+    new RPPIO(this, 'PIO0', IRQ.PIO0_IRQ0, 0, DREQChannel.DREQ_PIO0_RX0, DREQChannel.DREQ_PIO0_TX0),
+    new RPPIO(this, 'PIO1', IRQ.PIO1_IRQ0, 1, DREQChannel.DREQ_PIO1_RX0, DREQChannel.DREQ_PIO1_TX0),
   ];
   readonly usbCtrl = new RPUSBController(this, 'USB', IRQ.USBCTRL);
   readonly spi = [
