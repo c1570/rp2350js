@@ -15,7 +15,7 @@ For generic/original rp2040js docs, [see below](#rp2040js).
 Timer and System Interrupts
 Exceptions
 GPIO updates (IRQSUMMARY, USB pins, PROC1_INTxx)
-DMA updates (CHxx_TRANS_COUNT changes, INCR_READ_REV, etc.)
+DMA updates (INCR_READ_REV, etc.)
 PIO updates (IRQx_INTE, RXF0_PUTGET0, instruction changes, etc.)
 PWM updates (8->12 slices, second shared interrupt)
 TIMER: registers LOCK and SOURCE
@@ -100,7 +100,7 @@ Bootrom * (varmulet mostly untested)
 GPIOs 30-47
 BOOTRAM_BASE
 PIO updates (register locations for INTR and up, GPIOBASE)
-DMA updates (2->4 shared IRQs, 12->16 channels, CTRL register offsets)
+DMA updates (2->4 shared IRQs, 12->16 channels, CHxx_TRANS_COUNT/MODE, CTRL register offsets)
 DREQ updates
 PIO2_BASE
 SYSINFO_BASE

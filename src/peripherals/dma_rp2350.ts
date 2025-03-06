@@ -148,6 +148,7 @@ export class RPDMAChannel {
   private transCount = 0;
   private dreqCounter = 0;
   private transCountReload = 0;
+  private transMode = 0;
   private treqValue = 0;
   private dataSize = 1;
   private chainTo = 0;
@@ -233,17 +234,24 @@ export class RPDMAChannel {
         this.writeAddr += dataSize;
       }
     }
-    this.transCount--;
+    if(this.transMode != 0xf) {
+      this.transCount--;
+    }
     if (this.transCount > 0) {
       this.scheduleTransfer();
     } else {
-      this.ctrl &= ~BUSY;
       if (!(this.ctrl & IRQ_QUIET)) {
         this.dma.intRaw |= 1 << this.index;
         this.dma.checkInterrupts();
       }
       if (this.chainTo !== this.index) {
         this.dma.channels[this.chainTo]?.start();
+      }
+      if (this.transMode == 1) {
+        this.transCount = this.transCountReload;
+        this.scheduleTransfer();
+      } else {
+        this.ctrl &= ~BUSY;
       }
     }
   };
@@ -320,7 +328,8 @@ export class RPDMAChannel {
       case CHn_AL1_TRANS_COUNT_TRIG:
       case CHn_AL2_TRANS_COUNT:
       case CHn_AL3_TRANS_COUNT:
-        this.transCountReload = value;
+        this.transCountReload = value & 0x0fffffff;
+        this.transMode = value >>> 28;
         break;
 
       case CHn_CTRL_TRIG:
