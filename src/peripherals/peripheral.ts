@@ -42,16 +42,16 @@ export class BasePeripheral implements Peripheral {
   }
 
   readUint32ViaCore(offset: number, core: Core) {
-    this.warn(`Unimplemented peripheral readvia ${core} from ${offset.toString(16)}`);
+    this.warn(`Unimplemented peripheral readvia ${core} from 0x${offset.toString(16)}`);
     return 0xffffffff;
   }
 
   writeUint32(offset: number, value: number) {
-    this.warn(`Unimplemented peripheral write to ${offset.toString(16)}: ${value}`);
+    this.warn(`Unimplemented peripheral write to 0x${offset.toString(16)}: ${value}`);
   }
 
   writeUint32ViaCore(offset: number, value: number, core: Core) {
-    this.warn(`Unimplemented peripheral write via ${core} to ${offset.toString(16)}: ${value}`);
+    this.warn(`Unimplemented peripheral write via ${core} to 0x${offset.toString(16)}: ${value}`);
   }
 
   writeUint32Atomic(offset: number, value: number, atomicType: number) {
