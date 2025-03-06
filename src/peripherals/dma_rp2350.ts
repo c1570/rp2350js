@@ -98,7 +98,6 @@ const INTS0 = 0x40c; // Interrupt Status for IRQ 0
 const INTE1 = 0x414; // Interrupt Enables for IRQ 1
 const INTF1 = 0x418; // Force Interrupts for IRQ 1
 const INTS1 = 0x41c; // Interrupt Status (masked) for IRQ 1
-//TODO: INTx2, INTx3
 const INTE2 = 0x424; // Interrupt Enables for IRQ 2
 const INTF2 = 0x428; // Force Interrupts for IRQ 2
 const INTS2 = 0x42c; // Interrupt Status (masked) for IRQ 2
@@ -404,10 +403,8 @@ export class RPDMA extends BasePeripheral implements Peripheral {
   ];
 
   intRaw = 0;
-  private intEnable0 = 0;
-  private intForce0 = 0;
-  private intEnable1 = 0;
-  private intForce1 = 0;
+  private intEnable = [0, 0, 0, 0];
+  private intForce = [0, 0, 0, 0];
   private timer0 = 0;
   private timer1 = 0;
   private timer2 = 0;
@@ -419,12 +416,12 @@ export class RPDMA extends BasePeripheral implements Peripheral {
     super(rp2040, name);
   }
 
-  get intStatus0() {
-    return (this.intRaw & this.intEnable0) | this.intForce0;
+  intStatus(intNum: number) {
+    return (this.intRaw & this.intEnable[intNum]) | this.intForce[intNum];
   }
 
-  get intStatus1() {
-    return (this.intRaw & this.intEnable1) | this.intForce1;
+  intNumFromOffset(offset: number) {
+    return ((offset - INTE0) / (INTE1 - INTE0)) >>> 0;
   }
 
   readUint32(offset: number) {
@@ -444,17 +441,20 @@ export class RPDMA extends BasePeripheral implements Peripheral {
       case INTR:
         return this.intRaw;
       case INTE0:
-        return this.intEnable0;
-      case INTF0:
-        return this.intForce0;
-      case INTS0:
-        return this.intStatus0;
       case INTE1:
-        return this.intEnable1;
+      case INTE2:
+      case INTE3:
+        return this.intEnable[this.intNumFromOffset(offset)];
+      case INTF0:
       case INTF1:
-        return this.intForce1;
+      case INTF2:
+      case INTF3:
+        return this.intForce[this.intNumFromOffset(offset)];
+      case INTS0:
       case INTS1:
-        return this.intStatus1;
+      case INTS2:
+      case INTS3:
+        return this.intStatus(this.intNumFromOffset(offset));
       case N_CHANNELS:
         return this.channels.length;
     }
@@ -483,23 +483,23 @@ export class RPDMA extends BasePeripheral implements Peripheral {
       case INTR:
       case INTS0:
       case INTS1:
+      case INTS2:
+      case INTS3:
         this.intRaw &= ~this.rawWriteValue;
         this.checkInterrupts();
         return;
       case INTE0:
-        this.intEnable0 = value & 0xffff;
+      case INTE1:
+      case INTE2:
+      case INTE3:
+        this.intEnable[this.intNumFromOffset(offset)] = value & 0xffff;
         this.checkInterrupts();
         return;
       case INTF0:
-        this.intForce0 = value & 0xffff;
-        this.checkInterrupts();
-        return;
-      case INTE1:
-        this.intEnable1 = value & 0xffff;
-        this.checkInterrupts();
-        return;
       case INTF1:
-        this.intForce1 = value & 0xffff;
+      case INTF2:
+      case INTF3:
+        this.intForce[this.intNumFromOffset(offset)] = value & 0xffff;
         this.checkInterrupts();
         return;
       case MULTI_CHAN_TRIGGER:
@@ -572,7 +572,9 @@ export class RPDMA extends BasePeripheral implements Peripheral {
   }
 
   checkInterrupts() {
-    this.rp2040.setInterrupt(this.dma_irq_base + 0, !!this.intStatus0);
-    this.rp2040.setInterrupt(this.dma_irq_base + 1, !!this.intStatus1);
+    this.rp2040.setInterrupt(this.dma_irq_base + 0, !!this.intStatus(0));
+    this.rp2040.setInterrupt(this.dma_irq_base + 1, !!this.intStatus(1));
+    this.rp2040.setInterrupt(this.dma_irq_base + 2, !!this.intStatus(2));
+    this.rp2040.setInterrupt(this.dma_irq_base + 3, !!this.intStatus(3));
   }
 }
