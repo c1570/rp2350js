@@ -78,7 +78,7 @@ export class CPU {
             throw Error(`Illegal 16 bit instruction 0 at 0x${this.pc.toString(16)}`);
         }
 
-        inst = decompress_rv32c_inst(inst);
+        inst = decompress_rv32c_inst(this, inst);
         this.inst_length = 2;
     } else {
         // we have a 32 bit instruction

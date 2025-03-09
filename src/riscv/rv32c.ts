@@ -1,16 +1,17 @@
+import { CPU } from "./cpu";
 
-export function decompress_rv32c_inst(inst: number): number {
+export function decompress_rv32c_inst(cpu: CPU, inst: number): number {
   let index = ((inst & 0x0003) << 3) | ((inst & 0xE000) >> 13);
-  let decompressor: any = decompressors[index];  //TODO
-  //console.log(`decompressing: ${index}`);
-  return decompressor(inst);
+  let decompressor: any = decompressors[index];
+  if(!decompressor) throw new Error(`cannot handle index 0b${index.toString(2)}`);
+  return decompressor(cpu, inst);
 }
 
-const decompressors: Array<((input: number) => number) | null> = [
-//  000                001          010          011           100           101        110           111
-    caddi4spn_to_addi, null,        clw_to_lw,   null,         zcb_100_00,   null,      csw_to_sw,    null,         // 00
-    caddi_to_addi,     cjal_to_jal, cli_to_addi, parse_011_01, parse_100_01, cj_to_jal, cbeqz_to_beq, cbenz_to_bne, // 01
-    cslli_to_slli,     null,        clwsp_to_lw, null,         parse_100_10, null,      cswsp_to_sw,  null,         // 10
+const decompressors: Array<((cpu: CPU, inst: number) => number) | null> = [
+//  000                001          010          011           100           101           110           111
+    caddi4spn_to_addi, null,        clw_to_lw,   null,         zcb_100_00,   null,         csw_to_sw,    null,         // 00
+    caddi_to_addi,     cjal_to_jal, cli_to_addi, parse_011_01, parse_100_01, cj_to_jal,    cbeqz_to_beq, cbenz_to_bne, // 01
+    cslli_to_slli,     null,        clwsp_to_lw, null,         parse_100_10, parse_101_10, cswsp_to_sw,  null,         // 10
 ];
 
 
@@ -18,7 +19,7 @@ function assert(a: boolean) {};
 
 
 // C.ADDI4SPN, funct3 = 000, opcode = 00
-function caddi4spn_to_addi(inst: number): number
+function caddi4spn_to_addi(cpu: CPU, inst: number): number
 {
     // decode imm and rd
     const nzuimm: number = dec_ciw_imm(inst);
@@ -29,7 +30,7 @@ function caddi4spn_to_addi(inst: number): number
 }
 
 // C.LW, funct3 = 010, opcode = 00
-function clw_to_lw(inst: number): number
+function clw_to_lw(cpu: CPU, inst: number): number
 {
     // decode imm, rs1 and rd
     const imm: number = dec_clw_csw_imm(inst);
@@ -41,7 +42,7 @@ function clw_to_lw(inst: number): number
 }
 
 // Zcb extension, funct3 = 100, opcode = 00 part
-function zcb_100_00(inst: number): number
+function zcb_100_00(cpu: CPU, inst: number): number
 {
     if((inst & 0b1111110001000011) === 0b1000010000000000) {
         // c.lhu
@@ -63,7 +64,7 @@ function zcb_100_00(inst: number): number
 }
 
 // C.SW, funct3 = 110, opcode = 00
-function csw_to_sw(inst: number): number
+function csw_to_sw(cpu: CPU, inst: number): number
 {
     // decode imm, rs1 and rs2
     const imm: number = dec_clw_csw_imm(inst);
@@ -81,7 +82,7 @@ function cnop_to_addi(): number
 }
 
 // C.ADDI, funct3 = 000, opcode = 01
-function caddi_to_addi(inst: number): number
+function caddi_to_addi(cpu: CPU, inst: number): number
 {
     // decode nzimm and rd
     const rd: number = dec_rd(inst);
@@ -99,7 +100,7 @@ function caddi_to_addi(inst: number): number
 }
 
 // C.JAL, funct3 = 001, opcode = 01
-function cjal_to_jal(inst: number): number
+function cjal_to_jal(cpu: CPU, inst: number): number
 {
     // decode imm
     const imm: number = dec_cj_imm(inst);
@@ -109,7 +110,7 @@ function cjal_to_jal(inst: number): number
 }
 
 // C.LI, funct3 = 010, opcode = 01
-function cli_to_addi(inst: number): number
+function cli_to_addi(cpu: CPU, inst: number): number
 {
     // decode imm and rd
     const rd: number = dec_rd(inst);
@@ -127,7 +128,7 @@ function cli_to_addi(inst: number): number
 }
 
 // C.ADDI16SP, funct3 = 011, opcode = 01
-function caddi16sp_to_addi(inst: number): number
+function caddi16sp_to_addi(cpu: CPU, inst: number): number
 {
     // decode nzimm
     let nzimm: number = 0;
@@ -146,7 +147,7 @@ function caddi16sp_to_addi(inst: number): number
 }
 
 // C.LUI, funct3 = 011, opcode = 01
-function clui_to_lui(inst: number): number
+function clui_to_lui(cpu: CPU, inst: number): number
 {
     // decode nzimm and rd
     const rd: number = dec_rd(inst);
@@ -166,7 +167,7 @@ function clui_to_lui(inst: number): number
     return enc_utype(nzimm, rd, 0b0110111);
 }
 
-function csrli_to_srli(inst: number): number
+function csrli_to_srli(cpu: CPU, inst: number): number
 {
     // decode shamt and rd = rs1
     let shamt: number = 0;
@@ -183,7 +184,7 @@ function csrli_to_srli(inst: number): number
     return enc_rtype(0b0000000, shamt, rd, 0b101, rd, 0b0010011);
 }
 
-function csrai_to_srai(inst: number): number
+function csrai_to_srai(cpu: CPU, inst: number): number
 {
     // decode shamt and rd = rs1
     let shamt: number = 0;
@@ -200,7 +201,7 @@ function csrai_to_srai(inst: number): number
     return enc_rtype(0b0100000, shamt, rd, 0b101, rd, 0b0010011);
 }
 
-function candi_to_andi(inst: number): number
+function candi_to_andi(cpu: CPU, inst: number): number
 {
     // decode imm and rd = rs1
     const rd: number = dec_rs1_short(inst);
@@ -213,7 +214,7 @@ function candi_to_andi(inst: number): number
     return enc_itype(imm, rd, 0b111, rd, 0b0010011);
 }
 
-function csub_to_sub(inst: number): number
+function csub_to_sub(cpu: CPU, inst: number): number
 {
     // decode rd = rs1 and rs2
     const rd: number = dec_rs1_short(inst);
@@ -223,7 +224,7 @@ function csub_to_sub(inst: number): number
     return enc_rtype(0b0100000, rs2, rd, 0b000, rd, 0b0110011);
 }
 
-function cxor_to_xor(inst: number): number
+function cxor_to_xor(cpu: CPU, inst: number): number
 {
     // decode rd = rs1 and rs2
     const rd: number = dec_rs1_short(inst);
@@ -233,7 +234,7 @@ function cxor_to_xor(inst: number): number
     return enc_rtype(0b0000000, rs2, rd, 0b100, rd, 0b0110011);
 }
 
-function cor_to_or(inst: number): number
+function cor_to_or(cpu: CPU, inst: number): number
 {
     // decode rd = rs1 and rs2
     const rd: number = dec_rs1_short(inst);
@@ -243,7 +244,7 @@ function cor_to_or(inst: number): number
     return enc_rtype(0b0000000, rs2, rd, 0b110, rd, 0b0110011);
 }
 
-function cand_to_and(inst: number): number
+function cand_to_and(cpu: CPU, inst: number): number
 {
     // decode rd = rs1 and rs2
     const rd: number = dec_rs1_short(inst);
@@ -254,7 +255,7 @@ function cand_to_and(inst: number): number
 }
 
 // C.J, funct3 = 101, opcode = 01
-function cj_to_jal(inst: number): number
+function cj_to_jal(cpu: CPU, inst: number): number
 {
     // decode imm
     const imm: number = dec_cj_imm(inst);
@@ -264,7 +265,7 @@ function cj_to_jal(inst: number): number
 }
 
 // C.BEQZ, funct3 = 110, opcode = 01
-function cbeqz_to_beq(inst: number): number
+function cbeqz_to_beq(cpu: CPU, inst: number): number
 {
     // decode offset and rs1
     const offset: number = dec_branch_imm(inst);
@@ -275,7 +276,7 @@ function cbeqz_to_beq(inst: number): number
 }
 
 // C.BENZ, funct3 = 111, opcode = 01
-function cbenz_to_bne(inst: number): number
+function cbenz_to_bne(cpu: CPU, inst: number): number
 {
     // decode offset and rs1
     const offset: number = dec_branch_imm(inst);
@@ -286,7 +287,7 @@ function cbenz_to_bne(inst: number): number
 }
 
 // C.SLLI, funct3 = 000, opcode = 10
-function cslli_to_slli(inst: number): number
+function cslli_to_slli(cpu: CPU, inst: number): number
 {
     // decode shamt and rd
     let shamt: number = 0;
@@ -307,7 +308,7 @@ function cslli_to_slli(inst: number): number
 }
 
 // C.LWSP, funct3 = 010, opcode = 10
-function clwsp_to_lw(inst: number): number
+function clwsp_to_lw(cpu: CPU, inst: number): number
 {
     // decode offset and rd
     let offset: number = 0;
@@ -323,7 +324,7 @@ function clwsp_to_lw(inst: number): number
     return enc_itype(offset, 2, 0b010, rd, 0b0000011);
 }
 
-function cjr_to_jalr(inst: number): number
+function cjr_to_jalr(cpu: CPU, inst: number): number
 {
     // decode rs1
     const rs1: number = dec_rs1(inst);
@@ -334,7 +335,7 @@ function cjr_to_jalr(inst: number): number
     return enc_itype(0, rs1, 0b000, 0, 0b1100111);
 }
 
-function cmv_to_add(inst: number): number
+function cmv_to_add(cpu: CPU, inst: number): number
 {
     // decode rs2 and rd
     const rs2: number = dec_rs2(inst);
@@ -356,7 +357,7 @@ function cebreak_to_ebreak(): number
     return enc_itype(1, 0, 0b000, 0, 0b1110011);
 }
 
-function cjalr_to_jalr(inst: number): number
+function cjalr_to_jalr(cpu: CPU, inst: number): number
 {
     // decode rs1
     const rs1: number = dec_rs1(inst);
@@ -367,7 +368,7 @@ function cjalr_to_jalr(inst: number): number
     return enc_itype(0, rs1, 0b000, 1, 0b1100111);
 }
 
-function cadd_to_add(inst: number): number
+function cadd_to_add(cpu: CPU, inst: number): number
 {
     // decode rs2 and rd
     const rs2: number = dec_rs2(inst);
@@ -384,7 +385,7 @@ function cadd_to_add(inst: number): number
 }
 
 // C.SWSP, funct3 = 110, opcode = 10
-function cswsp_to_sw(inst: number): number
+function cswsp_to_sw(cpu: CPU, inst: number): number
 {
     // decode imm and rs2
     const offset: number = dec_css_imm(inst);
@@ -395,18 +396,18 @@ function cswsp_to_sw(inst: number): number
 }
 
 // funct3 = 011, opcode = 01
-function parse_011_01(inst: number): number
+function parse_011_01(cpu: CPU, inst: number): number
 {
     const rd: number = dec_rd(inst);
 
     if (rd == 2)
-        return caddi16sp_to_addi(inst);
+        return caddi16sp_to_addi(cpu, inst);
     else
-        return clui_to_lui(inst);
+        return clui_to_lui(cpu, inst);
 }
 
 // funct3 = 100, opcode = 01
-function parse_100_01(inst: number): number
+function parse_100_01(cpu: CPU, inst: number): number
 {
     const cb_funct2: number = dec_cb_funct2(inst);
     const cs_funct6_3_funct2: number = (((dec_cs_funct6(inst) >>> 2) & 1) << 2) | dec_cs_funct2(inst);
@@ -414,21 +415,21 @@ function parse_100_01(inst: number): number
     // Actual lookup order: funct3, xlen, rdRs1Val, cb_funct2, funct6[3]+funct2
     switch (cb_funct2) {
     case 0b00:
-        return csrli_to_srli(inst);
+        return csrli_to_srli(cpu, inst);
     case 0b01:
-        return csrai_to_srai(inst);
+        return csrai_to_srai(cpu, inst);
     case 0b10:
-        return candi_to_andi(inst);
+        return candi_to_andi(cpu, inst);
     case 0b11:
         switch (cs_funct6_3_funct2) {
         case 0b000:
-            return csub_to_sub(inst);
+            return csub_to_sub(cpu, inst);
         case 0b001:
-            return cxor_to_xor(inst);
+            return cxor_to_xor(cpu, inst);
         case 0b010:
-            return cor_to_or(inst);
+            return cor_to_or(cpu, inst);
         case 0b011:
-            return cand_to_and(inst);
+            return cand_to_and(cpu, inst);
         case 0b111: // c.not (Zcb)
             // TODO remove decode sanity check
             if((inst & 0b1111110001111111) === 0b1001110001110101) {
@@ -441,7 +442,7 @@ function parse_100_01(inst: number): number
 }
 
 // funct3 = 100, opcode = 10
-function parse_100_10(inst: number): number
+function parse_100_10(cpu: CPU, inst: number): number
 {
     const cr_funct4: number = dec_cr_funct4(inst);
     const rs1: number = dec_rs1(inst);
@@ -449,24 +450,65 @@ function parse_100_10(inst: number): number
 
     if (cr_funct4 == 0b1000) {
         if (rs2 == 0)
-            return cjr_to_jalr(inst);
+            return cjr_to_jalr(cpu, inst);
         else
-            return cmv_to_add(inst);
+            return cmv_to_add(cpu, inst);
     } else if (cr_funct4 == 0b1001) {
         if (rs1 == 0 && rs2 == 0)
             return cebreak_to_ebreak();
         else if (rs2 == 0)
-            return cjalr_to_jalr(inst);
+            return cjalr_to_jalr(cpu, inst);
         else
-            return cadd_to_add(inst);
+            return cadd_to_add(cpu, inst);
     } else
         return cnop_to_addi();
 }
 
+const xreg_list = [[],[],[],[],[1],[8,1],[9,8,1],[18,9,8,1],[19,18,9,8,1],[20,19,18,9,8,1],[21,20,19,18,9,8,1],[22,21,20,19,18,9,8,1],[23,22,21,20,19,18,9,8,1],[24,23,22,21,20,19,18,9,8,1],[25,24,23,22,21,20,19,18,9,8,1],[27,26,25,24,23,22,21,20,19,18,9,8,1]];
+const stack_adj_base = [0,0,0,0,16,16,16,16,32,32,32,32,48,48,48,64];
 
-
-
-
+function parse_101_10(cpu: CPU, inst: number): number
+{
+    switch(inst & 0b1111111100000011) {
+        case 0b1011100000000010: { // cm.push (Zcmp)
+            const rlist = (inst & 0b11110000) >>> 4;
+            const spimm = (inst & 0b1100) << 2;
+            const stack_adj = stack_adj_base[rlist] + spimm;
+            const sp = cpu.registerSet.getRegisterU(2);
+            let addr = sp - 4;
+            for(let reg of xreg_list[rlist]) {
+              cpu.chip.writeUint32(addr, cpu.registerSet.getRegisterU(reg));
+              addr -= 4;
+              cpu.cycles++;
+            }
+            cpu.registerSet.setRegisterU(2, sp - stack_adj);
+            return cnop_to_addi(); }
+        case 0b1011101000000010:
+          throw new Error("cm.pop unsupported");
+        case 0b1011110000000010:
+          throw new Error("cm.popretz unsupported");
+        case 0b1011111000000010: { // cm.popret (Zcmp)
+            const rlist = (inst & 0b11110000) >>> 4;
+            const spimm = (inst & 0b1100) << 2;
+            const stack_adj = stack_adj_base[rlist] + spimm;
+            const sp = cpu.registerSet.getRegisterU(2);
+            let addr = sp + stack_adj - 4;
+            for(let reg of xreg_list[rlist]) {
+              cpu.registerSet.setRegisterU(reg, cpu.chip.readUint32(addr));
+              addr -= 4;
+              cpu.cycles++;
+            }
+            cpu.registerSet.setRegisterU(2, sp + stack_adj);
+            return 0x8067; /* ret */ }
+    }
+    switch(inst & 0b1111110001100011) {
+        case 0b1010110000100010:
+          throw new Error("cm.mvsa01 unsupported");
+        case 0b1010110001100010:
+          throw new Error("cm.mva01s unsupported");
+    }
+    throw new Error(`Unsupported instruction: 0x${inst.toString(16)}`);
+}
 
 enum C {
     //                ....xxxx....xxxx

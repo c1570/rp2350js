@@ -66,9 +66,7 @@ clz
 cm.mva01s
 cm.mvsa01
 cm.pop
-cm.popret
 cm.popretz
-cm.push
 maxu
 min
 mulh
@@ -143,6 +141,8 @@ bne
 bnez
 bset
 bseti
+cm.popret
+cm.push
 cpop
 csrc
 csrci
