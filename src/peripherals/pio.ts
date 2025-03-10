@@ -837,7 +837,8 @@ export class StateMachine {
   }
 
   clkDivRestart() {
-    this.pio.warn('clkDivRestart not implemented');
+    this.curClockInt = 0;
+    this.curClockFrac = 0;
   }
 
   checkWait() {
