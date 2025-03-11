@@ -55,8 +55,8 @@ export class RP2040 implements IRPChip {
 
   readonly identifier = "rp2040";
 
-  readonly core0 = new CortexM0Core(this, 'CortexM0Core0');
-  readonly core1 = new CortexM0Core(this, 'CortexM0Core1');
+  readonly core0 = new CortexM0Core(this, 'CortexM0Core0', 0);
+  readonly core1 = new CortexM0Core(this, 'CortexM0Core1', 1);
 
   /* Clocks */
   clkSys = 125 * MHz;
@@ -150,6 +150,9 @@ export class RP2040 implements IRPChip {
     // TODO: raise HardFault exception
     // console.error('Breakpoint!', code);
   };
+
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  public onTrace = (coreNumber: number, pc: number, tag: string) => {};
 
   constructor(readonly clock: IClock = new SimulationClock()) {
     this.reset();

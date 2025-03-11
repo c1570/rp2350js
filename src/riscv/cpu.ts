@@ -35,8 +35,6 @@ export class CPU {
 
   did_just_jump = false;
 
-  profilerTag = "";
-
   constructor(readonly chip: IRPChip, readonly coreLabel: string, readonly mhartid: number) {
     this.reset();
   }
@@ -1274,6 +1272,19 @@ const j_TypeOpcodeTable: OpcodeTable<J_Type> = new Map([
     const { registerSet } = cpu;
 
     registerSet.setRegister(rd, cpu.pc + cpu.inst_length);
+
+    // test for profiler trace magic
+    const magicStart = cpu.pc + cpu.inst_length;
+    if((cpu.chip.readUint16(magicStart) === 0xabcd) && (cpu.chip.readUint16(magicStart + 2) === 0xffff)) {
+      let profTag = "";
+      for(let i = magicStart + 4; 1; i++) {
+        let ch = cpu.chip.readUint8(i);
+        if(ch == 0) break;
+        profTag = profTag + String.fromCharCode(ch);
+      }
+      cpu.chip.onTrace(cpu.mhartid, cpu.pc, profTag);
+    }
+
     cpu.next_pc = cpu.pc + imm;
     cpu.cycles++;
   }]

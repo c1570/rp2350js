@@ -85,8 +85,6 @@ export class CortexM0Core {
   VTOR = 0;
   SHPR2 = 0;
   SHPR3 = 0;
-  profilerTags = new Map();
-  profilerTag = "";
 
   public onSEV?: () => void;
   public onBreak?: (code: number) => void;
@@ -99,7 +97,7 @@ export class CortexM0Core {
     void blx;
   };
 
-  constructor(readonly rp2040: RP2040, readonly coreLabel: string) {
+  constructor(readonly rp2040: RP2040, readonly coreLabel: string, readonly coreNumber: number) {
     this.SP = 0xfffffffc;
     this.bankedSP = 0xfffffffc;
   }
@@ -717,7 +715,7 @@ export class CortexM0Core {
     }
     // B
     else if (opcode >> 11 === 0b11100) {
-      // test for profiler magic
+      // test for profiler trace magic
       if((this.readUint16(opcodePC + 2) === 0xabcd) && (this.readUint16(opcodePC + 4) === 0xffff)) {
         let profTag = "";
         for(let i = opcodePC + 6; 1; i++) {
@@ -725,7 +723,7 @@ export class CortexM0Core {
           if(ch == 0) break;
           profTag = profTag + String.fromCharCode(ch);
         }
-        this.profilerTag = profTag;
+        this.rp2040.onTrace(this.coreNumber, this.PC, profTag);
       }
 
       let imm11 = (opcode & 0x7ff) << 1;

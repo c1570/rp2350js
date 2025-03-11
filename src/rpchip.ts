@@ -9,6 +9,7 @@ export interface IRPChip {
   loadBootrom(bootromData: Uint32Array): void;
   readonly disassembly: string;
   loadDisassembly(dis: string): void;
+  onTrace(coreNumber: number, pc: number, tag: string): void;
 
   readonly qspi: Array<GPIOPin>;
   readonly gpio: Array<GPIOPin>;

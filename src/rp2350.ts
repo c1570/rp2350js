@@ -111,8 +111,6 @@ export class RP2350 implements IRPChip {
 
   public logger: Logger = new ConsoleLogger(LogLevel.Debug, true);
 
-  private executeTimer: NodeJS.Timeout | null = null;
-
   readonly peripherals: { [index: number]: Peripheral } = {
     0x40000: new RP2350SysInfo(this, 'SYSINFO_BASE'),
     0x40008: new RP2350SysCfg(this, 'SYSCFG'),
@@ -154,6 +152,9 @@ export class RP2350 implements IRPChip {
     0x50300: this.pio[1],
     0x50400: this.pio[2],
   };
+
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  public onTrace = (coreNumber: number, pc: number, tag: string) => {};
 
   constructor(readonly debug: boolean = false, readonly clock: IClock = new SimulationClock()) {
     this.reset();
