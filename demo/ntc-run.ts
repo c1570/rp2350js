@@ -33,6 +33,11 @@ const pin_label: string[] = ["clock", "d0", "d1", "d2", "d3", "d4", "d5", "d6", 
 
 const mcu = new Array(hex_files.length).fill(null);
 
+const mcu_tags = new Array(hex_files.length).fill(null); // debug/profiling tracing tags
+function mcuTagSetter(mcuNumber: number) {
+  return (coreNumber: number, pc: number, tag: string) => { mcu_tags[mcuNumber][coreNumber] = tag; };
+}
+
 for(let i = 0; i < hex_files.length; i++) {
   if(i >= 2) {
     mcu[i] = new RP2040();
@@ -48,14 +53,16 @@ for(let i = 0; i < hex_files.length; i++) {
   }
   loadHex(fs.readFileSync(hex_files[i][1], 'utf-8'), mcu[i].flash, 0x10000000);
   mcu[i].uart[0].onByte = (value: number) => { process.stdout.write(new Uint8Array([value])); };
+  mcu_tags[i] = new Array(2).fill("");
+  mcu[i].onTrace = mcuTagSetter(i);
 }
 
 const mcu_main = mcu[0];
 const mcu_vic = mcu[1];
 const mcu_output = mcu[2];
 
-function getVarOffs(map_file: string, var_name: string) : number {
-  const filename = homedir + '/project/connomore64/PicoDVI/software/build/apps/' + map_file;
+function getVarOffs(mcu_id: number, var_name: string) : number {
+  const filename = hex_files[mcu_id][1].replace(".hex", ".elf.map");
   const content = fs.readFileSync(filename, 'utf-8');
   const search = var_name.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
   const re = new RegExp(search + ".*\n *(0x[0-9a-f]+) ");
@@ -188,8 +195,8 @@ for(let pin = 0; pin < pin_label.length; pin++) {
 vcd_file.write("$upscope $end\n");
 vcd_file.write("$enddefinitions $end\n");
 
-const cpu_addr_off = getVarOffs("cnm64_main/cnm64_main.elf.map", ".bss.addr");
-const framebuffer_off = getVarOffs("cnm64_output/cnm64_output.elf.map", ".bss.frame_buffer");
+const cpu_addr_off = getVarOffs(0, ".sbss.addr");
+const framebuffer_off = getVarOffs(2, ".bss.frame_buffer");
 
 function write_pic(filename: string) {
   const width = 400;
@@ -276,7 +283,7 @@ async function run_mcus() {
   function log_state() {
     const cpu_addr = mcu_main.readUint16(cpu_addr_off);
     let wTags: string[] = [];
-    const pTags_updated: string[] = [mcu_main.core0.profilerTag, mcu_main.core1.profilerTag, mcu_vic.core0.profilerTag, mcu_vic.core1.profilerTag,
+    const pTags_updated: string[] = [mcu_tags[0][0], mcu_tags[0][1], mcu_tags[1][0], mcu_tags[1][1],
                                      mcu_main.pio[0].machines[0].pc.toString(), mcu_vic.pio[1].machines[0].pc.toString(), mcu_vic.pio[1].machines[1].pc.toString(), mcu_output.pio[1].machines[0].pc.toString()];
     const pInstrs: number[] = [0, 0, 0, 0, mcu_main.pio[0].instructions[mcu_main.pio[0].machines[0].pc],
                                            mcu_vic.pio[1].instructions[mcu_vic.pio[1].machines[0].pc],
@@ -323,8 +330,8 @@ async function run_mcus() {
       gpio_cycle = mcu[0].core0.cycles;
       let cycles_consumed = mcu[0].stepCores();
       pio_cycles_behind[0] += cycles_consumed;
-      if(mcu[0].core0.profilerTag.startsWith("*")) main_idle_cycles += cycles_consumed;
-      if(mcu[0].core1.profilerTag.startsWith("*")) main_idle2_cycles += cycles_consumed;
+      if(mcu_tags[0][0].startsWith("*")) main_idle_cycles += cycles_consumed;
+      if(mcu_tags[0][1].startsWith("*")) main_idle2_cycles += cycles_consumed;
 
       // ...then step other mcus until they caught up.
       for(let mcu_id = 1; mcu_id < hex_files.length; mcu_id++) {
@@ -336,12 +343,12 @@ async function run_mcus() {
           mcu_cycles_behind[mcu_id] -= cycles_mcu;
           if(mcu_id == 1) {
             // some VIC logging
-            if(mcu[1].core0.profilerTag.startsWith("*")) vic_idle_cycles += cycles_mcu;
-            if(mcu[1].core1.profilerTag.startsWith("*")) render_idle_cycles += cycles_mcu;
-            if(vic_cycle_state!=0 && mcu[1].core0.profilerTag=="^vic tick") {
+            if(mcu_tags[1][0].startsWith("*")) vic_idle_cycles += cycles_mcu;
+            if(mcu_tags[1][1].startsWith("*")) render_idle_cycles += cycles_mcu;
+            if(vic_cycle_state!=0 && mcu_tags[1][0]=="^vic tick") {
               vic_cycle_state = 0;
               vic_cycle_start_at = mcu[1].core0.cycles;
-            } else if(vic_cycle_state!=1 && mcu[1].core0.profilerTag=="$vic tick") {
+            } else if(vic_cycle_state!=1 && mcu_tags[1][0]=="$vic tick") {
               vic_cycle_state = 1;
               //if((vic_idle_cycles<30)||(render_idle_cycles<20)) // ********
                 vic_loop_stats.push({startCycle: vic_cycle_start_at, duration: mcu[1].core0.cycles-vic_cycle_start_at, vic_h: vic_h, vic_l: vic_l, cycle6510: cycles_6510, idle: vic_idle_cycles, idle2: render_idle_cycles, addr6510:0});
@@ -391,7 +398,7 @@ async function run_mcus() {
         }
       }
 
-      if((main_cycle_start_off==0)&&(mcu[0].core0.profilerTag=="cycle start")) {
+      if((main_cycle_start_off==0)&&(mcu_tags[0][0]=="cycle start")) {
         main_cycle_start_off=mcu[0].core0.PC;
         main_cycle_start_at = mcu[0].core0.cycles;
       } else if(mcu[0].core0.PC==main_cycle_start_off) {
@@ -402,7 +409,7 @@ async function run_mcus() {
         if(main_loop_stats.length>100000) main_loop_stats=main_loop_stats.slice(main_loop_stats.length-max_len_main_loop_stats);
         vic_h++; if(vic_h > 62) { vic_h = 0; vic_l++; if(vic_l >= 312) vic_l = 0; }
         main_cycle_start_at = mcu[0].core0.cycles;
-      } else if(mcu[0].core0.profilerTag=="_quit") throw new Error("Debug encountered _quit");
+      } else if(mcu_tags[0][0]=="_quit") throw new Error("Debug encountered _quit");
 
       if(do_tracing) {
         log_state();
@@ -431,7 +438,7 @@ async function run_mcus() {
               trace_6510_file_it=null;
               if(process.env.CNM64_FINISH_WITH_TRACE) process.exit(0);
             }
-            else if(Number(`0x${line.value}`) != addr_6510) throw new Error(`6510 addr mismatch, expected ${line.value}, got ${addr_6510.toString(16).padStart(4,"0")}, step ${trace_6510_step}, tracefile ${trace_6510_filename}`);
+            else if(Number(`0x${line.value}`) != addr_6510) throw new Error(`6510 addr mismatch, expected ${line.value}, got ${addr_6510.toString(16).padStart(4,"0")}, 6510 cycle ${cycles_6510}, line ${trace_6510_step}, tracefile ${trace_6510_filename}`);
           }
           addr_6510_last = addr_6510;
         }
