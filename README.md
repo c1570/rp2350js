@@ -6,8 +6,8 @@ For generic/original rp2040js docs, [see below](#rp2040js).
 ### Status of rp2350js
 * limited RISC-V/Hazard3 support (no ARM support)
 * runs both no_flash/RAM binaries and flash binaries
-* runs pico-examples/blink_simple.c and hello_timer.c
-* runs [Connomore64](https://github.com/c1570/Connomore64) main mcu (dual core, PIO)
+* runs pico-examples/blink_simple.c, hello_timer.c, hello_usb.c
+* runs [Connomore64](https://github.com/c1570/Connomore64) main and video mcu (dual core, PIO, DMA)
 
 #### Missing
 
@@ -68,7 +68,6 @@ cm.mvsa01
 cm.pop
 cm.popretz
 maxu
-min
 mulh
 mulhsu
 neg
@@ -176,6 +175,7 @@ lr.w
 lui
 lw
 max
+min
 minu
 mret *
 mul *

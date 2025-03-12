@@ -955,6 +955,9 @@ const opcode0x33func3Table: FuncTable<R_Type> = new Map([
     } else if(func7 === 0x4) { // PACK (Zbkb)
       const result = (rs1Value & 0xffff) | ((rs2Value & 0xffff) << 16);
       registerSet.setRegister(rd, result);
+    } else if(func7 === 0x5) { // MIN (Zbb)
+      const result = rs1Value < rs2Value ? rs1Value : rs2Value;
+      registerSet.setRegister(rd, result);
     } else if(func7 === 0x20) { // XNOR (Zbb)
       const result = (~rs1Value) ^ rs2Value;
       registerSet.setRegister(rd, result);
