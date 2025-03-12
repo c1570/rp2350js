@@ -436,8 +436,10 @@ export class CPU {
       case 0xbe2: { // MEIFA
           let state = value >>> 16;
           for(let irq = (raw_write & 0b11111) * 16; irq < (raw_write & 0b11111) * 16 + 16; irq++) {
-            this.meifa[irq] = state & 1;
-            this.setInterrupt(irq, !!(state & 1));
+            const forced = state & 1;
+            this.meifa[irq] = forced;
+            if(forced) this.setInterrupt(irq, true);
+            else if(irq >= 46) this.setInterrupt(irq, false);
             state >>= 1;
           }
           return; }
@@ -502,7 +504,11 @@ export class CPU {
         const meinext = this.csrs[csr] >>> 0;
         if(!(meinext >> 31)) {
           // reading MEINEXT clears MEIFA bits
-          this.meifa[(meinext >> 2) & 511] = 0;
+          const irq = (meinext >> 2) & 511;
+          const old_forced = this.meifa[irq];
+          this.meifa[irq] = 0;
+          if(irq >= 46 && old_forced) this.setInterrupt(irq, false); // for soft irqs, removing MEIFA will deassert the irq
+          //TODO deassert lower irqs as well?
         }
         return meinext;
       case 0xbe5:
