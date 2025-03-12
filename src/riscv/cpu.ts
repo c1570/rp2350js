@@ -872,6 +872,9 @@ const opcode0x33func3Table: FuncTable<R_Type> = new Map([
     if(func7 === 0) { // sll
       const result = rs1Value << rs2Value;
       registerSet.setRegister(rd, result);
+    } else if(func7 === 0x1) { // mulh (rv32m)
+      const result = (rs1Value * registerSet.getRegister(rs2) / 0x100000000) >>> 0;
+      registerSet.setRegisterU(rd, result);
     } else if(func7 === 0x14) { // bset (Zbs)
       const index = rs2Value & 31;
       const result = rs1Value | (1 << index);

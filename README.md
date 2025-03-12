@@ -68,7 +68,6 @@ cm.mvsa01
 cm.pop
 cm.popretz
 maxu
-mulh
 mulhsu
 neg
 orc.b
@@ -179,6 +178,7 @@ min
 minu
 mret *
 mul *
+mulh *
 mulhu *
 mv
 nop
