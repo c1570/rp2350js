@@ -587,46 +587,46 @@ type OpcodeFuncTable<T extends Instruction> = Map<number, Map<number, (instructi
 type FuncTable<T extends Instruction> = Map<number, (instruction: T, cpu: CPU) => void>;
 
 const opcode0x03func3Table: FuncTable<I_Type> = new Map([
-  [0x0, (instruction: I_Type, cpu: CPU) => {
+  [0x0, (instruction: I_Type, cpu: CPU) => { // lb
     const { registerSet, chip } = cpu;
     const { rd, rs1, imm } = instruction;
-    const rs1Value = registerSet.getRegister(rs1);
+    const rs1Value = registerSet.getRegisterU(rs1);
 
     const byte = signExtend8(chip.readUint8(rs1Value + imm));
     registerSet.setRegister(rd, byte);
   }],
 
-  [0x1, (instruction: I_Type, cpu: CPU) => {
+  [0x1, (instruction: I_Type, cpu: CPU) => { // lh
     const { registerSet, chip } = cpu;
     const { rd, rs1, imm } = instruction;
-    const rs1Value = registerSet.getRegister(rs1);
+    const rs1Value = registerSet.getRegisterU(rs1);
 
     const half = signExtend16(chip.readUint16(rs1Value + imm));
     registerSet.setRegister(rd, half);
   }],
 
-  [0x2, (instruction: I_Type, cpu: CPU) => {
+  [0x2, (instruction: I_Type, cpu: CPU) => { // lw
     const { registerSet, chip } = cpu;
     const { rd, rs1, imm } = instruction;
-    const rs1Value = registerSet.getRegister(rs1);
+    const rs1Value = registerSet.getRegisterU(rs1);
 
-    const word = chip.readUint32(rs1Value + imm); //CHECK Int32?
-    registerSet.setRegister(rd, word);
+    const word = chip.readUint32(rs1Value + imm);
+    registerSet.setRegisterU(rd, word);
   }],
 
-  [0x4, (instruction: I_Type, cpu: CPU) => {
+  [0x4, (instruction: I_Type, cpu: CPU) => { // lbu
     const { registerSet, chip } = cpu;
     const { rd, rs1, imm } = instruction;
-    const rs1Value = registerSet.getRegister(rs1);
+    const rs1Value = registerSet.getRegisterU(rs1);
 
     const byte = chip.readUint8(rs1Value + imm);
     registerSet.setRegister(rd, byte);
   }],
 
-  [0x5, (instruction: I_Type, cpu: CPU) => {
+  [0x5, (instruction: I_Type, cpu: CPU) => { // lhu
     const { registerSet, chip } = cpu;
     const { rd, rs1, imm } = instruction;
-    const rs1Value = registerSet.getRegister(rs1);
+    const rs1Value = registerSet.getRegisterU(rs1);
 
     const half = chip.readUint16(rs1Value + imm);
     registerSet.setRegister(rd, half);
