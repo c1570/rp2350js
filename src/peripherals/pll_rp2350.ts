@@ -28,7 +28,7 @@ export class RP2350PLL extends BasePeripheral implements Peripheral {
     const postdiv1 = (this.reg[0xc] >> 16) & 7;
     this.foutpostdiv = (FREF / refdiv) * fbdiv / (postdiv1 * postdiv2);
     if(handled) {
-      console.log(`PLL write ${value} to 0x${offset.toString(16)}, foutpostdiv = ${this.foutpostdiv}`);
+      this.rp2040.logger.info(this.name, `PLL write ${value} to 0x${offset.toString(16)}, foutpostdiv = ${this.foutpostdiv}`);
       return;
     }
     return super.writeUint32(offset, value);
