@@ -97,7 +97,7 @@ function irqIndex(irq: number, machineIndex: number): number {
 }
 
 export class StateMachine {
-  enabled = false;
+  private _enabled = false;
 
   // State machine registers
   x: number = 0;
@@ -193,6 +193,19 @@ export class StateMachine {
     }
   }
 
+  set enabled(value: boolean) {
+    this._enabled = value;
+    if(value) {
+      this.pio.machinesRunning |= 1 << this.index;
+    } else {
+      this.pio.machinesRunning &= ~(1 << this.index);
+    }
+  }
+
+  get enabled() {
+    return this._enabled;
+  }
+
   jmpCondition(condition: number) {
     switch (condition) {
       // (no condition): Always
@@ -241,6 +254,15 @@ export class StateMachine {
     return false;
   }
 
+  get inCountMask() {
+    // IN_COUNT: RP2350 only, number of LSB pins NOT to mask to 0 in IN PINS/WAIT PIN/MOV x,PINS (0 = keep all pins)
+    if(!this.pio.isRp2040) {
+      const value = this.shiftCtrl & 0b11111;
+      return value ? (((1 << value) >>> 0) - 1) : 0xffffffff;
+    }
+    return 0xffffffff;
+  }
+
   get inPins() {
     const gpioValues = this.rp2040.gpioValues(this.pio.gpiobase);
     const { inBase } = this;
@@ -251,7 +273,7 @@ export class StateMachine {
     switch (source) {
       // PINS
       case 0b000:
-        return this.inPins;
+        return this.inPins & this.inCountMask;
 
       // X (scratch register X)
       case 0b001:
@@ -651,7 +673,7 @@ export class StateMachine {
   }
 
   step() {
-    if (!this.enabled) {
+    if (!this._enabled) {
       return;
     }
 
@@ -916,10 +938,11 @@ export class RPPIO extends BasePeripheral implements Peripheral {
     new StateMachine(this.rp2040, this, 3),
   ];
 
-  stopped = true;
+  machinesRunning = 0;
   fdebug = 0;
   inputSyncBypass = 0;
   irq = 0;
+  isRp2040 = this.rp2040.identifier == "rp2040";
   gpiobase = 0;
   pinValues = 0;
   pinDirections = 0;
@@ -945,6 +968,10 @@ export class RPPIO extends BasePeripheral implements Peripheral {
       default:
         throw new Error("Unknown chip id");
     }
+  }
+
+  get stopped() {
+    return !this.machinesRunning;
   }
 
   get intRaw() {
@@ -985,12 +1012,7 @@ export class RPPIO extends BasePeripheral implements Peripheral {
 
     switch (offset) {
       case CTRL:
-        return (
-          (this.machines[0].enabled ? 1 << 0 : 0) |
-          (this.machines[1].enabled ? 1 << 1 : 0) |
-          (this.machines[2].enabled ? 1 << 2 : 0) |
-          (this.machines[3].enabled ? 1 << 3 : 0)
-        );
+        return this.machinesRunning;
       case FSTAT:
         return (
           this.machines[0].fifoStat |
@@ -1047,7 +1069,7 @@ export class RPPIO extends BasePeripheral implements Peripheral {
       case IRQ1_INTS + this.irq_reg_offset:
         return this.irq1IntStatus;
       case RP2350_GPIOBASE:
-        if (this.rp2040.identifier != "rp2040") {
+        if (!this.isRp2040) {
           return this.gpiobase;
         }
     }
@@ -1087,12 +1109,28 @@ export class RPPIO extends BasePeripheral implements Peripheral {
             this.machines[index].clkDivRestart();
           }
         }
-        const shouldRun = value & 0xf;
-        if (this.stopped && shouldRun) {
-          this.stopped = false;
-        }
-        if (!shouldRun) {
-          this.stopped = true;
+        if(!this.isRp2040) {
+          // RP2350 functionality to restart "neighboring" PIO machines synchronously
+          const enableSm = !!(value & (1 << 24));
+          const disableSm = !!(value & (1 << 25));
+          const clkDivRestart = !!(value & (1 << 26));
+
+          // consider "previous" PIO on first for loop
+          const pioCount = this.rp2040.pio.length;
+          let affectedPio = this.rp2040.pio[(this.index + pioCount - 1) % pioCount];
+          let affectedMachines = value >>> 16;
+          for(let prevNext = 0; prevNext <= 1; prevNext++) {
+            for (let index = 0; index < 4; index++) {
+              if(affectedMachines & (1 << index)) {
+                if(enableSm) affectedPio.machines[index].enabled = true;
+                if(disableSm) affectedPio.machines[index].enabled = false;
+                if(clkDivRestart) affectedPio.machines[index].clkDivRestart();
+              }
+            }
+            // consider "next" PIO on second for loop
+            affectedPio = this.rp2040.pio[(this.index + 1) % pioCount];
+            affectedMachines = value >>> 20;
+          }
         }
         break;
       }
@@ -1218,7 +1256,6 @@ export class RPPIO extends BasePeripheral implements Peripheral {
     for (const machine of this.machines) {
       machine.enabled = false;
     }
-    this.stopped = true;
     if (this.runTimer) {
       clearTimeout(this.runTimer);
       this.runTimer = null;

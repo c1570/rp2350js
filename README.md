@@ -95,7 +95,7 @@ Notes
 Bootrom * (varmulet mostly untested)
 GPIOs 30-47
 BOOTRAM_BASE
-PIO updates (register locations for INTR and up, GPIOBASE)
+PIO updates (register locations for INTR and up, GPIOBASE, SHIFTCTRL.IN_COUNT, CTRL.NEXTPREVx)
 DMA updates (2->4 shared IRQs, 12->16 channels, CHxx_TRANS_COUNT/MODE, CTRL register offsets)
 DREQ updates
 PIO2_BASE

@@ -91,7 +91,7 @@ export class RP2040 implements IRPChip {
   ];
 
   readonly dma = new RPDMA(this, 'DMA', IRQ.DMA_IRQ0);
-  readonly pio = [
+  readonly pio: Array<RPPIO> = [
     new RPPIO(this, 'PIO0', IRQ.PIO0_IRQ0, 0, DREQChannel.DREQ_PIO0_RX0, DREQChannel.DREQ_PIO0_TX0),
     new RPPIO(this, 'PIO1', IRQ.PIO1_IRQ0, 1, DREQChannel.DREQ_PIO1_RX0, DREQChannel.DREQ_PIO1_TX0),
   ];

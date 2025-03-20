@@ -1,6 +1,7 @@
 import { GPIOPin } from './gpio-pin';
 import { IClock } from './clock/clock';
 import { Logger } from './utils/logging';
+import { RPPIO } from './peripherals/pio';
 
 export interface IRPChip {
   readonly identifier: string; // "rp2040" or "rp2350"
@@ -17,6 +18,8 @@ export interface IRPChip {
   gpioRawOutputValue(index: number): boolean;
   gpioRawOutputEnable(index: number): boolean;
   gpioInputValueHasBeenSet(index: number): void;
+
+  readonly pio: Array<RPPIO>;
 
   readonly usbDPRAM: Uint8Array;
   readonly usbDPRAMView: DataView;
