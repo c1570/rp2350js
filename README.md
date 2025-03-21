@@ -76,7 +76,6 @@ orn
 rem
 rol
 ror
-rori
 sc.w
 sgtz
 unzip
@@ -189,6 +188,7 @@ packh
 remu *
 ret
 rev8
+rori
 sb
 seqz
 sext.b

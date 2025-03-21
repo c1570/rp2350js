@@ -755,6 +755,11 @@ const opcode0x13func3Table: FuncTable<I_Type> = new Map([
       const result = (rs1Value >>> shamt) & 1;
       registerSet.setRegister(rd, result);
 
+    } else if (func7 === 0x30) { // rori (Zbs)
+      const rs1Val = registerSet.getRegisterU(rs1);
+      const result = ((rs1Val << (32 - shamt)) >>> 0) | (rs1Val >>> shamt);
+      registerSet.setRegister(rd, result);
+
     } else if (func7 === 0x34) { // rev8 (Zbb)
       const result = (rs1Value >>> 24) | ((rs1Value >>> 8) & 0xff00) | ((rs1Value << 8) & 0xff0000) | (((rs1Value & 0xff) << 24) >>> 0);
       registerSet.setRegisterU(rd, result >>> 0);
