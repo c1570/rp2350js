@@ -464,6 +464,8 @@ export class RPDMA extends BasePeripheral implements Peripheral {
       case INTS2:
       case INTS3:
         return this.intStatus(this.intNumFromOffset(offset));
+      case CHAN_ABORT:
+        return 0;
       case N_CHANNELS:
         return this.channels.length;
     }

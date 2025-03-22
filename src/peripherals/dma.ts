@@ -427,6 +427,8 @@ export class RPDMA extends BasePeripheral implements Peripheral {
         return this.intForce1;
       case INTS1:
         return this.intStatus1;
+      case CHAN_ABORT:
+        return 0;
       case N_CHANNELS:
         return this.channels.length;
     }
