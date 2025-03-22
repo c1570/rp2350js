@@ -406,12 +406,13 @@ export class CPU {
     value >>>= 0; raw_write >>>= 0;
     switch(csr) {
       case 0x300: // MSTATUS
+          if((value & ~this.csrs[csr]) & 0b1000) this.interruptsUpdated = true; // MSTATUS.MIE has been set
       case 0x305: // MTVEC
           this.csrs[csr] = value;
           return;
       case 0x304: // MIE
+          if(value & ~this.csrs[csr]) this.interruptsUpdated = true; // any bit in MIE has been set
           this.csrs[csr] = value;
-          this.interruptsUpdated = true;
           return;
       case 0x301:
       case 0x30a:
