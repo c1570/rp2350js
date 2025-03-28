@@ -831,14 +831,28 @@ const opcode0x2ffunc3Table: FuncTable<R_Type> = new Map([
     const { rd, rs1, rs2, func7 } = instruction;
     const { registerSet, chip } = cpu;
 
-    const rs1Value = registerSet.getRegister(rs1);
-    const rs2Value = registerSet.getRegister(rs2);
-
-    if (func7 === 0x22) { // amoor.w.aq (rv32a)
-      // x[rd] = AMO32(M[x[rs1]] | x[rs2])
+    const rs1Value = registerSet.getRegisterU(rs1);
+    const rs2Value = registerSet.getRegisterU(rs2);
+    if (func7 === 0x4) { // amoswap.w (rv32a)
+      // 08a5a52f amoswap.w a0,a0,(a1)
       const rs1Mem = chip.readUint32(rs1Value);
-      registerSet.setRegister(rd, rs1Mem);
+      const value = rs2Value;
+      registerSet.setRegisterU(rd, rs1Mem);
+      chip.writeUint32(rs1Value, value);
+      cpu.cycles += 3;
+    } else if (func7 === 0x22 || func7 === 0x20) { // amoor.w.aq and amoor.w (rv32a)
+      // 44e7a6af amoor.w.aq a3,a4,(a5)
+      // 40c3a52f amoor.w a0,a2,(t2)
+      const rs1Mem = chip.readUint32(rs1Value);
+      registerSet.setRegisterU(rd, rs1Mem);
       const value = rs1Mem | rs2Value;
+      chip.writeUint32(rs1Value, value);
+      cpu.cycles += 3;
+    } else if (func7 === 0x30) { // amoand.w (rv32a)
+      // 60b7a02f amoand.w zero,a1,(a5)
+      const rs1Mem = chip.readUint32(rs1Value);
+      registerSet.setRegisterU(rd, rs1Mem);
+      const value = rs1Mem & rs2Value;
       chip.writeUint32(rs1Value, value);
       cpu.cycles += 3;
     } else throw Error(`Unknown instruction, func7: 0x${func7.toString(16)}`);
@@ -1016,6 +1030,11 @@ const opcode0x33func3Table: FuncTable<R_Type> = new Map([
     if(func7 === 0) { // OR
       const result = rs1Value | rs2Value;
       registerSet.setRegister(rd, result);
+    } else if(func7 === 0x1) { // REM (RV32M)
+      // 02c6e6b3 rem a3,a3,a2
+      const result = (rs2Value === 0) ? rs1Value : (rs1Value % rs2Value);
+      registerSet.setRegister(rd, result);
+      cpu.cycles += 17;
     } else if(func7 === 0x5) { // MAX (Zbb)
       const result = rs1Value > rs2Value ? rs1Value : rs2Value;
       registerSet.setRegister(rd, result);
@@ -1046,10 +1065,10 @@ const opcode0x33func3Table: FuncTable<R_Type> = new Map([
       registerSet.setRegister(rd, result);
     } else if(func7 === 0x5) { // MAXU (Zbb)
       const result = (rs1Value >>> 0) > (rs2Value >>> 0) ? rs1Value : rs2Value;
-      registerSet.setRegister(rd, result);
+      registerSet.setRegisterU(rd, result >>> 0);
     } else if(func7 === 0x1) { // REMU (RV32M)
-      const result = (rs2Value === 0) ? rs1Value : (rs1Value % rs2Value);
-      registerSet.setRegister(rd, result);
+      const result = (rs2Value === 0) ? rs1Value : ((rs1Value >>> 0) % (rs2Value >>> 0));
+      registerSet.setRegisterU(rd, result >>> 0);
       cpu.cycles += 17;
     } else throw Error(`Unknown instruction, func7: 0x${func7.toString(16)}`);
   }],

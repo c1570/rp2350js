@@ -52,12 +52,10 @@ Xh3bextm
 cycle penalties for dependent register usage, APB access, XIP access
 RV32Zcb (lh, mul, sb, sext.b, sext.h, sh, zext.b, zext.h)
 amoadd.w
-amoand.w
 amomax.w
 amomaxu.w
 amomin.w
 amominu.w
-amoswap.w
 amoxor.w
 binv
 binvi
@@ -73,7 +71,6 @@ neg
 orc.b
 ori
 orn
-rem
 rol
 ror
 sc.w
@@ -115,7 +112,9 @@ and
 andi
 andn
 auipc
+amoand.w
 amoor.w
+amoswap.w
 beq
 beqz
 bclr
@@ -185,6 +184,7 @@ not
 or
 pack
 packh
+rem *
 remu *
 ret
 rev8
