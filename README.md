@@ -16,6 +16,7 @@ Timer and System Interrupts
 Exceptions
 GPIO updates (IRQSUMMARY, USB pins, PROC1_INTxx)
 DMA updates (INCR_READ_REV, etc.)
+DMA contention (on hardware, the whole DMA unit does one transfer per cycle, not each channel)
 PIO updates (IRQx_INTE, RXF0_PUTGET0, instruction changes, etc.)
 PWM updates (8->12 slices, second shared interrupt)
 TIMER: registers LOCK and SOURCE
@@ -95,6 +96,7 @@ PIO updates (register locations for INTR and up, GPIOBASE, SHIFTCTRL.IN_COUNT, C
 DMA updates (2->4 shared IRQs, 12->16 channels, CHxx_TRANS_COUNT/MODE, CTRL register offsets)
 DREQ updates
 PIO2_BASE
+PIO SHIFTCTRL FJOIN_RX/FJOIN_TX
 SYSINFO_BASE
 SYSCFG_BASE *
 TIMER1_BASE

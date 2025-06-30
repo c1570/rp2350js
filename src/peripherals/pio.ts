@@ -62,6 +62,8 @@ const FDEBUG_RXUNDER = 1 << 8;
 const FDEBUG_RXSTALL = 1 << 0;
 
 // SHIFTCTRL bits
+const SHIFTCTRL_FJOIN_RX = 1 << 31;
+const SHIFTCTRL_FJOIN_TX = 1 << 30;
 const SHIFTCTRL_AUTOPUSH = 1 << 16;
 const SHIFTCTRL_AUTOPULL = 1 << 17;
 const SHIFTCTRL_IN_SHIFTDIR = 1 << 18; // 1 = shift input shift register to right (data enters from left). 0 = to left
@@ -121,8 +123,8 @@ export class StateMachine {
   execCtrl = 0x1f << 12;
   shiftCtrl = 0b11 << 18;
   pinCtrl = 0x5 << 26;
-  readonly rxFIFO = new FIFO(4);
-  readonly txFIFO = new FIFO(4);
+  rxFIFO = new FIFO(4);
+  txFIFO = new FIFO(4);
 
   outPinValues: number = 0;
   outPinDirection: number = 0;
@@ -818,6 +820,18 @@ export class StateMachine {
         this.execCtrl = ((value & 0x7fffffff) | (this.execCtrl & 0x80000000)) >>> 0;
         break;
       case SM0_SHIFTCTRL:
+        if((value >>> 30) ^ (this.shiftCtrl >>> 30)) {
+          if(value & SHIFTCTRL_FJOIN_RX) {
+            this.rxFIFO = new FIFO(8);
+            this.txFIFO = new FIFO(0);
+          } else if(value & SHIFTCTRL_FJOIN_TX) {
+            this.rxFIFO = new FIFO(0);
+            this.txFIFO = new FIFO(8);
+          } else {
+            this.rxFIFO = new FIFO(4);
+            this.txFIFO = new FIFO(4);
+          }
+        }
         this.shiftCtrl = value;
         break;
       case SM0_ADDR:
