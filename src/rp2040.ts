@@ -313,6 +313,13 @@ export class RP2040 implements IRPChip {
       );
       return;
     }
+    if (address >= SIO_START_ADDRESS) {
+      this.writeUint32(
+        alignedAddress,
+        (value & 0xff) | ((value & 0xff) << 8) | ((value & 0xff) << 16) | ((value & 0xff) << 24)
+      );
+      return;
+    }
     const originalValue = this.readUint32(alignedAddress);
     const newValue = new Uint32Array([originalValue]);
     new DataView(newValue.buffer).setUint8(offset, value);
@@ -335,6 +342,10 @@ export class RP2040 implements IRPChip {
       const atomicType = (alignedAddress & 0x3000) >> 12;
       const offset = alignedAddress & 0xfff;
       peripheral.writeUint32Atomic(offset, (value & 0xffff) | ((value & 0xffff) << 16), atomicType);
+      return;
+    }
+    if (address >= SIO_START_ADDRESS) {
+      this.writeUint32(alignedAddress, (value & 0xffff) | ((value & 0xffff) << 16));
       return;
     }
     const originalValue = this.readUint32(alignedAddress);
