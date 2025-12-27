@@ -679,6 +679,10 @@ const opcode0x13func3Table: FuncTable<I_Type> = new Map([
       const rs1Value = registerSet.getRegister(rs1);
       const result = rs1Value & ~(1 << shamt);
       registerSet.setRegister(rd, result);
+    } else if (func7 === 0x34) { // binvi (Zbs)
+      const rs1Value = registerSet.getRegister(rs1);
+      const result = rs1Value ^ (1 << shamt);
+      registerSet.setRegister(rd, result);
     } else if (immU === 0b011000000001) { // ctz (Zbb)
       const rs1Value = registerSet.getRegister(rs1);
       let tmp = rs1Value >>> 0;

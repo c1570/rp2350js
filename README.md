@@ -59,7 +59,6 @@ amomin.w
 amominu.w
 amoxor.w
 binv
-binvi
 brev8
 clz
 cm.mva01s
@@ -129,6 +128,7 @@ bgez
 bgt
 bgtu
 bgtz
+binvi
 ble
 bleu
 blez
