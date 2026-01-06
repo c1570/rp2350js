@@ -8,7 +8,8 @@ let trace_6510_filename = process.env.CNM64_TRACE_6510; //CNM64_FINISH_WITH_TRAC
 const max_len_main_loop_stats = 1000;
 const max_len_vic_loop_stats = 1000;
 
-const GIFEncoder = require('gifencoder');
+const { GifEncoder } = require('@skyra/gifenc');
+const { buffer } = require('node:stream/consumers');
 const { createCanvas, loadImage } = require('canvas');
 const readline = require('readline');
 
@@ -198,13 +199,14 @@ vcd_file.write("$enddefinitions $end\n");
 const cpu_addr_off = getVarOffs(0, ".sbss.addr");
 const framebuffer_off = getVarOffs(2, ".bss.frame_buffer");
 
-function write_pic(filename: string) {
+async function write_pic(filename: string) {
   const width = 400;
   const height = 300;
   const palette = [0x00,0xff,0x84,0x7b,0x86,0x55,0x26,0xfd,0x88,0x44,0xcd,0x49,0x6d,0xbe,0x6f,0xb6];
   const canvas = createCanvas(width, height);
   const ctx = canvas.getContext('2d');
-  const encoder = new GIFEncoder(width, height);
+  const encoder = new GifEncoder(width, height);
+  const stream = encoder.createReadStream();
   encoder.start();
   //encoder.setRepeat(0);
   //encoder.setDelay(1000);
@@ -223,7 +225,7 @@ function write_pic(filename: string) {
   ctx.putImageData(imageData, 0, 0);
   encoder.addFrame(ctx);
   encoder.finish();
-  const buf = encoder.out.getData();
+  const buf = await buffer(stream);
   fs.writeFileSync(`${filename}_new`, buf);
   fs.renameSync(`${filename}_new`, filename);
 }
@@ -321,7 +323,7 @@ async function run_mcus() {
   try {
   for (let i = 0; i < 1000000; i++) {
       if(mcu[0].core0.cycles>next_cycle_time_output) {
-        write_pic("/tmp/cnm64.gif");
+        await write_pic("/tmp/cnm64.gif");
         next_cycle_time_output += 4000000;
         console.log(`clock: ${((mcu[0].core0.cycles/40000000)>>>0)/10} secs`);
       }

@@ -73,7 +73,7 @@
     ]
   },
   "dependencies": {
-    "canvas": "^2.11.2",
-    "gifencoder": "^2.0.1"
+    "@skyra/gifenc": "^1.0.1",
+    "canvas": "^3.2.0"
   }
 }
