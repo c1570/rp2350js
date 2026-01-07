@@ -1,88 +1,16 @@
-## WIP! rp2040js / rp2350js (RISC-V only)
+## rp2040js / rp2350js
 https://github.com/c1570/rp2040js
+
+Raspberry Pi Pico (2) emulator. Develop/test/debug RP2040/2350 projects on your PC/in your CI stack.
 
 For generic/original rp2040js docs, [see below](#rp2040js).
 
 ### Status of rp2350js
-* limited RISC-V/Hazard3 support (no ARM support)
+* 95% RISC-V/Hazard3 machine mode support (no ARM support, no user mode support)
 * runs both no_flash/RAM binaries and flash binaries
 * runs pico-examples/blink_simple.c, hello_timer.c, hello_usb.c
 * runs [Connomore64](https://github.com/c1570/Connomore64) main and video mcu (dual core, PIO, DMA)
-
-#### Missing
-
-```
-Timer and System Interrupts
-Exceptions
-GPIO updates (IRQSUMMARY, USB pins, PROC1_INTxx)
-DMA updates (INCR_READ_REV, etc.)
-DMA contention (on hardware, the whole DMA unit does one transfer per cycle, not each channel)
-PIO updates (IRQx_INTE, RXF0_PUTGET0, instruction changes, etc.)
-PWM updates (8->12 slices, second shared interrupt)
-TIMER: registers LOCK and SOURCE
-Correct timers when changing sys_clk/PLL
-QMI address translation
-SIO: secure vs. insecure, SIO_NONSEC_BASE
-Doorbells
-RISC-V Platform Timer
-TMDS Encoder
-RTC
-XIP_MAINTENANCE_BASE
-XIP_AUX_BASE
-XOSC_BASE
-PLL_USB_BASE
-ACCESSCTRL_BASE
-BUSCTRL_BASE
-HSTX_FIFO_BASE
-HSTX_CTRL_BASE
-XIP_CTRL_BASE
-XIP_QMI_BASE
-WATCHDOG_BASE
-ROSC_BASE
-TRNG_BASE
-SHA256_BASE
-POWMAN_BASE *
-TICKS_BASE
-OTP_BASE ...
-CORESIGHT_PERIPH_BASE ...
-GLITCH_DETECTOR_BASE
-
-Hazard3: Machine vs. User mode
-Xh3pmpm (Physical Memory Protection PMP)
-Xh3bextm
-cycle penalties for dependent register usage, APB access, XIP access
-RV32Zcb (lh, mul, sb, sext.b, sext.h, sh, zext.b, zext.h)
-amoadd.w
-amomax.w
-amomaxu.w
-amomin.w
-amominu.w
-amoxor.w
-binv
-brev8
-clz
-cm.mva01s
-cm.mvsa01
-cm.pop
-cm.popretz
-maxu
-mulhsu
-neg
-orc.b
-ori
-orn
-rol
-ror
-sc.w
-sgtz
-unzip
-wfi
-zip
-```
-
-Notes
-* Xh3irq [CSR write bypass](https://github.com/Wren6991/Hazard3/blob/787da131a1e982543d9b308c1c25a09160e71a65/hdl/hazard3_core.v#L921)
-* Hazard3 [rv_opcodes.vh](https://github.com/Wren6991/Hazard3/blob/stable/hdl/rv_opcodes.vh) and [hazard3_decode.v](https://github.com/Wren6991/Hazard3/blob/787da131a1e982543d9b308c1c25a09160e71a65/hdl/hazard3_decode.v#L305):
+* _almost_ runs MicroPython (flash access needs some more work)
 
 #### Implemented
 `*` = needs checking/fixing
@@ -219,6 +147,81 @@ xori
 zext.b
 zext.h
 ```
+
+#### Missing
+
+```
+Timer and System Interrupts (Xh3irq is there though)
+Exceptions
+Minor GPIO updates (IRQSUMMARY, USB pins, PROC1_INTxx)
+Minor DMA updates (INCR_READ_REV, etc.)
+DMA contention (on hardware, the whole DMA unit does one transfer per cycle, not each channel)
+Minor PIO updates (IRQx_INTE, RXF0_PUTGET0, instruction changes, etc.)
+PWM updates (8->12 slices, second shared interrupt)
+TIMER: registers LOCK and SOURCE
+Correct timers when changing sys_clk/PLL
+QMI address translation
+SIO: secure vs. insecure, SIO_NONSEC_BASE
+Doorbells
+RISC-V Platform Timer
+TMDS Encoder
+RTC
+XIP_MAINTENANCE_BASE
+XIP_AUX_BASE
+XOSC_BASE
+PLL_USB_BASE
+ACCESSCTRL_BASE
+BUSCTRL_BASE
+HSTX_FIFO_BASE
+HSTX_CTRL_BASE
+XIP_CTRL_BASE
+XIP_QMI_BASE
+WATCHDOG_BASE
+ROSC_BASE
+TRNG_BASE
+SHA256_BASE
+POWMAN_BASE *
+TICKS_BASE
+OTP_BASE ...
+CORESIGHT_PERIPH_BASE ...
+GLITCH_DETECTOR_BASE
+
+Hazard3: Machine vs. User mode
+Xh3pmpm (Physical Memory Protection PMP)
+Xh3bextm
+cycle penalties for dependent register usage, APB access, XIP access
+RV32Zcb (lh, mul, sb, sext.b, sext.h, sh, zext.b, zext.h)
+amoadd.w
+amomax.w
+amomaxu.w
+amomin.w
+amominu.w
+amoxor.w
+binv
+brev8
+clz
+cm.mva01s
+cm.mvsa01
+cm.pop
+cm.popretz
+maxu
+mulhsu
+neg
+orc.b
+ori
+orn
+rol
+ror
+sc.w
+sgtz
+unzip
+wfi
+zip
+```
+
+Notes
+* Xh3irq [CSR write bypass](https://github.com/Wren6991/Hazard3/blob/787da131a1e982543d9b308c1c25a09160e71a65/hdl/hazard3_core.v#L921)
+* Hazard3 [rv_opcodes.vh](https://github.com/Wren6991/Hazard3/blob/stable/hdl/rv_opcodes.vh) and [hazard3_decode.v](https://github.com/Wren6991/Hazard3/blob/787da131a1e982543d9b308c1c25a09160e71a65/hdl/hazard3_decode.v#L305):
 
 ## This is a project specific fork of rp2040js.
 ## It is used for developing the [Connomore64](https://github.com/c1570/Connomore64).
