@@ -36,7 +36,7 @@ const mcu = new Array(hex_files.length).fill(null);
 
 const mcu_tags = new Array(hex_files.length).fill(null); // debug/profiling tracing tags
 function mcuTagSetter(mcuNumber: number) {
-  return (coreNumber: number, pc: number, tag: string) => { mcu_tags[mcuNumber][coreNumber] = tag; };
+  return (coreNumber: number, pc: number, tag: string) => { mcu_tags[mcuNumber][coreNumber] = tag; if(tag.startsWith("!")) {console.log(`cycle_tag ${tag} on mcu ${mcuNumber} core ${coreNumber} cycle ${coreNumber==0?mcu[mcuNumber].core0.cycles:mcu[mcuNumber].core1.cycles}`);}; };
 }
 
 for(let i = 0; i < hex_files.length; i++) {
@@ -101,31 +101,34 @@ function exactPinTick() {
   const latency = 7; // measured at 400MHz
   const stateMap = [0b01, 0b10, 0b00, 0b00, 0b00]; // Low, High, Input, InputPullUp, InputPullDown
   // TODO implement pullup etc.
+  // pin_state_res is pipeline that gets shifted to the right:
+  //                         s7s6s5s4s3s2s1
+  // queued input (two bits) ^^          ^^ state visible on input pins
 
   for(let i = 0; i < pin_label.length; i++) {
-    let all_inputs = 1;
     let v_in = 0;
     for(let mcu_id = 0; mcu_id < hex_files.length; mcu_id++) {
       const pin_state = stateMap[pin_state_inp[mcu_id][i]];
       v_in |= pin_state;
-      if(pin_state <= 1) all_inputs = 0;
     }
 
-    if(all_inputs) v_in = (pin_state_res[i] >> (latency*2))&0b11; // all are inputs: just keep state (TODO pullup after some time or similar)
+    // in case all are inputs, just keep state (TODO pullup after some time or similar)
+    if(v_in == 0b00) v_in = (pin_state_res[i] >> (latency*2))&0b11;
 
+    // enqueue new combined input
     pin_state_res[i] = pin_state_res[i] | (v_in << ((latency+1)*2));
 
     let v_old = pin_state_res[i] & 0b11;
     pin_state_res[i] = pin_state_res[i] >> 2;
     let v_new = pin_state_res[i] & 0b11;
     if(v_old != v_new) { //xxx TODO GPIO outputs should probably read back their output as input without latency, but this eats a lot of emulator performance
-      const tfv = (v_new & 0b01) == 0;
+      const tfv = (v_new & 0b01) == 0; // any single Low will pull down bus
       const gpio_pin = pin_gpio[i];
       for(let mcu_id = 0; mcu_id < hex_files.length; mcu_id++) mcu[mcu_id].gpio[gpio_pin].setInputValue(tfv);
     }
 
     // const conflict = (v_new == 0b11); // TODO
-    // TODO VCD writing
+    // TODO re-add VCD writing
   }
 }
 
@@ -315,8 +318,8 @@ async function run_mcus() {
     let bus_state_str = bus_state>=0 ? bus_state_labels[bus_state] : "---";
     let bus_pins = "";
     let bus_bin = 0;
-    for(let i = 8; i > 0; i--) { let bus_pin = (mcu_output.gpio[pin_gpio[i]].status>>17)&1; bus_bin = (bus_bin<<1) + bus_pin; bus_pins = bus_pins + bus_pin.toString(); }
-    bus_pins = ((mcu_output.gpio[pin_gpio[0]].status>>17)&1).toString() + " " + bus_pins;
+    for(let i = 8; i > 0; i--) { let bus_pin = mcu_output.gpio[pin_gpio[i]].inputValue>>>0; bus_bin = (bus_bin<<1) + bus_pin; bus_pins = bus_pins + bus_pin.toString(); }
+    bus_pins = (mcu_output.gpio[pin_gpio[0]].inputValue>>>0).toString() + " " + bus_pins;
     logs.push(`${cycleTag} / ${busTag} | ${bus_state_str} | M ${mcu_main.core0.PC.toString(16).padStart(8,"0")}/${wTags[0]} ${mcu_main.core1.PC.toString(16).padStart(8,"0")}/${wTags[1]} | V ${mcu_vic.core0.PC.toString(16).padStart(8,"0")}/${wTags[2]} ${mcu_vic.core1.PC.toString(16).padStart(8,"0")}/${wTags[3]} | M_PIO@${wTags[4]} V_PIO@${wTags[5]}/r${mcu_vic.pio[1].machines[0].rxFIFO.itemCount}/t${mcu_vic.pio[1].machines[0].txFIFO.itemCount} V_OUT@${wTags[6]} O_INP@${wTags[7]} | V_H_COUNT@${vic_h.toString().padStart(2,"0")} 6510@${cpu_addr.toString(16).padStart(4,"0")} ${bus_pins} ${bus_bin.toString(16).padStart(2,"0")}`);
   }
 
@@ -364,7 +367,7 @@ async function run_mcus() {
       // now, let PIOs catch up - done separately from MCU cores to reduce jitter
       for(let pCycles = 0; pCycles < cycles_consumed; pCycles++) {
         // bus state debug output handling, look at clock pin
-        let cur_clock_pin_state = (mcu[2].gpio[pin_gpio[0]].status>>17)&1;
+        let cur_clock_pin_state = mcu[2].gpio[pin_gpio[0]].inputValue>>>0;
         if(cur_clock_pin_state != clock_pin_state) {
           if(cur_clock_pin_state == 1) {
             bus_state = (bus_state + 1) % 5;
