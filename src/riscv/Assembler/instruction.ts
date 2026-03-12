@@ -401,7 +401,8 @@ export enum InstructionType {
   S,
   B,
   U,
-  J
+  J,
+  CUSTOM0
 }
 
 export interface InstructionValues {

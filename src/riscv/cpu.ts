@@ -139,6 +139,9 @@ export class CPU {
       case InstructionType.J:
         this.executeJ_Type(new J_Type({ binary: instruction }));
         break;
+      case InstructionType.CUSTOM0:
+        this.executeCustom0_Type(instruction);
+        break;
       default:
         throw Error(`Invalid instruction: 0x${instruction.toString(16)} at 0x${this.pc.toString(16)}, OpcodeType 0x${getRange(instruction, 6, 0).toString(16)}`);
         break;
@@ -398,6 +401,29 @@ export class CPU {
       operation(instruction, this);
     } else {
       throw Error(`Invalid Instruction opcode 0x${opcode.toString(16)}`);
+    }
+  }
+
+  private executeCustom0_Type(instruction: number) {
+    const c_ident = instruction & 0b11100010000000000111000001111111;
+    if(c_ident === 0b00000000000000000000000000001011) { // h3.bextm
+      const size = (instruction >>> 26) & 0b111;
+      const rs2 = (instruction >>> 20) & 0b11111;
+      const rs1 = (instruction >>> 15) & 0b11111;
+      const rd = (instruction >>> 7) & 0b11111;
+      let value = this.registerSet.getRegisterU(rs1) >>> this.registerSet.getRegisterU(rs2);
+      value &= (2 << size) - 1;
+      this.registerSet.setRegisterU(rd, value);
+    } else if(c_ident === 0b00000000000000000100000000001011) { // h3.bextmi
+      const size = (instruction >>> 26) & 0b111;
+      const rs2 = (instruction >>> 20) & 0b11111;
+      const rs1 = (instruction >>> 15) & 0b11111;
+      const rd = (instruction >>> 7) & 0b11111;
+      let value = this.registerSet.getRegisterU(rs1) >>> rs2;
+      value &= (2 << size) - 1;
+      this.registerSet.setRegisterU(rd, value);
+    } else {
+      throw Error(`Invalid Instruction opcode 0x${instruction.toString(16)}`);
     }
   }
 
@@ -1333,6 +1359,7 @@ const j_TypeOpcodeTable: OpcodeTable<J_Type> = new Map([
 
 const opcodeTypeTable = new Map<number, InstructionType>([
   [0x03, InstructionType.I], // LOAD
+  [0x0b, InstructionType.CUSTOM0], // H3.BEXTM
   [0x0f, InstructionType.I], // MISC-MEM
   [0x13, InstructionType.I], // OP-IMM
   [0x17, InstructionType.U], // AUIPC

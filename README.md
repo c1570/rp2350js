@@ -32,6 +32,7 @@ External interrupts *
 updated IRQ constants
 Xh3irq (MEIEA, MEIPA, MEIFA, MEIPRA, MEINEXT, MEICONTEXT) *
 Xh3power (h3.block and h3.unblock)
+Xh3bextm (h3.bextmi and h3.bextm)
 RV32C
 RV32Zcb (lbu, lhu, not)
 somewhat correct instruction cycle counts *
@@ -188,7 +189,6 @@ GLITCH_DETECTOR_BASE
 
 Hazard3: Machine vs. User mode
 Xh3pmpm (Physical Memory Protection PMP)
-Xh3bextm
 cycle penalties for dependent register usage, APB access, XIP access
 RV32Zcb (lh, mul, sb, sext.b, sext.h, sh, zext.b, zext.h)
 amoadd.w

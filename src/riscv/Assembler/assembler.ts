@@ -121,6 +121,9 @@ export class Assembler {
         });
         break;
 
+      case InstructionType.CUSTOM0:
+        throw new Error("Bug: CUSTOM0 instruction type should not get reached here");
+
     }
 
     return instruction;
