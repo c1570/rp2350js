@@ -1215,14 +1215,14 @@ export class RPPIO extends BasePeripheral implements Peripheral {
   pinValuesChanged(value: number, firstPin: number, count: number) {
     // TODO: wrapping after pin 31
     const mask = count > 31 ? 0xffffffff : ((1 << count) - 1) << firstPin;
-    const newValue = ((this.pinValues & ~mask) | ((value << firstPin) & mask)) & 0x3fffffff;
+    const newValue = ((this.pinValues & ~mask) | ((value << firstPin) & mask)) & (this.isRp2040 ? 0x3fffffff : 0xffffffff);
     this.pinValues = newValue;
   }
 
   pinDirectionsChanged(value: number, firstPin: number, count: number) {
     // TODO: wrapping after pin 31
     const mask = count > 31 ? 0xffffffff : ((1 << count) - 1) << firstPin;
-    const newValue = ((this.pinDirections & ~mask) | ((value << firstPin) & mask)) & 0x3fffffff;
+    const newValue = ((this.pinDirections & ~mask) | ((value << firstPin) & mask)) & (this.isRp2040 ? 0x3fffffff : 0xffffffff);
     this.pinDirections = newValue;
   }
 
