@@ -2,7 +2,10 @@
   "name": "rp2040js/rp2350js",
   "version": "1.0.1-c1570",
   "description": "Raspberry Pi Pico (RP2040/RP2350) Emulator",
-  "repository": "https://github.com/c1570/rp2040js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/c1570/rp2040js.git"
+  },
   "keywords": [
     "rp2040",
     "rp2350",
