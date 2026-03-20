@@ -1042,7 +1042,7 @@ const opcode0x33func3Table: FuncTable<R_Type> = new Map([
       if(rs2Value === 0) {
         registerSet.setRegisterU(rd, 0xffffffff);
       } else {
-        const result = (rs1Value / rs2Value) >>> 0;
+        const result = ((rs1Value >>> 0) / (rs2Value >>> 0)) >>> 0;
         registerSet.setRegister(rd, result);
       }
       cpu.cycles += 17;
