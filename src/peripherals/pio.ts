@@ -831,6 +831,8 @@ export class StateMachine {
             this.rxFIFO = new FIFO(4);
             this.txFIFO = new FIFO(4);
           }
+          this.updateDMATx();
+          this.updateDMARx();
         }
         this.shiftCtrl = value;
         break;
