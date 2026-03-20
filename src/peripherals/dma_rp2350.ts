@@ -68,6 +68,10 @@ enum TREQ {
   Permanent = 0x3f,
 }
 
+const CHANNEL_COUNT = 16;
+const REGISTERS_SIZE_PER_CHANNEL = 0x40;
+const DEBUG_REGISTER_START = 0x800;
+
 // Per-channel registers
 const CHn_READ_ADDR = 0x000; // DMA Channel n Read Address pointer
 const CHn_WRITE_ADDR = 0x004; // DMA Channel n Write Address pointer
@@ -87,8 +91,6 @@ const CHn_AL3_TRANS_COUNT = 0x038; // Alias for channel n TRANS_COUNT register
 const CHn_AL3_READ_ADDR_TRIG = 0x03c; // Alias for channel n READ_ADDR register
 const CHn_DBG_CTDREQ = 0x800;
 const CHn_DBG_TCR = 0x804;
-const CHANNEL_REGISTERS_SIZE = 16 * 0x40;
-const CHANNEL_REGISTERS_MASK = 0x83f;
 
 // General DMA registers
 const INTR = 0x400; // Interrupt Status (raw)
@@ -392,24 +394,7 @@ export class RPDMAChannel {
 }
 
 export class RPDMA extends BasePeripheral implements Peripheral {
-  readonly channels = [
-    new RPDMAChannel(this, this.rp2040, 0),
-    new RPDMAChannel(this, this.rp2040, 1),
-    new RPDMAChannel(this, this.rp2040, 2),
-    new RPDMAChannel(this, this.rp2040, 3),
-    new RPDMAChannel(this, this.rp2040, 4),
-    new RPDMAChannel(this, this.rp2040, 5),
-    new RPDMAChannel(this, this.rp2040, 6),
-    new RPDMAChannel(this, this.rp2040, 7),
-    new RPDMAChannel(this, this.rp2040, 8),
-    new RPDMAChannel(this, this.rp2040, 9),
-    new RPDMAChannel(this, this.rp2040, 10),
-    new RPDMAChannel(this, this.rp2040, 11),
-    new RPDMAChannel(this, this.rp2040, 12),
-    new RPDMAChannel(this, this.rp2040, 13),
-    new RPDMAChannel(this, this.rp2040, 14),
-    new RPDMAChannel(this, this.rp2040, 15),
-  ];
+  readonly channels: Array<RPDMAChannel> = Array(CHANNEL_COUNT).fill(0).map((v,i) => new RPDMAChannel(this, this.rp2040, i));
 
   intRaw = 0;
   private intEnable = [0, 0, 0, 0];
@@ -434,9 +419,10 @@ export class RPDMA extends BasePeripheral implements Peripheral {
   }
 
   readUint32(offset: number) {
-    if ((offset & 0x7ff) <= CHANNEL_REGISTERS_SIZE) {
-      const channelIndex = (offset & 0x7ff) >> 6;
-      return this.channels[channelIndex].readUint32(offset & CHANNEL_REGISTERS_MASK);
+    if ((offset % DEBUG_REGISTER_START) < (CHANNEL_COUNT * REGISTERS_SIZE_PER_CHANNEL)) {
+      // this handles both the normal CHn registers (starting at 0x0) as well as the CHn_DBG registers (starting at DEBUG_REGISTER_START)
+      const channelIndex = ((offset % DEBUG_REGISTER_START) / REGISTERS_SIZE_PER_CHANNEL) >>> 0;
+      return this.channels[channelIndex].readUint32(offset & (DEBUG_REGISTER_START | (REGISTERS_SIZE_PER_CHANNEL - 1)));
     }
     switch (offset) {
       case TIMER0:
@@ -473,9 +459,10 @@ export class RPDMA extends BasePeripheral implements Peripheral {
   }
 
   writeUint32(offset: number, value: number) {
-    if ((offset & 0x7ff) <= CHANNEL_REGISTERS_SIZE) {
-      const channelIndex = (offset & 0x7ff) >> 6;
-      this.channels[channelIndex].writeUint32(offset & CHANNEL_REGISTERS_MASK, value);
+    if ((offset % DEBUG_REGISTER_START) < (CHANNEL_COUNT * REGISTERS_SIZE_PER_CHANNEL)) {
+      // this handles both the normal CHn registers (starting at 0x0) as well as the CHn_DBG registers (starting at DEBUG_REGISTER_START)
+      const channelIndex = ((offset % DEBUG_REGISTER_START) / REGISTERS_SIZE_PER_CHANNEL) >>> 0;
+      this.channels[channelIndex].writeUint32(offset & (DEBUG_REGISTER_START | (REGISTERS_SIZE_PER_CHANNEL - 1)), value);
       return;
     }
     switch (offset) {
