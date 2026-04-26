@@ -137,6 +137,7 @@ export class RP2350 implements IRPChip {
     0x400b0: new RPTimer(this, 'TIMER0_BASE', IRQ.TIMER0_IRQ_0),
     0x400b8: new RPTimer(this, 'TIMER1_BASE', IRQ.TIMER1_IRQ_0),
     0x400c0: new UnimplementedPeripheral(this, 'HSTX_CTRL_BASE'),
+    0x400d0: new UnimplementedPeripheral(this, 'XIP_QMI_BASE'),
 
     0x400d8: new UnimplementedPeripheral(this, 'WATCHDOG_BASE'), //TODO new RPWatchdog(this, 'WATCHDOG_BASE'),
     //0x400xx: new RP2040RTC(this, 'RTC_BASE'),
