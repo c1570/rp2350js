@@ -68,6 +68,7 @@ bne
 bnez
 bset
 bseti
+clz
 cm.popret
 cm.push
 cpop
@@ -199,7 +200,6 @@ amominu.w
 amoxor.w
 binv
 brev8
-clz
 cm.mva01s
 cm.mvsa01
 cm.pop

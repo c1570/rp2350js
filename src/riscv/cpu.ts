@@ -734,6 +734,11 @@ const opcode0x13func3Table: FuncTable<I_Type> = new Map([
       const rs1Value = registerSet.getRegisterU(rs1);
       const value = signExtend8(rs1Value & 0xff);
       registerSet.setRegister(rd, value);
+    } else if ((instruction.binary & 0b11111111111100000111000001111111) ===
+                                     0b01100000000000000001000000010011) { // clz (Zbb)
+      const rs1Value = registerSet.getRegisterU(rs1);
+      const lzc = Math.clz32(rs1Value);
+      registerSet.setRegister(rd, lzc);
     } else throw Error(`Unknown instruction, func7: 0x${func7.toString(16)}`);
   }],
 
