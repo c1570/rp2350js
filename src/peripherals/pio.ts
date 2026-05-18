@@ -75,6 +75,10 @@ const EXECCTRL_SIDE_PINDIR = 1 << 29;
 const EXECCTRL_SIDE_EN = 1 << 30;
 const EXECCTRL_EXEC_STALLED = 1 << 31;
 
+// TODO(RP2350) RXF0_PUTGET0 expose each RX FIFO's internal storage registers
+// TODO(RP2350) FJOIN_RX_GET FIFO mode
+// TODO(RP2350) FJOIN_RX_PUT FIFO mode
+
 export enum WaitType {
   None,
   Pin,
@@ -455,6 +459,7 @@ export class StateMachine {
         const source = (arg >> 5) & 0x3;
         const index = arg & 0x1f;
         switch (source) {
+          // TODO(RP2350) PINCTRL_JMP_PIN source
           // GPIO:
           case 0b00:
             this.wait(WaitType.Pin, polarity, index);
@@ -467,6 +472,7 @@ export class StateMachine {
 
           // IRQ:
           case 0b10:
+            // TODO(RP2350) next/prev PIO handling
             this.wait(WaitType.IRQ, polarity, irqIndex(index, this.index));
             break;
         }
@@ -591,6 +597,8 @@ export class StateMachine {
       case 0b101: {
         const source = arg & 0x7;
         const op = (arg >> 3) & 0x3;
+        // TODO(RP2350) PINDIRS destination
+        // TODO(RP2350) SM IRQ flags as a source for MOV x, STATUS
         const destination = (arg >> 5) & 0x7;
         const value = this.inSourceValue(source);
         const transformedValue = this.transformMovValue(value, op) >>> 0;
@@ -606,6 +614,7 @@ export class StateMachine {
         }
         const clear = !!(arg & 0x40);
         const wait = !!(arg & 0x20);
+        // TODO(RP2350) next/prev PIO handling
         const irq = irqIndex(arg & 0x1f, this.index);
         if (clear) {
           this.pio.irq &= ~(1 << irq);
@@ -886,6 +895,7 @@ export class StateMachine {
 
     switch (this.waitType) {
       case WaitType.IRQ: {
+        // TODO(RP2350) waiting on next/prev PIO
         const irqValue = !!(this.pio.irq & (1 << this.waitIndex));
         if (irqValue === this.waitPolarity) {
           this.waiting = false;
