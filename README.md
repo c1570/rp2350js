@@ -19,7 +19,7 @@ For generic/original rp2040js docs, [see below](#rp2040js).
 Bootrom * (varmulet mostly untested)
 GPIOs 30-47
 BOOTRAM_BASE
-PIO updates (register locations for INTR and up, GPIOBASE, SHIFTCTRL.IN_COUNT, CTRL.NEXTPREVx)
+PIO updates (register locations for INTR and up, GPIOBASE, SHIFTCTRL.IN_COUNT, CTRL.NEXTPREVx, IRQ/WAIT NEXT/PREV)
 DMA updates (2->4 shared IRQs, 12->16 channels, CHxx_TRANS_COUNT/MODE, CTRL register offsets)
 DREQ updates
 PIO2_BASE
@@ -158,7 +158,7 @@ Exceptions
 Minor GPIO updates (IRQSUMMARY, USB pins, PROC1_INTxx)
 Minor DMA updates (INCR_READ_REV, etc.)
 DMA contention (on hardware, the whole DMA unit does one transfer per cycle, not each channel)
-Minor PIO updates (IRQx_INTE, RXF0_PUTGET0, instruction changes, etc.)
+PIO updates (IRQx_INTE, RXF0_PUTGET0, instruction changes, etc.)
 PWM updates (8->12 slices, second shared interrupt)
 TIMER: registers LOCK and SOURCE
 Correct timers when changing sys_clk/PLL

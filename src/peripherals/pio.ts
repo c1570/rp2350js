@@ -97,11 +97,6 @@ function bitReverse(x: number) {
   return x >>> 0;
 }
 
-function irqIndex(irq: number, machineIndex: number): number {
-  const rel = !!(irq & 0x10);
-  return rel ? (irq & 0x4) | (((irq & 0x3) + machineIndex) & 0x3) : irq & 0x7;
-}
-
 export class StateMachine {
   private _enabled = false;
 
@@ -138,6 +133,7 @@ export class StateMachine {
   waitIndex = 0;
   waitPolarity = false;
   waitDelay = -1;
+  waitTargetPio: RPPIO = this.pio;
 
   readonly dreqRx = this.pio.dreqRx_base + this.index;
   readonly dreqTx = this.pio.dreqTx_base + this.index;
@@ -471,10 +467,11 @@ export class StateMachine {
             break;
 
           // IRQ:
-          case 0b10:
-            // TODO(RP2350) next/prev PIO handling
-            this.wait(WaitType.IRQ, polarity, irqIndex(index, this.index));
+          case 0b10: {
+            const { targetPio, irqBit } = this.resolveIrqTarget(index);
+            this.wait(WaitType.IRQ, polarity, irqBit, targetPio);
             break;
+          }
         }
         break;
       }
@@ -614,16 +611,15 @@ export class StateMachine {
         }
         const clear = !!(arg & 0x40);
         const wait = !!(arg & 0x20);
-        // TODO(RP2350) next/prev PIO handling
-        const irq = irqIndex(arg & 0x1f, this.index);
+        const { targetPio, irqBit } = this.resolveIrqTarget(arg & 0x1f);
         if (clear) {
-          this.pio.irq &= ~(1 << irq);
-          this.pio.irqUpdated();
+          targetPio.irq &= ~(1 << irqBit);
+          targetPio.irqUpdated();
         } else {
-          this.pio.irq |= 1 << irq;
-          this.pio.irqUpdated();
+          targetPio.irq |= 1 << irqBit;
+          targetPio.irqUpdated();
           if (wait) {
-            this.wait(WaitType.IRQ, false, irq);
+            this.wait(WaitType.IRQ, false, irqBit, targetPio);
           }
         }
         break;
@@ -675,12 +671,43 @@ export class StateMachine {
     }
   }
 
-  wait(type: WaitType, polarity: boolean, index: number) {
+  resolveIrqTarget(irqField: number) {
+    const pio = this.pio;
+    if (pio.isRp2040) {
+      const rel = !!(irqField & 0x10);
+      const irqBit = rel
+        ? (irqField & 0x4) | (((irqField & 0x3) + this.index) & 0x3)
+        : irqField & 0x7;
+      return { targetPio: pio, irqBit };
+    }
+    const idxMode = (irqField >> 3) & 3;
+    const irqNum = irqField & 7;
+    switch (idxMode) {
+      case 0:
+        return { targetPio: pio, irqBit: irqNum };
+      case 1: {
+        const pioCount = this.rp2040.pio.length;
+        const prevPio = this.rp2040.pio[(pio.index + pioCount - 1) % pioCount];
+        return { targetPio: prevPio, irqBit: irqNum };
+      }
+      case 2:
+        return { targetPio: pio, irqBit: (irqNum & 4) | ((irqNum + this.index) & 3) };
+      case 3: {
+        const nextPio = this.rp2040.pio[(pio.index + 1) % this.rp2040.pio.length];
+        return { targetPio: nextPio, irqBit: irqNum };
+      }
+      default:
+        return { targetPio: pio, irqBit: irqNum };
+    }
+  }
+
+  wait(type: WaitType, polarity: boolean, index: number, targetPio?: RPPIO) {
     this.waiting = true;
     this.waitType = type;
     this.waitPolarity = polarity;
     this.waitIndex = index;
     this.waitDelay = -1;
+    this.waitTargetPio = targetPio ?? this.pio;
   }
 
   step() {
@@ -895,12 +922,15 @@ export class StateMachine {
 
     switch (this.waitType) {
       case WaitType.IRQ: {
-        // TODO(RP2350) waiting on next/prev PIO
-        const irqValue = !!(this.pio.irq & (1 << this.waitIndex));
+        const targetPio = this.waitTargetPio;
+        const irqValue = !!(targetPio.irq & (1 << this.waitIndex));
         if (irqValue === this.waitPolarity) {
           this.waiting = false;
           if (irqValue) {
-            this.pio.irq &= ~(1 << this.waitIndex);
+            targetPio.irq &= ~(1 << this.waitIndex);
+          }
+          if (targetPio !== this.pio) {
+            targetPio.irqUpdated();
           }
         }
         break;

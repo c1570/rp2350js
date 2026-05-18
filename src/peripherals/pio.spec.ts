@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createTestDriver } from '../../test-utils/create-test-driver';
 import { ICortexTestDriver } from '../../test-utils/test-driver';
 import { RP2040TestDriver } from '../../test-utils/test-driver-rp2040';
+import { RP2350 } from '../rp2350';
 import {
   PIO_COND_ALWAYS,
   PIO_COND_NOTEMPTYOSR,
@@ -595,5 +596,139 @@ describe('PIO', () => {
     await cpu.writeUint32(NVIC_ICPR, PIO_IRQ0);
     expect((await cpu.readUint32(INTR)) & INTR_SM0_RXNEMPTY).toEqual(0);
     expect((await cpu.readUint32(NVIC_ISPR)) & PIO_IRQ0).toEqual(0);
+  });
+});
+
+function rp2350IrqField(idxMode: number, irqNum: number) {
+  return ((idxMode & 3) << 3) | (irqNum & 7);
+}
+
+describe('RP2350 PIO cross-PIO IRQ', () => {
+  let rp2350: RP2350;
+
+  beforeEach(() => {
+    rp2350 = new RP2350();
+  });
+
+  afterEach(() => {
+    for (const pio of rp2350.pio) {
+      pio.stop();
+    }
+  });
+
+  function executePio0Steps(count: number) {
+    for (let i = 0; i < count; i++) {
+      rp2350.pio[0].machines[0].step();
+    }
+  }
+
+  it('should set IRQ on previous PIO with idxMode=1', () => {
+    const sm = rp2350.pio[1].machines[0];
+    sm.enabled = true;
+    const irqField = rp2350IrqField(1, 3);
+    sm.executeInstruction(pioIRQ(false, false, irqField));
+    expect(rp2350.pio[0].irq & (1 << 3)).toBeTruthy();
+    expect(rp2350.pio[1].irq).toBe(0);
+  });
+
+  it('should set IRQ on next PIO with idxMode=3', () => {
+    const sm = rp2350.pio[0].machines[0];
+    sm.enabled = true;
+    const irqField = rp2350IrqField(3, 2);
+    sm.executeInstruction(pioIRQ(false, false, irqField));
+    expect(rp2350.pio[1].irq & (1 << 2)).toBeTruthy();
+    expect(rp2350.pio[0].irq).toBe(0);
+  });
+
+  it('should clear IRQ on previous PIO with idxMode=1', () => {
+    rp2350.pio[0].irq = 0xff;
+    const sm = rp2350.pio[1].machines[0];
+    sm.enabled = true;
+    const irqField = rp2350IrqField(1, 5);
+    sm.executeInstruction(pioIRQ(true, false, irqField));
+    expect(rp2350.pio[0].irq & (1 << 5)).toBeFalsy();
+    expect(rp2350.pio[0].irq & (1 << 4)).toBeTruthy();
+  });
+
+  it('should use idxMode=2 for SM-relative IRQ on RP2350', () => {
+    const sm = rp2350.pio[0].machines[2];
+    sm.enabled = true;
+    const irqField = rp2350IrqField(2, 1);
+    sm.executeInstruction(pioIRQ(false, false, irqField));
+    expect(rp2350.pio[0].irq).toBe(1 << 3);
+  });
+
+  it('should use idxMode=0 for direct IRQ on RP2350', () => {
+    const sm = rp2350.pio[0].machines[2];
+    sm.enabled = true;
+    const irqField = rp2350IrqField(0, 5);
+    sm.executeInstruction(pioIRQ(false, false, irqField));
+    expect(rp2350.pio[0].irq).toBe(1 << 5);
+  });
+
+  it('should wrap around PIO indices (PIO2 prev -> PIO1)', () => {
+    const sm = rp2350.pio[2].machines[0];
+    sm.enabled = true;
+    const irqField = rp2350IrqField(1, 4);
+    sm.executeInstruction(pioIRQ(false, false, irqField));
+    expect(rp2350.pio[1].irq & (1 << 4)).toBeTruthy();
+    expect(rp2350.pio[0].irq).toBe(0);
+    expect(rp2350.pio[2].irq).toBe(0);
+  });
+
+  it('should wrap around PIO indices (PIO0 next -> PIO1)', () => {
+    const sm = rp2350.pio[0].machines[0];
+    sm.enabled = true;
+    const irqField = rp2350IrqField(3, 6);
+    sm.executeInstruction(pioIRQ(false, false, irqField));
+    expect(rp2350.pio[1].irq & (1 << 6)).toBeTruthy();
+    expect(rp2350.pio[0].irq).toBe(0);
+  });
+
+  it('should WAIT on next PIO IRQ and resume when set', () => {
+    const sm0 = rp2350.pio[0].machines[0];
+    const pio0 = rp2350.pio[0];
+    const pio1 = rp2350.pio[1];
+
+    sm0.enabled = true;
+    pio0.instructions[0] = pioMOV(PIO_MOV_DEST_X, PIO_OP_NONE, PIO_SRC_X);
+    pio0.instructions[1] = pioWAIT(true, PIO_WAIT_SRC_IRQ, rp2350IrqField(3, 4));
+    pio0.instructions[2] = pioJMP(PIO_COND_ALWAYS, 2);
+
+    executePio0Steps(3);
+    expect(sm0.pc).toEqual(1);
+
+    executePio0Steps(5);
+    expect(sm0.pc).toEqual(1);
+
+    pio1.machines[0].enabled = true;
+    pio1.machines[0].executeInstruction(pioIRQ(false, false, rp2350IrqField(0, 4)));
+
+    executePio0Steps(1);
+    expect(sm0.pc).toEqual(2);
+    expect(pio1.irq & (1 << 4)).toBeFalsy();
+  });
+
+  it('should IRQ wait on next PIO and resume when cleared', () => {
+    const sm0 = rp2350.pio[0].machines[0];
+    const pio0 = rp2350.pio[0];
+    const pio1 = rp2350.pio[1];
+
+    sm0.enabled = true;
+    pio0.instructions[0] = pioIRQ(false, true, rp2350IrqField(3, 5));
+    pio0.instructions[1] = pioMOV(PIO_MOV_DEST_X, PIO_OP_NONE, PIO_SRC_X);
+
+    executePio0Steps(1);
+    expect(sm0.waiting).toBe(true);
+    expect(pio1.irq & (1 << 5)).toBeTruthy();
+
+    executePio0Steps(3);
+    expect(sm0.waiting).toBe(true);
+
+    pio1.irq &= ~(1 << 5);
+
+    executePio0Steps(1);
+    expect(sm0.waiting).toBe(false);
+    expect(sm0.pc).toEqual(1);
   });
 });
