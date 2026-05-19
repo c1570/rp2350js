@@ -26,6 +26,7 @@ import {
   PIO_OP_INVERT,
   PIO_OP_NONE,
   PIO_SRC_NULL,
+  PIO_SRC_PINS,
   PIO_SRC_STATUS,
   PIO_SRC_X,
   PIO_SRC_Y,
@@ -730,5 +731,88 @@ describe('RP2350 PIO cross-PIO IRQ', () => {
     executePio0Steps(1);
     expect(sm0.waiting).toBe(false);
     expect(sm0.pc).toEqual(1);
+  });
+});
+
+describe('RP2350 PIO1 with gpio_base=16 reads high GPIOs correctly', () => {
+  let rp2350: RP2350;
+
+  beforeEach(() => {
+    rp2350 = new RP2350();
+  });
+
+  afterEach(() => {
+    for (const pio of rp2350.pio) {
+      pio.stop();
+    }
+  });
+
+  const PAD_INPUT_ENABLE = 0x40;
+
+  function enableGpioInputs(...pins: number[]) {
+    for (const pin of pins) {
+      rp2350.gpio[pin].padValue = rp2350.gpio[pin].padValue | PAD_INPUT_ENABLE;
+    }
+  }
+
+  it('should capture GPIO32+ correctly via PIO1 in pins, 32', () => {
+    const pio1 = rp2350.pio[1];
+    pio1.gpiobase = 16;
+
+    const sm = pio1.machines[0];
+
+    pio1.instructions[0] = pioIN(PIO_SRC_PINS, 32);
+    pio1.instructions[1] = pioPUSH(false, false);
+    sm.enabled = true;
+
+    enableGpioInputs(32, 33, 34);
+
+    for (let i = 32; i < 48; i++) {
+      rp2350.gpio[i].setInputValue(false);
+    }
+    rp2350.gpio[33].setInputValue(true);
+    rp2350.gpio[34].setInputValue(true);
+
+    // Execute: in pins, 32
+    sm.step();
+    // Execute: push
+    sm.step();
+
+    // Read from RX FIFO
+    const result = sm.rxFIFO.pull();
+
+    // GPIO33 (pin 17 within PIO1) should be bit 17
+    // GPIO34 (pin 18 within PIO1) should be bit 18
+    expect(result & (1 << 17)).toBeTruthy(); // GPIO33 at bit 17
+    expect(result & (1 << 18)).toBeTruthy(); // GPIO34 at bit 18
+    expect(result & (1 << 1)).toBeFalsy();  // GPIO33 should NOT appear at bit 1
+    expect(result & (1 << 2)).toBeFalsy();  // GPIO34 should NOT appear at bit 2
+  });
+
+  it('should not alias GPIO32 onto bit 0 when reading via PIO1', () => {
+    const pio1 = rp2350.pio[1];
+    pio1.gpiobase = 16;
+
+    const sm = pio1.machines[0];
+
+    pio1.instructions[0] = pioIN(PIO_SRC_PINS, 32);
+    pio1.instructions[1] = pioPUSH(false, false);
+    sm.enabled = true;
+
+    enableGpioInputs(32);
+
+    for (let i = 16; i < 48; i++) {
+      rp2350.gpio[i].setInputValue(false);
+    }
+    rp2350.gpio[32].setInputValue(true);
+
+    sm.step();
+    sm.step();
+
+    const result = sm.rxFIFO.pull();
+
+    // GPIO32 is pin 16 within PIO1 → bit 16
+    expect(result & (1 << 16)).toBeTruthy();
+    expect(result & (1 << 0)).toBeFalsy();
   });
 });

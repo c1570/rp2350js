@@ -363,7 +363,7 @@ export class RP2350 implements IRPChip {
     const end_index = Math.min(start_index + 32, gpio.length);
     for (let gpioIndex = start_index; gpioIndex < end_index; gpioIndex++) {
       if (gpio[gpioIndex].inputValue) {
-        result |= 1 << gpioIndex;
+        result |= 1 << (gpioIndex - start_index);
       }
     }
     return result;
