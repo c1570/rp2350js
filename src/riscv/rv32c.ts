@@ -3,7 +3,7 @@ import { CPU } from "./cpu";
 export function decompress_rv32c_inst(cpu: CPU, inst: number): number {
   let index = ((inst & 0x0003) << 3) | ((inst & 0xE000) >> 13);
   let decompressor: any = decompressors[index];
-  if(!decompressor) throw new Error(`cannot handle index 0b${index.toString(2)}`);
+  if(!decompressor) throw new Error(`cannot handle index 0b${index.toString(2)} (inst=0x${(inst & 0xffff).toString(16)} pc=0x${cpu.pc.toString(16)})`);
   return decompressor(cpu, inst);
 }
 
@@ -41,26 +41,35 @@ function clw_to_lw(cpu: CPU, inst: number): number
     return enc_itype(imm, rs1, 0b010, rd, 0b0000011);
 }
 
-// Zcb extension, funct3 = 100, opcode = 00 part
+// Zcb extension, funct3 = 100, opcode = 00 (the c.lbu/c.lhu/c.lh/c.sb/c.sh group).
+// Sub-op is funct bits[12:10]; the RP2350 bootrom emits c.sh, so all five are needed.
 function zcb_100_00(cpu: CPU, inst: number): number
 {
-    if((inst & 0b1111110001000011) === 0b1000010000000000) {
-        // c.lhu
-        const uimm: number = ((inst >>> 5) & 1) << 1;
-        const rs1: number = dec_rs1_short(inst);
-        const rd: number = dec_rd_short(inst);
+    const sub: number = (inst >>> 10) & 0b111;        // bits[12:10]
+    const rs1: number = dec_rs1_short(inst);
+    const uimm_b: number = (((inst >>> 5) & 1) << 1) | ((inst >>> 6) & 1); // byte: imm[1]=i5, imm[0]=i6
+    const uimm_h: number = ((inst >>> 5) & 1) << 1;                        // halfword: imm[1]=i5
 
-        // encode to lhu rd', uimm(rs1')
-        return enc_itype(uimm, rs1, 0b101, rd, 0b0000011);
-    } else if((inst & 0b1111110000000011) === 0b1000000000000000) {
-        // c.lbu - e.g., 80dc lbu a5,1(s1)
-        const uimm: number = (((inst >>> 5) & 1) << 1) | ((inst >>> 6) & 1);
-        const rs1: number = dec_rs1_short(inst);
+    switch (sub) {
+    case 0b000: { // c.lbu rd', uimm(rs1')
         const rd: number = dec_rd_short(inst);
-
-        // encode to lbu rd', uimm(rs1')
-        return enc_itype(uimm, rs1, 0b100, rd, 0b0000011);
-    } else throw Error(`Unsupported Zcb instruction: 0x${inst.toString(16)}`);
+        return enc_itype(uimm_b, rs1, 0b100, rd, 0b0000011);
+    }
+    case 0b001: { // c.lhu (bit6=0) / c.lh (bit6=1)
+        const rd: number = dec_rd_short(inst);
+        const funct3: number = ((inst >>> 6) & 1) ? 0b001 : 0b101; // lh : lhu
+        return enc_itype(uimm_h, rs1, funct3, rd, 0b0000011);
+    }
+    case 0b010: { // c.sb rs2', uimm(rs1')
+        const rs2: number = dec_rs2_short(inst);
+        return enc_stype(uimm_b, rs2, rs1, 0b000, 0b0100011);
+    }
+    case 0b011: { // c.sh rs2', uimm(rs1')
+        const rs2: number = dec_rs2_short(inst);
+        return enc_stype(uimm_h, rs2, rs1, 0b001, 0b0100011);
+    }
+    }
+    throw Error(`Unsupported Zcb instruction: 0x${inst.toString(16)}`);
 }
 
 // C.SW, funct3 = 110, opcode = 00
@@ -430,12 +439,26 @@ function parse_100_01(cpu: CPU, inst: number): number
             return cor_to_or(cpu, inst);
         case 0b011:
             return cand_to_and(cpu, inst);
-        case 0b111: // c.not (Zcb)
-            // TODO remove decode sanity check
-            if((inst & 0b1111110001111111) === 0b1001110001110101) {
-              const rd: number = dec_rs1_short(inst);
-              return enc_itype(-1, rd, 0b100, rd, 0b0010011); // encode as xori rd, rd, -1
+        case 0b110: { // c.mul (Zcb): mul rd', rd', rs2'
+            const rd: number = dec_rs1_short(inst);
+            const rs2: number = dec_rs2_short(inst);
+            return enc_rtype(0b0000001, rs2, rd, 0b000, rd, 0b0110011);
+        }
+        case 0b111: { // Zcb unary ops (sub-op in bits[4:2]); the RP2350 bootrom uses these
+            const rd: number = dec_rs1_short(inst);
+            switch ((inst >>> 2) & 0b111) {
+            case 0b000: // c.zext.b -> andi rd, rd, 0xff
+                return enc_itype(0xff, rd, 0b111, rd, 0b0010011);
+            case 0b001: // c.sext.b -> sext.b rd, rd (Zbb)
+                return enc_itype(0b011000000100, rd, 0b001, rd, 0b0010011);
+            case 0b010: // c.zext.h -> zext.h rd, rd (Zbb)
+                return enc_rtype(0b0000100, 0, rd, 0b100, rd, 0b0110011);
+            case 0b011: // c.sext.h -> sext.h rd, rd (Zbb)
+                return enc_itype(0b011000000101, rd, 0b001, rd, 0b0010011);
+            case 0b101: // c.not -> xori rd, rd, -1
+                return enc_itype(-1, rd, 0b100, rd, 0b0010011);
             }
+        }
         }
     }
     throw Error(`Unknown compressed instruction: 0x${inst.toString(16)}`);
