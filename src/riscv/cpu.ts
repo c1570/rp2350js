@@ -1,7 +1,16 @@
-import { B_Type, I_Type, Instruction, InstructionType, J_Type, R_Type, S_Type, U_Type } from "./Assembler/instruction";
-import { getRange } from "./binaryFunctions";
-import { IRPChip } from "../rpchip";
-import { decompress_rv32c_inst } from "./rv32c";
+import {
+  B_Type,
+  I_Type,
+  Instruction,
+  InstructionType,
+  J_Type,
+  R_Type,
+  S_Type,
+  U_Type,
+} from './Assembler/instruction';
+import { getRange } from './binaryFunctions';
+import { IRPChip } from '../rpchip';
+import { decompress_rv32c_inst } from './rv32c';
 
 enum ExecutionMode {
   Mode_Machine,
@@ -13,7 +22,6 @@ class EICAND {
 }
 
 export class CPU {
-
   public onSEV?: () => void;
   public waiting = false;
   public eventRegistered = false;
@@ -47,7 +55,8 @@ export class CPU {
     return this.chip.logger;
   }
 
-  reset() { // TODO
+  reset() {
+    // TODO
     this.meiea.fill(0);
     this.meipa.fill(0);
     this.meifa.fill(0);
@@ -56,13 +65,13 @@ export class CPU {
     this.interruptsUpdated = false;
 
     this.csrs.fill(0);
-    this.csrs[0x300] = 3<<11;
+    this.csrs[0x300] = 3 << 11;
     this.csrs[0x301] = 0b01000000100100000001000100000101;
     this.csrs[0x305] = 0x00001fff00;
     this.csrs[0x320] = 0x101;
     //TODO 0x3a1 - 0x7b0
-    this.csrs[0xbe5] = 1<<15;
-    this.csrs[0xf11] = (0x9<<7)|(0x13);
+    this.csrs[0xbe5] = 1 << 15;
+    this.csrs[0xf11] = (0x9 << 7) | 0x13;
     this.csrs[0xf12] = 0x1b;
     this.csrs[0xf13] = 0x86fc4e3f;
   }
@@ -72,28 +81,28 @@ export class CPU {
   private fetchInstruction(): number {
     let inst = this.chip.readUint16(this.pc);
     if ((inst & 3) != 3) {
-        if (inst == 0) {
-            throw Error(`Illegal 16 bit instruction 0 at 0x${this.pc.toString(16)}`);
-        }
+      if (inst == 0) {
+        throw Error(`Illegal 16 bit instruction 0 at 0x${this.pc.toString(16)}`);
+      }
 
-        inst = decompress_rv32c_inst(this, inst);
-        this.inst_length = 2;
+      inst = decompress_rv32c_inst(this, inst);
+      this.inst_length = 2;
     } else {
-        // we have a 32 bit instruction
-        inst |= this.chip.readUint16(this.pc + 2) << 16;
-        if(this.did_just_jump && (this.pc & 3)) this.cycles++; // jumped to non 32 bit aligned instr
-        this.inst_length = 4;
+      // we have a 32 bit instruction
+      inst |= this.chip.readUint16(this.pc + 2) << 16;
+      if (this.did_just_jump && this.pc & 3) this.cycles++; // jumped to non 32 bit aligned instr
+      this.inst_length = 4;
     }
     return inst >>> 0;
   }
 
   printDisassembly() {
     let pc = this.pc;
-    if(this.chip.disassembly) {
-      const search = (this.pc.toString(16) + ":").replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
-      const re = new RegExp(search + "(.*)");
+    if (this.chip.disassembly) {
+      const search = (this.pc.toString(16) + ':').replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+      const re = new RegExp(search + '(.*)');
       const res = re.exec(this.chip.disassembly);
-      const dis = (res == null) ? "?" : res[1];
+      const dis = res == null ? '?' : res[1];
       this.logger.info(this.coreLabel, `PC 0x${this.pc.toString(16)} - ${dis}`);
     } else {
       this.logger.info(this.coreLabel, `PC 0x${this.pc.toString(16)}`);
@@ -109,7 +118,7 @@ export class CPU {
     const instruction = this.fetchInstruction();
     try {
       this.step(instruction);
-    } catch(e) {
+    } catch (e) {
       this.printDisassembly();
       throw e;
     }
@@ -117,7 +126,6 @@ export class CPU {
   }
 
   step(instruction: number) {
-
     const instructionType = opcodeTypeTable.get(getRange(instruction, 6, 0));
 
     switch (instructionType as InstructionType) {
@@ -143,11 +151,15 @@ export class CPU {
         this.executeCustom0_Type(instruction);
         break;
       default:
-        throw Error(`Invalid instruction: 0x${instruction.toString(16)} at 0x${this.pc.toString(16)}, OpcodeType 0x${getRange(instruction, 6, 0).toString(16)}`);
+        throw Error(
+          `Invalid instruction: 0x${instruction.toString(16)} at 0x${this.pc.toString(
+            16
+          )}, OpcodeType 0x${getRange(instruction, 6, 0).toString(16)}`
+        );
         break;
     }
 
-    if(this.next_pc != 0) {
+    if (this.next_pc != 0) {
       this.pc = this.next_pc;
       this.next_pc = 0;
       this.did_just_jump = true;
@@ -155,7 +167,6 @@ export class CPU {
       this.pc += this.inst_length;
       this.did_just_jump = false;
     }
-
   }
 
   setInterruptEnabled(irq: number, value: boolean) {
@@ -177,7 +188,7 @@ export class CPU {
     if (value && !this.meipa[irq] && this.meiea[irq]) {
       this.meipa[irq] = 1;
       this.meicand.push(new EICAND(irq, this.meipra[irq]));
-      this.meicand.sort((a,b) => ((b.priority - a.priority) << 9) + (a.irq_number - b.irq_number));
+      this.meicand.sort((a, b) => ((b.priority - a.priority) << 9) + (a.irq_number - b.irq_number));
       this.updateMEINEXT();
       this.interruptsUpdated = true;
     } else if (!value && this.meipa[irq]) {
@@ -190,7 +201,7 @@ export class CPU {
   updateMEINEXT() {
     // updates MEINEXT and MIE.MEIP
     const meicontext_ppreempt = (this.csrs[0xbe5] >>> 24) & 0b1111;
-    if(this.meicand.length > 0 && this.meicand[0].priority >= meicontext_ppreempt) {
+    if (this.meicand.length > 0 && this.meicand[0].priority >= meicontext_ppreempt) {
       // note that we're looking at *PP*REEMPT here - interrupts with equal or higher priority than that ARE visible in MEINEXT
       // but might still NOT trigger a trap in case their priority is lower than *P*REEMPT.
       this.csrs[0xbe4] = this.meicand[0].irq_number << 2;
@@ -205,7 +216,7 @@ export class CPU {
     // called on MEINEXT.UPDATE write
     // clear NOIRQ and IRQ
     let meicontext = this.csrs[0xbe5];
-    meicontext &= ~(0b1001111111110000);
+    meicontext &= ~0b1001111111110000;
     // update NOIRQ
     meicontext |= (this.csrs[0xbe4] >>> 31) << 15;
     // update IRQ
@@ -225,7 +236,7 @@ export class CPU {
     meicontext |= ((this.csrs[0xbe5] >>> 24) & 0b1111) << 28;
     // update PREEMPT
     const current_irq = (this.csrs[0xbe4] >>> 2) & 511;
-    if(current_irq > 0) {
+    if (current_irq > 0) {
       meicontext |= (this.meipra[current_irq] + 1) << 16;
     } else {
       meicontext |= 16 << 16;
@@ -237,7 +248,7 @@ export class CPU {
   updateMEICONTEXT_priority_restore() {
     // called on potential priority restore (mret)
     let meicontext = this.csrs[0xbe5];
-    if(!(meicontext & 1)) return; // only proceed if MRETEIRQ is set
+    if (!(meicontext & 1)) return; // only proceed if MRETEIRQ is set
     // clear PPP/PP/PREEMPT/MRETEIRQ
     meicontext &= 0b111111111111110;
     // set PPREEMPT from old PPPREEMPT
@@ -248,16 +259,19 @@ export class CPU {
   }
 
   checkForInterrupts() {
-    if(!this.interruptsUpdated) return;
+    if (!this.interruptsUpdated) return;
     this.interruptsUpdated = false;
-    if(this.csrs[0x304] & 0b100000000000) { // if MIE.MEIE is set... TODO consider software and timer interrupts as well
+    if (this.csrs[0x304] & 0b100000000000) {
+      // if MIE.MEIE is set... TODO consider software and timer interrupts as well
       const meinext_irq_number = (this.csrs[0xbe4] >>> 2) & 511;
       const meinext_irq_prio = this.meipra[meinext_irq_number];
       const meicontext_preempt = (this.csrs[0xbe5] >>> 16) & 0b11111;
-      if(meinext_irq_number > 0 && meinext_irq_prio >= meicontext_preempt) { // ...and the interrupt visible in MEINEXT has at least PREEMPT priority...
-        if(this.csrs[0x300] & 0b1000) { // ...and MSTATUS.MIE is set...
+      if (meinext_irq_number > 0 && meinext_irq_prio >= meicontext_preempt) {
+        // ...and the interrupt visible in MEINEXT has at least PREEMPT priority...
+        if (this.csrs[0x300] & 0b1000) {
+          // ...and MSTATUS.MIE is set...
           this.updateMEICONTEXT_priority_save(); // this gets called ONLY on external interrupt trap
-          this.trapEntry(((1<<31) | 11) >>> 0); //TODO hardwired cause MEIP = external interrupt
+          this.trapEntry(((1 << 31) | 11) >>> 0); //TODO hardwired cause MEIP = external interrupt
         }
         this.waiting = false; // "wfi ignores the global interrupt enable, MSTATUS.MIE"
       }
@@ -266,7 +280,7 @@ export class CPU {
 
   trapEntry(mcause: number, fromStep: boolean = false) {
     //this.logger.info(this.coreLabel, `Entering trap handler, mcause 0x${mcause.toString(16)}`);
-    if(mcause != (((1<<31) | 11) >>> 0)) this.csrs[0xbe5] &= ~1; // clear MIECONTEXT.MRETEIRQ on any trap that's not an external interrupt
+    if (mcause != ((1 << 31) | 11) >>> 0) this.csrs[0xbe5] &= ~1; // clear MIECONTEXT.MRETEIRQ on any trap that's not an external interrupt
     this.setCSR(0x341, this.pc, 0); // Save the address of the interrupted or excepting instruction to MEPC
     // 2. Set the MSB of MCAUSE to indicate the cause is an interrupt, or clear it to indicate an exception
     // 3. Write the detailed trap cause to the LSBs of the MCAUSE register
@@ -275,9 +289,10 @@ export class CPU {
     // TODO 5. Set the privilege to M-mode (note Hazard3 does not implement S-mode)
     // 6. Save the current value of MSTATUS.MIE to MSTATUS.MPIE
     let mstatus = this.getCSR(0x300, 0);
-    mstatus &= ~0b10000000; mstatus |= (mstatus << 4) & 0b10000000;
+    mstatus &= ~0b10000000;
+    mstatus |= (mstatus << 4) & 0b10000000;
     // 7. Disable interrupts by clearing MSTATUS.MIE
-    mstatus &= 1<<7;
+    mstatus &= 1 << 7;
     this.setCSR(0x300, mstatus, 0);
     // 8. Jump to the correct offset from MTVEC depending on the trap cause.
     // For synchronous exceptions (ecall/ebreak during step), set next_pc so the
@@ -285,8 +300,8 @@ export class CPU {
     // asynchronous interrupts (checkForInterrupts before fetch), set pc directly.
     const mtvec = this.getCSR(0x305, 0);
     let target: number;
-    if(mcause >> 31) {
-      if((mtvec & 1) == 0) {
+    if (mcause >> 31) {
+      if ((mtvec & 1) == 0) {
         target = mtvec; // direct mtvec mode
       } else {
         target = (mtvec & ~0b11) + ((mcause & 0b1111) << 2); // vectored mtvec mode
@@ -294,7 +309,7 @@ export class CPU {
     } else {
       target = mtvec; // "Exceptions jump to exactly the address of MTVEC"
     }
-    if(fromStep) {
+    if (fromStep) {
       this.next_pc = target;
     } else {
       this.pc = target;
@@ -309,21 +324,20 @@ export class CPU {
     const from_pc = this.pc;
     const to_pc = this.next_pc;
     const jumped_back = to_pc < from_pc;
-    if(from_pc === this.btb) {
-      if(taken && jumped_back) return; // predictor hit
+    if (from_pc === this.btb) {
+      if (taken && jumped_back) return; // predictor hit
       // known branch mispredicted
       this.btb = -1;
       this.cycles++;
       return;
     }
-    if(taken) {
+    if (taken) {
       this.cycles++;
-      if(jumped_back) this.btb = from_pc; // new backwards branch
+      if (jumped_back) this.btb = from_pc; // new backwards branch
     }
   }
 
   private executeR_Type(instruction: R_Type) {
-
     const { opcode, func3 } = instruction;
 
     // Get func3 lookup table for R_Type instructions
@@ -351,11 +365,9 @@ export class CPU {
     } else {
       throw Error(`Invalid Instruction opcode 0x${opcode.toString(16)}, func3 ${func3}`);
     }
-
   }
 
   private executeS_Type(instruction: S_Type) {
-
     const { opcode, func3 } = instruction;
 
     // Get func3 lookup table for S_Type instructions
@@ -371,7 +383,6 @@ export class CPU {
   }
 
   private executeB_Type(instruction: B_Type) {
-
     const { opcode, func3 } = instruction;
 
     // Get func3 lookup table for B_Type instructions
@@ -384,7 +395,6 @@ export class CPU {
     } else {
       throw Error(`Invalid Instruction opcode 0x${opcode.toString(16)}, func3 ${func3}`);
     }
-
   }
 
   private executeU_Type(instruction: U_Type) {
@@ -415,7 +425,8 @@ export class CPU {
 
   private executeCustom0_Type(instruction: number) {
     const c_ident = instruction & 0b11100010000000000111000001111111;
-    if(c_ident === 0b00000000000000000000000000001011) { // h3.bextm
+    if (c_ident === 0b00000000000000000000000000001011) {
+      // h3.bextm
       const size = (instruction >>> 26) & 0b111;
       const rs2 = (instruction >>> 20) & 0b11111;
       const rs1 = (instruction >>> 15) & 0b11111;
@@ -423,7 +434,8 @@ export class CPU {
       let value = this.registerSet.getRegisterU(rs1) >>> this.registerSet.getRegisterU(rs2);
       value &= (2 << size) - 1;
       this.registerSet.setRegisterU(rd, value);
-    } else if(c_ident === 0b00000000000000000100000000001011) { // h3.bextmi
+    } else if (c_ident === 0b00000000000000000100000000001011) {
+      // h3.bextmi
       const size = (instruction >>> 26) & 0b111;
       const rs2 = (instruction >>> 20) & 0b11111;
       const rs1 = (instruction >>> 15) & 0b11111;
@@ -438,79 +450,133 @@ export class CPU {
 
   setCSR(csr: number, value: number, raw_write: number) {
     // raw_write: instruction raw write value, used for Xh3irq interrupt array indices
-    value >>>= 0; raw_write >>>= 0;
-    switch(csr) {
+    value >>>= 0;
+    raw_write >>>= 0;
+    switch (csr) {
       case 0x300: // MSTATUS
-          if((value & ~this.csrs[csr]) & 0b1000) this.interruptsUpdated = true; // MSTATUS.MIE has been set
+        if (value & ~this.csrs[csr] & 0b1000) this.interruptsUpdated = true; // MSTATUS.MIE has been set
       case 0x305: // MTVEC
-          this.csrs[csr] = value;
-          return;
+        this.csrs[csr] = value;
+        return;
       case 0x304: // MIE
-          if(value & ~this.csrs[csr]) this.interruptsUpdated = true; // any bit in MIE has been set
-          this.csrs[csr] = value;
-          return;
+        if (value & ~this.csrs[csr]) this.interruptsUpdated = true; // any bit in MIE has been set
+        this.csrs[csr] = value;
+        return;
       case 0x301:
       case 0x30a:
       case 0x310:
       case 0x31a:
-      case 0x323: case 0x324: case 0x325: case 0x326: case 0x327: case 0x328: case 0x329: case 0x32a: case 0x32b: case 0x32c: case 0x32d: case 0x32e: case 0x32f:
-      case 0x330: case 0x331: case 0x332: case 0x333: case 0x334: case 0x335: case 0x336: case 0x337: case 0x338: case 0x339: case 0x33a: case 0x33b: case 0x33c: case 0x33d: case 0x33e: case 0x33f:
+      case 0x323:
+      case 0x324:
+      case 0x325:
+      case 0x326:
+      case 0x327:
+      case 0x328:
+      case 0x329:
+      case 0x32a:
+      case 0x32b:
+      case 0x32c:
+      case 0x32d:
+      case 0x32e:
+      case 0x32f:
+      case 0x330:
+      case 0x331:
+      case 0x332:
+      case 0x333:
+      case 0x334:
+      case 0x335:
+      case 0x336:
+      case 0x337:
+      case 0x338:
+      case 0x339:
+      case 0x33a:
+      case 0x33b:
+      case 0x33c:
+      case 0x33d:
+      case 0x33e:
+      case 0x33f:
       case 0x343:
-      case 0x3b8: case 0x3b9: case 0x3ba: case 0x3bb: case 0x3bc: case 0x3bd: case 0x3be: case 0x3bf:
-          return;
+      case 0x3b8:
+      case 0x3b9:
+      case 0x3ba:
+      case 0x3bb:
+      case 0x3bc:
+      case 0x3bd:
+      case 0x3be:
+      case 0x3bf:
+        return;
       case 0x340:
       case 0x341:
       case 0x342:
-          this.csrs[csr] = value;
-          return;
+        this.csrs[csr] = value;
+        return;
       //TODO
-      case 0xbe0: { // MEIEA
-          let state = value >>> 16;
-          for(let irq = (raw_write & 0b11111) * 16; irq < (raw_write & 0b11111) * 16 + 16; irq++) { this.setInterruptEnabled(irq, !!(state & 1)); state >>= 1; }
-          return; }
-      case 0xbe1: return; // MEIPA
-      case 0xbe2: { // MEIFA
-          let state = value >>> 16;
-          for(let irq = (raw_write & 0b11111) * 16; irq < (raw_write & 0b11111) * 16 + 16; irq++) {
-            const forced = state & 1;
-            this.meifa[irq] = forced;
-            if(forced) this.setInterrupt(irq, true);
-            else if(irq >= 46) this.setInterrupt(irq, false);
-            state >>= 1;
+      case 0xbe0: {
+        // MEIEA
+        let state = value >>> 16;
+        for (let irq = (raw_write & 0b11111) * 16; irq < (raw_write & 0b11111) * 16 + 16; irq++) {
+          this.setInterruptEnabled(irq, !!(state & 1));
+          state >>= 1;
+        }
+        return;
+      }
+      case 0xbe1:
+        return; // MEIPA
+      case 0xbe2: {
+        // MEIFA
+        let state = value >>> 16;
+        for (let irq = (raw_write & 0b11111) * 16; irq < (raw_write & 0b11111) * 16 + 16; irq++) {
+          const forced = state & 1;
+          this.meifa[irq] = forced;
+          if (forced) this.setInterrupt(irq, true);
+          else if (irq >= 46) this.setInterrupt(irq, false);
+          state >>= 1;
+        }
+        return;
+      }
+      case 0xbe3: {
+        // MEIPRA
+        let state = value >>> 16;
+        for (let irq = (raw_write & 0b11111) * 4; irq < (raw_write & 0b11111) * 4 + 4; irq++) {
+          this.meipra[irq] = state & 0b1111;
+          if (this.meipa[irq]) {
+            this.setInterrupt(irq, false);
+            this.setInterrupt(irq, true);
           }
-          return; }
-      case 0xbe3: { // MEIPRA
-          let state = value >>> 16;
-          for(let irq = (raw_write & 0b11111) * 4; irq < (raw_write & 0b11111) * 4 + 4; irq++) {
-            this.meipra[irq] = state & 0b1111;
-            if(this.meipa[irq]) {
-              this.setInterrupt(irq, false);
-              this.setInterrupt(irq, true);
-            }
-            state >>= 4;
-          }
-          return; }
-      case 0xbe4: { // MEINEXT
-          if(value & 1) { // MEINEXT.UPDATE set
-            this.updateMEICONTEXT_update();
-            this.updateMEINEXT();
-            this.interruptsUpdated = true;
-          }
-          return; }
-      case 0xbe5: // MEICONTEXT - note MTIESAVE/MSIESAVE/CLEARTS writes are a side effect of getCTS here
-          this.csrs[csr] = value;
+          state >>= 4;
+        }
+        return;
+      }
+      case 0xbe4: {
+        // MEINEXT
+        if (value & 1) {
+          // MEINEXT.UPDATE set
+          this.updateMEICONTEXT_update();
           this.updateMEINEXT();
           this.interruptsUpdated = true;
-          return;
+        }
+        return;
+      }
+      case 0xbe5: // MEICONTEXT - note MTIESAVE/MSIESAVE/CLEARTS writes are a side effect of getCTS here
+        this.csrs[csr] = value;
+        this.updateMEINEXT();
+        this.interruptsUpdated = true;
+        return;
       //TODO
       case 0xc00:
       case 0xc02:
       case 0xc80:
       case 0xc82:
-      case 0xf11: case 0xf12: case 0xf13: case 0xf14:
-          return;
+      case 0xf11:
+      case 0xf12:
+      case 0xf13:
+      case 0xf14:
+        return;
     }
-    this.logger.info(this.coreLabel, `Unknown CSR set: 0x${value.toString(16)} => 0x${csr.toString(16)}`);
+    this.logger.info(
+      this.coreLabel,
+      `Unknown CSR set: 0x${value.toString(16)} => 0x${csr.toString(16)}`
+    );
     this.csrs[csr] = value;
   }
 
@@ -518,8 +584,9 @@ export class CPU {
     raw_write >>>= 0;
     // raw_write: instruction raw write value, used for Xh3irq interrupt array indices
     // MSLEEP 0xbf0
-    switch(csr) {
-      case 0xf14: return this.mhartid;
+    switch (csr) {
+      case 0xf14:
+        return this.mhartid;
       case 0x300: // MSTATUS
       case 0x301:
       case 0x302:
@@ -531,39 +598,68 @@ export class CPU {
       case 0x342:
       case 0x343:
       case 0x344:
-      case 0xbf0: return this.csrs[csr];
-      case 0xbe0: return (this.meiea.slice((raw_write & 0b11111) * 16, (raw_write & 0b11111) * 16 + 16).reduceRight((acc, val) => (acc << 1) | val, 0) << 16) >>> 0;
-      case 0xbe1: return (this.meipa.slice((raw_write & 0b11111) * 16, (raw_write & 0b11111) * 16 + 16).reduceRight((acc, val) => (acc << 1) | val, 0) << 16) >>> 0;
-      case 0xbe2: return (this.meifa.slice((raw_write & 0b11111) * 16, (raw_write & 0b11111) * 16 + 16).reduceRight((acc, val) => (acc << 1) | val, 0) << 16) >>> 0;
-      case 0xbe3: return (this.meipra.slice((raw_write & 0b11111) * 4, (raw_write & 0b11111) * 4 + 4).reduceRight((acc, val) => (acc << 4) | val, 0) << 16) >>> 0;
+      case 0xbf0:
+        return this.csrs[csr];
+      case 0xbe0:
+        return (
+          (this.meiea
+            .slice((raw_write & 0b11111) * 16, (raw_write & 0b11111) * 16 + 16)
+            .reduceRight((acc, val) => (acc << 1) | val, 0) <<
+            16) >>>
+          0
+        );
+      case 0xbe1:
+        return (
+          (this.meipa
+            .slice((raw_write & 0b11111) * 16, (raw_write & 0b11111) * 16 + 16)
+            .reduceRight((acc, val) => (acc << 1) | val, 0) <<
+            16) >>>
+          0
+        );
+      case 0xbe2:
+        return (
+          (this.meifa
+            .slice((raw_write & 0b11111) * 16, (raw_write & 0b11111) * 16 + 16)
+            .reduceRight((acc, val) => (acc << 1) | val, 0) <<
+            16) >>>
+          0
+        );
+      case 0xbe3:
+        return (
+          (this.meipra
+            .slice((raw_write & 0b11111) * 4, (raw_write & 0b11111) * 4 + 4)
+            .reduceRight((acc, val) => (acc << 4) | val, 0) <<
+            16) >>>
+          0
+        );
       case 0xbe4:
         const meinext = this.csrs[csr] >>> 0;
-        if(!(meinext >> 31)) {
+        if (!(meinext >> 31)) {
           // reading MEINEXT clears MEIFA bits
           const irq = (meinext >> 2) & 511;
           const old_forced = this.meifa[irq];
           this.meifa[irq] = 0;
-          if(irq >= 46 && old_forced) this.setInterrupt(irq, false); // for soft irqs, removing MEIFA will deassert the irq
+          if (irq >= 46 && old_forced) this.setInterrupt(irq, false); // for soft irqs, removing MEIFA will deassert the irq
           //TODO deassert lower irqs as well?
         }
         return meinext;
       case 0xbe5:
         let meicontext = this.csrs[0xbe5];
-        if(raw_write & 0b0010) { // write to CLEARTS
+        if (raw_write & 0b0010) {
+          // write to CLEARTS
           meicontext &= ~0b1110;
           meicontext |= ((this.csrs[0x304] >>> 7) & 1) << 3; // MTIE
           meicontext |= ((this.csrs[0x304] >>> 3) & 1) << 2; // MSIE
-          this.csrs[0x304] &= ~(0b10001000); // clear MIE.MTIE and MSIE
+          this.csrs[0x304] &= ~0b10001000; // clear MIE.MTIE and MSIE
         } else {
-          if(raw_write & 0b1000) this.csrs[0x304] |= 1<<7; // write to MTIESAVE: set MIE.MTIE
-          if(raw_write & 0b0100) this.csrs[0x304] |= 1<<3; // write to MSIESAVE: set MIE.MSIE
+          if (raw_write & 0b1000) this.csrs[0x304] |= 1 << 7; // write to MTIESAVE: set MIE.MTIE
+          if (raw_write & 0b0100) this.csrs[0x304] |= 1 << 3; // write to MSIESAVE: set MIE.MSIE
         }
         return meicontext;
     }
     this.logger.info(this.coreLabel, `Unknown CSR get: 0x${csr.toString(16)}`);
     return this.csrs[csr];
   }
-
 }
 
 function signExtend8(value: number) {
@@ -575,7 +671,6 @@ function signExtend16(value: number) {
 }
 
 export class RegisterSet {
-
   private registerBuffer: ArrayBuffer;
   private registerView: DataView;
 
@@ -615,704 +710,889 @@ export class RegisterSet {
 
     this.registerView.setUint32(index * 4, value, true);
   }
-
 }
 
 type OpcodeTable<T extends Instruction> = Map<number, (instruction: T, cpu: CPU) => void>;
-type OpcodeFuncTable<T extends Instruction> = Map<number, Map<number, (instruction: T, cpu: CPU) => void>>;
+type OpcodeFuncTable<T extends Instruction> = Map<
+  number,
+  Map<number, (instruction: T, cpu: CPU) => void>
+>;
 type FuncTable<T extends Instruction> = Map<number, (instruction: T, cpu: CPU) => void>;
 
 const opcode0x03func3Table: FuncTable<I_Type> = new Map([
-  [0x0, (instruction: I_Type, cpu: CPU) => { // lb
-    const { registerSet, chip } = cpu;
-    const { rd, rs1, imm } = instruction;
-    const rs1Value = registerSet.getRegisterU(rs1);
+  [
+    0x0,
+    (instruction: I_Type, cpu: CPU) => {
+      // lb
+      const { registerSet, chip } = cpu;
+      const { rd, rs1, imm } = instruction;
+      const rs1Value = registerSet.getRegisterU(rs1);
 
-    const byte = signExtend8(chip.readUint8(rs1Value + imm));
-    registerSet.setRegister(rd, byte);
-  }],
+      const byte = signExtend8(chip.readUint8(rs1Value + imm));
+      registerSet.setRegister(rd, byte);
+    },
+  ],
 
-  [0x1, (instruction: I_Type, cpu: CPU) => { // lh
-    const { registerSet, chip } = cpu;
-    const { rd, rs1, imm } = instruction;
-    const rs1Value = registerSet.getRegisterU(rs1);
+  [
+    0x1,
+    (instruction: I_Type, cpu: CPU) => {
+      // lh
+      const { registerSet, chip } = cpu;
+      const { rd, rs1, imm } = instruction;
+      const rs1Value = registerSet.getRegisterU(rs1);
 
-    const half = signExtend16(chip.readUint16(rs1Value + imm));
-    registerSet.setRegister(rd, half);
-  }],
+      const half = signExtend16(chip.readUint16(rs1Value + imm));
+      registerSet.setRegister(rd, half);
+    },
+  ],
 
-  [0x2, (instruction: I_Type, cpu: CPU) => { // lw
-    const { registerSet, chip } = cpu;
-    const { rd, rs1, imm } = instruction;
-    const rs1Value = registerSet.getRegisterU(rs1);
+  [
+    0x2,
+    (instruction: I_Type, cpu: CPU) => {
+      // lw
+      const { registerSet, chip } = cpu;
+      const { rd, rs1, imm } = instruction;
+      const rs1Value = registerSet.getRegisterU(rs1);
 
-    const word = chip.readUint32(rs1Value + imm);
-    registerSet.setRegisterU(rd, word);
-  }],
+      const word = chip.readUint32(rs1Value + imm);
+      registerSet.setRegisterU(rd, word);
+    },
+  ],
 
-  [0x4, (instruction: I_Type, cpu: CPU) => { // lbu
-    const { registerSet, chip } = cpu;
-    const { rd, rs1, imm } = instruction;
-    const rs1Value = registerSet.getRegisterU(rs1);
+  [
+    0x4,
+    (instruction: I_Type, cpu: CPU) => {
+      // lbu
+      const { registerSet, chip } = cpu;
+      const { rd, rs1, imm } = instruction;
+      const rs1Value = registerSet.getRegisterU(rs1);
 
-    const byte = chip.readUint8(rs1Value + imm);
-    registerSet.setRegister(rd, byte);
-  }],
+      const byte = chip.readUint8(rs1Value + imm);
+      registerSet.setRegister(rd, byte);
+    },
+  ],
 
-  [0x5, (instruction: I_Type, cpu: CPU) => { // lhu
-    const { registerSet, chip } = cpu;
-    const { rd, rs1, imm } = instruction;
-    const rs1Value = registerSet.getRegisterU(rs1);
+  [
+    0x5,
+    (instruction: I_Type, cpu: CPU) => {
+      // lhu
+      const { registerSet, chip } = cpu;
+      const { rd, rs1, imm } = instruction;
+      const rs1Value = registerSet.getRegisterU(rs1);
 
-    const half = chip.readUint16(rs1Value + imm);
-    registerSet.setRegister(rd, half);
-  }],
+      const half = chip.readUint16(rs1Value + imm);
+      registerSet.setRegister(rd, half);
+    },
+  ],
 ]);
 
 const opcode0x0ffunc3Table: FuncTable<I_Type> = new Map([
-  [0x0, (instruction: I_Type, cpu: CPU) => { // TODO FENCE
-    const { registerSet, chip } = cpu;
-    const { rd, rs1, imm } = instruction;
-    const rs1Value = registerSet.getRegister(rs1);
+  [
+    0x0,
+    (instruction: I_Type, cpu: CPU) => {
+      // TODO FENCE
+      const { registerSet, chip } = cpu;
+      const { rd, rs1, imm } = instruction;
+      const rs1Value = registerSet.getRegister(rs1);
 
-    //console.log("FENCE not implemented");
-  }],
-  [0x1, (instruction: I_Type, cpu: CPU) => { // TODO FENCE.I
-    const { registerSet, chip } = cpu;
-    const { rd, rs1, imm } = instruction;
-    const rs1Value = registerSet.getRegister(rs1);
+      //console.log("FENCE not implemented");
+    },
+  ],
+  [
+    0x1,
+    (instruction: I_Type, cpu: CPU) => {
+      // TODO FENCE.I
+      const { registerSet, chip } = cpu;
+      const { rd, rs1, imm } = instruction;
+      const rs1Value = registerSet.getRegister(rs1);
 
-    //console.log("FENCE.I not implemented");
-  }],
+      //console.log("FENCE.I not implemented");
+    },
+  ],
 ]);
 
 const opcode0x13func3Table: FuncTable<I_Type> = new Map([
-  [0x0, (instruction: I_Type, cpu: CPU) => { // addi
-    const { rd, rs1, imm } = instruction;
-    const { registerSet } = cpu;
+  [
+    0x0,
+    (instruction: I_Type, cpu: CPU) => {
+      // addi
+      const { rd, rs1, imm } = instruction;
+      const { registerSet } = cpu;
 
-    const rs1Value = registerSet.getRegisterU(rs1);
-
-    const result = (rs1Value + imm) >>> 0; // make sure 0x80000000 - 1 works
-
-    registerSet.setRegisterU(rd, result);
-  }],
-
-  [0x1, (instruction: I_Type, cpu: CPU) => {
-    const { rd, rs1, func7, immU, shamt } = instruction;
-    const { registerSet } = cpu;
-
-    if (func7 === 0) { // slli
       const rs1Value = registerSet.getRegisterU(rs1);
-      const result = rs1Value << shamt;
+
+      const result = (rs1Value + imm) >>> 0; // make sure 0x80000000 - 1 works
+
       registerSet.setRegisterU(rd, result);
-    } else if (func7 === 0x14) { // bseti (Zbb)
-      const rs1Value = registerSet.getRegister(rs1);
-      const result = rs1Value | ( 1 << shamt);
-      registerSet.setRegister(rd, result);
-    } else if (func7 === 0x24) { // bclri (Zbs)
-      const rs1Value = registerSet.getRegister(rs1);
-      const result = rs1Value & ~(1 << shamt);
-      registerSet.setRegister(rd, result);
-    } else if (func7 === 0x34) { // binvi (Zbs)
-      const rs1Value = registerSet.getRegister(rs1);
-      const result = rs1Value ^ (1 << shamt);
-      registerSet.setRegister(rd, result);
-    } else if (immU === 0b011000000001) { // ctz (Zbb)
-      const rs1Value = registerSet.getRegister(rs1);
-      let tmp = rs1Value >>> 0;
-      if (tmp === 0) {
-        registerSet.setRegister(rd, 32);
-      } else {
-        tmp &= -tmp;
-        tmp = 31 - Math.clz32(tmp);
+    },
+  ],
+
+  [
+    0x1,
+    (instruction: I_Type, cpu: CPU) => {
+      const { rd, rs1, func7, immU, shamt } = instruction;
+      const { registerSet } = cpu;
+
+      if (func7 === 0) {
+        // slli
+        const rs1Value = registerSet.getRegisterU(rs1);
+        const result = rs1Value << shamt;
+        registerSet.setRegisterU(rd, result);
+      } else if (func7 === 0x14) {
+        // bseti (Zbb)
+        const rs1Value = registerSet.getRegister(rs1);
+        const result = rs1Value | (1 << shamt);
+        registerSet.setRegister(rd, result);
+      } else if (func7 === 0x24) {
+        // bclri (Zbs)
+        const rs1Value = registerSet.getRegister(rs1);
+        const result = rs1Value & ~(1 << shamt);
+        registerSet.setRegister(rd, result);
+      } else if (func7 === 0x34) {
+        // binvi (Zbs)
+        const rs1Value = registerSet.getRegister(rs1);
+        const result = rs1Value ^ (1 << shamt);
+        registerSet.setRegister(rd, result);
+      } else if (immU === 0b011000000001) {
+        // ctz (Zbb)
+        const rs1Value = registerSet.getRegister(rs1);
+        let tmp = rs1Value >>> 0;
+        if (tmp === 0) {
+          registerSet.setRegister(rd, 32);
+        } else {
+          tmp &= -tmp;
+          tmp = 31 - Math.clz32(tmp);
+          registerSet.setRegister(rd, tmp);
+        }
+      } else if (immU === 0b011000000010) {
+        // cpop (Zbb)
+        const rs1Value = registerSet.getRegister(rs1);
+        let tmp = rs1Value >>> 0;
+        tmp = tmp - ((tmp >> 1) & 0x55555555);
+        tmp = (tmp & 0x33333333) + ((tmp >> 2) & 0x33333333);
+        tmp = (((tmp + (tmp >> 4)) & 0xf0f0f0f) * 0x1010101) >> 24;
         registerSet.setRegister(rd, tmp);
-      }
-    } else if (immU === 0b011000000010) { // cpop (Zbb)
+      } else if (immU === 0b011000000101) {
+        // sext.h (Zbb)
+        const rs1Value = registerSet.getRegisterU(rs1);
+        const value = signExtend16(rs1Value & 0xffff);
+        registerSet.setRegister(rd, value);
+      } else if (immU === 0b011000000100) {
+        // sext.b (Zbb)
+        const rs1Value = registerSet.getRegisterU(rs1);
+        const value = signExtend8(rs1Value & 0xff);
+        registerSet.setRegister(rd, value);
+      } else if (
+        (instruction.binary & 0b11111111111100000111000001111111) ===
+        0b01100000000000000001000000010011
+      ) {
+        // clz (Zbb)
+        const rs1Value = registerSet.getRegisterU(rs1);
+        const lzc = Math.clz32(rs1Value);
+        registerSet.setRegister(rd, lzc);
+      } else throw Error(`Unknown instruction, func7: 0x${func7.toString(16)}`);
+    },
+  ],
+
+  [
+    0x2,
+    (instruction: I_Type, cpu: CPU) => {
+      // slti
+      const { rd, rs1, imm } = instruction;
+      const { registerSet } = cpu;
+
       const rs1Value = registerSet.getRegister(rs1);
-      let tmp = rs1Value >>> 0;
-      tmp = tmp - ((tmp >> 1) & 0x55555555);
-      tmp = (tmp & 0x33333333) + ((tmp >> 2) & 0x33333333);
-      tmp = ((tmp + (tmp >> 4) & 0xF0F0F0F) * 0x1010101) >> 24;
-      registerSet.setRegister(rd, tmp);
-    } else if (immU === 0b011000000101) { // sext.h (Zbb)
+
+      const result = rs1Value < imm ? 1 : 0;
+      registerSet.setRegister(rd, result);
+    },
+  ],
+
+  [
+    0x3,
+    (instruction: I_Type, cpu: CPU) => {
+      // sltiu
+      const { rd, rs1, immU } = instruction;
+      const { registerSet } = cpu;
+
       const rs1Value = registerSet.getRegisterU(rs1);
-      const value = signExtend16(rs1Value & 0xffff);
-      registerSet.setRegister(rd, value);
-    } else if (immU === 0b011000000100) { // sext.b (Zbb)
-      const rs1Value = registerSet.getRegisterU(rs1);
-      const value = signExtend8(rs1Value & 0xff);
-      registerSet.setRegister(rd, value);
-    } else if ((instruction.binary & 0b11111111111100000111000001111111) ===
-                                     0b01100000000000000001000000010011) { // clz (Zbb)
-      const rs1Value = registerSet.getRegisterU(rs1);
-      const lzc = Math.clz32(rs1Value);
-      registerSet.setRegister(rd, lzc);
-    } else throw Error(`Unknown instruction, func7: 0x${func7.toString(16)}`);
-  }],
 
-  [0x2, (instruction: I_Type, cpu: CPU) => { // slti
-    const { rd, rs1, imm } = instruction;
-    const { registerSet } = cpu;
-
-    const rs1Value = registerSet.getRegister(rs1);
-
-    const result = rs1Value < imm ? 1 : 0;
-    registerSet.setRegister(rd, result);
-  }],
-
-  [0x3, (instruction: I_Type, cpu: CPU) => { // sltiu
-    const { rd, rs1, immU } = instruction;
-    const { registerSet } = cpu;
-
-    const rs1Value = registerSet.getRegisterU(rs1);
-
-    const result = rs1Value < immU ? 1 : 0;
-    registerSet.setRegister(rd, result);
-  }],
-
-  [0x4, (instruction: I_Type, cpu: CPU) => { // xori
-    const { rd, rs1, imm } = instruction;
-    const { registerSet } = cpu;
-
-    const rs1Value = registerSet.getRegister(rs1);
-
-    const result = rs1Value ^ imm;
-
-    registerSet.setRegister(rd, result);
-  }],
-
-  [0x5, (instruction: I_Type, cpu: CPU) => {
-    const { rd, rs1, imm, func7, shamt } = instruction;
-    const { registerSet } = cpu;
-
-    const rs1Value = registerSet.getRegister(rs1);
-
-    if (func7 === 0x00) { // srli
-      const result = rs1Value >>> shamt;
+      const result = rs1Value < immU ? 1 : 0;
       registerSet.setRegister(rd, result);
+    },
+  ],
 
-    } else if (func7 === 0x20) { // srai
-      const result = rs1Value >> shamt;
+  [
+    0x4,
+    (instruction: I_Type, cpu: CPU) => {
+      // xori
+      const { rd, rs1, imm } = instruction;
+      const { registerSet } = cpu;
+
+      const rs1Value = registerSet.getRegister(rs1);
+
+      const result = rs1Value ^ imm;
+
       registerSet.setRegister(rd, result);
+    },
+  ],
 
-    } else if (func7 === 0x24) { // bexti (Zbs)
-      const result = (rs1Value >>> shamt) & 1;
+  [
+    0x5,
+    (instruction: I_Type, cpu: CPU) => {
+      const { rd, rs1, imm, func7, shamt } = instruction;
+      const { registerSet } = cpu;
+
+      const rs1Value = registerSet.getRegister(rs1);
+
+      if (func7 === 0x00) {
+        // srli
+        const result = rs1Value >>> shamt;
+        registerSet.setRegister(rd, result);
+      } else if (func7 === 0x20) {
+        // srai
+        const result = rs1Value >> shamt;
+        registerSet.setRegister(rd, result);
+      } else if (func7 === 0x24) {
+        // bexti (Zbs)
+        const result = (rs1Value >>> shamt) & 1;
+        registerSet.setRegister(rd, result);
+      } else if (func7 === 0x30) {
+        // rori (Zbs)
+        const rs1Val = registerSet.getRegisterU(rs1);
+        const result = ((rs1Val << (32 - shamt)) >>> 0) | (rs1Val >>> shamt);
+        registerSet.setRegister(rd, result);
+      } else if (func7 === 0x34) {
+        // rev8 (Zbb)
+        const result =
+          (rs1Value >>> 24) |
+          ((rs1Value >>> 8) & 0xff00) |
+          ((rs1Value << 8) & 0xff0000) |
+          (((rs1Value & 0xff) << 24) >>> 0);
+        registerSet.setRegisterU(rd, result >>> 0);
+      } else throw Error(`Unknown instruction, func7: 0x${func7.toString(16)}`);
+    },
+  ],
+
+  [
+    0x6,
+    (instruction: I_Type, cpu: CPU) => {
+      // ori
+      const { rd, rs1, imm } = instruction;
+      const { registerSet } = cpu;
+
+      const rs1Value = registerSet.getRegister(rs1);
+
+      const result = rs1Value | imm;
       registerSet.setRegister(rd, result);
+    },
+  ],
 
-    } else if (func7 === 0x30) { // rori (Zbs)
-      const rs1Val = registerSet.getRegisterU(rs1);
-      const result = ((rs1Val << (32 - shamt)) >>> 0) | (rs1Val >>> shamt);
+  [
+    0x7,
+    (instruction: I_Type, cpu: CPU) => {
+      // andi
+      const { rd, rs1, imm } = instruction;
+      const { registerSet } = cpu;
+
+      const rs1Value = registerSet.getRegister(rs1);
+
+      const result = rs1Value & imm;
       registerSet.setRegister(rd, result);
-
-    } else if (func7 === 0x34) { // rev8 (Zbb)
-      const result = (rs1Value >>> 24) | ((rs1Value >>> 8) & 0xff00) | ((rs1Value << 8) & 0xff0000) | (((rs1Value & 0xff) << 24) >>> 0);
-      registerSet.setRegisterU(rd, result >>> 0);
-
-    } else throw Error(`Unknown instruction, func7: 0x${func7.toString(16)}`);
-  }],
-
-  [0x6, (instruction: I_Type, cpu: CPU) => { // ori
-    const { rd, rs1, imm } = instruction;
-    const { registerSet } = cpu;
-
-    const rs1Value = registerSet.getRegister(rs1);
-
-    const result = rs1Value | imm;
-    registerSet.setRegister(rd, result);
-  }],
-
-  [0x7, (instruction: I_Type, cpu: CPU) => { // andi
-    const { rd, rs1, imm } = instruction;
-    const { registerSet } = cpu;
-
-    const rs1Value = registerSet.getRegister(rs1);
-
-    const result = rs1Value & imm;
-    registerSet.setRegister(rd, result);
-  }],
+    },
+  ],
 ]);
 
 const opcode0x23func3Table: FuncTable<S_Type> = new Map([
-  [0x0, (instruction: S_Type, cpu: CPU) => {
-    const { rs1, rs2, imm } = instruction;
-    const { registerSet, chip } = cpu;
+  [
+    0x0,
+    (instruction: S_Type, cpu: CPU) => {
+      const { rs1, rs2, imm } = instruction;
+      const { registerSet, chip } = cpu;
 
-    const rs1Value = registerSet.getRegister(rs1);
-    const rs2Value = registerSet.getRegister(rs2);
+      const rs1Value = registerSet.getRegister(rs1);
+      const rs2Value = registerSet.getRegister(rs2);
 
-    const byte = getRange(rs2Value, 7, 0);
+      const byte = getRange(rs2Value, 7, 0);
 
-    chip.writeUint8(rs1Value + imm, byte); //CHECK Int8?
-  }],
+      chip.writeUint8(rs1Value + imm, byte); //CHECK Int8?
+    },
+  ],
 
-  [0x1, (instruction: S_Type, cpu: CPU) => {
-    const { rs1, rs2, imm } = instruction;
-    const { registerSet, chip } = cpu;
+  [
+    0x1,
+    (instruction: S_Type, cpu: CPU) => {
+      const { rs1, rs2, imm } = instruction;
+      const { registerSet, chip } = cpu;
 
-    const rs1Value = registerSet.getRegister(rs1);
-    const rs2Value = registerSet.getRegister(rs2);
+      const rs1Value = registerSet.getRegister(rs1);
+      const rs2Value = registerSet.getRegister(rs2);
 
-    const half = getRange(rs2Value, 15, 0);
+      const half = getRange(rs2Value, 15, 0);
 
-    chip.writeUint16(rs1Value + imm, half); //CHECK Int16?
-  }],
+      chip.writeUint16(rs1Value + imm, half); //CHECK Int16?
+    },
+  ],
 
-  [0x2, (instruction: S_Type, cpu: CPU) => {
-    const { rs1, rs2, imm } = instruction;
-    const { registerSet, chip } = cpu;
+  [
+    0x2,
+    (instruction: S_Type, cpu: CPU) => {
+      const { rs1, rs2, imm } = instruction;
+      const { registerSet, chip } = cpu;
 
-    const rs1Value = registerSet.getRegister(rs1);
-    const rs2Value = registerSet.getRegister(rs2);
+      const rs1Value = registerSet.getRegister(rs1);
+      const rs2Value = registerSet.getRegister(rs2);
 
-    chip.writeUint32(rs1Value + imm, rs2Value); //CHECK Int32?
-  }],
+      chip.writeUint32(rs1Value + imm, rs2Value); //CHECK Int32?
+    },
+  ],
 ]);
 
 const opcode0x2ffunc3Table: FuncTable<R_Type> = new Map([
-  [0x2, (instruction: R_Type, cpu: CPU) => {
+  [
+    0x2,
+    (instruction: R_Type, cpu: CPU) => {
+      const { rd, rs1, rs2, func7 } = instruction;
+      const { registerSet, chip } = cpu;
 
-    const { rd, rs1, rs2, func7 } = instruction;
-    const { registerSet, chip } = cpu;
-
-    const rs1Value = registerSet.getRegisterU(rs1);
-    const rs2Value = registerSet.getRegisterU(rs2);
-    if (func7 === 0x4) { // amoswap.w (rv32a)
-      // 08a5a52f amoswap.w a0,a0,(a1)
-      const rs1Mem = chip.readUint32(rs1Value);
-      const value = rs2Value;
-      registerSet.setRegisterU(rd, rs1Mem);
-      chip.writeUint32(rs1Value, value);
-      cpu.cycles += 3;
-    } else if (func7 === 0x22 || func7 === 0x20) { // amoor.w.aq and amoor.w (rv32a)
-      // 44e7a6af amoor.w.aq a3,a4,(a5)
-      // 40c3a52f amoor.w a0,a2,(t2)
-      const rs1Mem = chip.readUint32(rs1Value);
-      registerSet.setRegisterU(rd, rs1Mem);
-      const value = rs1Mem | rs2Value;
-      chip.writeUint32(rs1Value, value);
-      cpu.cycles += 3;
-    } else if (func7 === 0x30) { // amoand.w (rv32a)
-      // 60b7a02f amoand.w zero,a1,(a5)
-      const rs1Mem = chip.readUint32(rs1Value);
-      registerSet.setRegisterU(rd, rs1Mem);
-      const value = rs1Mem & rs2Value;
-      chip.writeUint32(rs1Value, value);
-      cpu.cycles += 3;
-    } else throw Error(`Unknown instruction, func7: 0x${func7.toString(16)}`);
-  }],
+      const rs1Value = registerSet.getRegisterU(rs1);
+      const rs2Value = registerSet.getRegisterU(rs2);
+      if (func7 === 0x4) {
+        // amoswap.w (rv32a)
+        // 08a5a52f amoswap.w a0,a0,(a1)
+        const rs1Mem = chip.readUint32(rs1Value);
+        const value = rs2Value;
+        registerSet.setRegisterU(rd, rs1Mem);
+        chip.writeUint32(rs1Value, value);
+        cpu.cycles += 3;
+      } else if (func7 === 0x22 || func7 === 0x20) {
+        // amoor.w.aq and amoor.w (rv32a)
+        // 44e7a6af amoor.w.aq a3,a4,(a5)
+        // 40c3a52f amoor.w a0,a2,(t2)
+        const rs1Mem = chip.readUint32(rs1Value);
+        registerSet.setRegisterU(rd, rs1Mem);
+        const value = rs1Mem | rs2Value;
+        chip.writeUint32(rs1Value, value);
+        cpu.cycles += 3;
+      } else if (func7 === 0x30) {
+        // amoand.w (rv32a)
+        // 60b7a02f amoand.w zero,a1,(a5)
+        const rs1Mem = chip.readUint32(rs1Value);
+        registerSet.setRegisterU(rd, rs1Mem);
+        const value = rs1Mem & rs2Value;
+        chip.writeUint32(rs1Value, value);
+        cpu.cycles += 3;
+      } else throw Error(`Unknown instruction, func7: 0x${func7.toString(16)}`);
+    },
+  ],
 ]);
 
 const opcode0x33func3Table: FuncTable<R_Type> = new Map([
-  [0x0, (instruction: R_Type, cpu: CPU) => {
+  [
+    0x0,
+    (instruction: R_Type, cpu: CPU) => {
+      const { rd, rs1, rs2, func7 } = instruction;
+      const { registerSet } = cpu;
 
-    const { rd, rs1, rs2, func7 } = instruction;
-    const { registerSet } = cpu;
+      const rs1Value = registerSet.getRegister(rs1);
+      const rs2Value = registerSet.getRegister(rs2);
 
-    const rs1Value = registerSet.getRegister(rs1);
-    const rs2Value = registerSet.getRegister(rs2);
+      if (func7 === 0x00) {
+        const sum = rs1Value + rs2Value;
+        registerSet.setRegister(rd, sum);
+      } else if (func7 === 0x20) {
+        const difference = registerSet.getRegister(rs1) - registerSet.getRegister(rs2);
+        registerSet.setRegister(rd, difference);
+      } else if (func7 === 0x1) {
+        // mul (rv32m)
+        const result = registerSet.getRegister(rs1) * registerSet.getRegister(rs2);
+        registerSet.setRegister(rd, result & 0xffffffff); // FIXME check sign
+      } else throw Error(`Unknown instruction, func7: 0x${func7.toString(16)}`);
+    },
+  ],
 
-    if (func7 === 0x00) {
-      const sum = rs1Value + rs2Value;
-      registerSet.setRegister(rd, sum);
+  [
+    0x1,
+    (instruction: R_Type, cpu: CPU) => {
+      const { rd, rs1, rs2, func7 } = instruction;
+      const { registerSet } = cpu;
 
-    } else if (func7 === 0x20) {
-      const difference = registerSet.getRegister(rs1) - registerSet.getRegister(rs2);
-      registerSet.setRegister(rd, difference);
-    } else if (func7 === 0x1) { // mul (rv32m)
-      const result = registerSet.getRegister(rs1) * registerSet.getRegister(rs2);
-      registerSet.setRegister(rd, result & 0xffffffff); // FIXME check sign
-    } else throw Error(`Unknown instruction, func7: 0x${func7.toString(16)}`);
+      const rs1Value = registerSet.getRegister(rs1);
+      const rs2Value = registerSet.getRegisterU(rs2);
 
-  }],
+      if (func7 === 0) {
+        // sll
+        const result = rs1Value << rs2Value;
+        registerSet.setRegister(rd, result);
+      } else if (func7 === 0x1) {
+        // mulh (rv32m)
+        const result = ((rs1Value * registerSet.getRegister(rs2)) / 0x100000000) >>> 0;
+        registerSet.setRegisterU(rd, result);
+      } else if (func7 === 0x14) {
+        // bset (Zbs)
+        const index = rs2Value & 31;
+        const result = rs1Value | (1 << index);
+        registerSet.setRegister(rd, result);
+      } else if (func7 === 0x24) {
+        // bclr (Zbs)
+        const index = rs2Value & 31;
+        const result = rs1Value & ~(1 << index);
+        registerSet.setRegister(rd, result);
+      } else throw Error(`Unknown instruction, func7: 0x${func7.toString(16)}`);
+    },
+  ],
 
-  [0x1, (instruction: R_Type, cpu: CPU) => {
-    const { rd, rs1, rs2, func7 } = instruction;
-    const { registerSet } = cpu;
+  [
+    0x2,
+    (instruction: R_Type, cpu: CPU) => {
+      const { rd, rs1, rs2, func7 } = instruction;
+      const { registerSet } = cpu;
 
-    const rs1Value = registerSet.getRegister(rs1);
-    const rs2Value = registerSet.getRegisterU(rs2);
+      const rs1Value = registerSet.getRegister(rs1);
+      const rs2Value = registerSet.getRegister(rs2);
 
-    if(func7 === 0) { // sll
-      const result = rs1Value << rs2Value;
-      registerSet.setRegister(rd, result);
-    } else if(func7 === 0x1) { // mulh (rv32m)
-      const result = (rs1Value * registerSet.getRegister(rs2) / 0x100000000) >>> 0;
-      registerSet.setRegisterU(rd, result);
-    } else if(func7 === 0x14) { // bset (Zbs)
-      const index = rs2Value & 31;
-      const result = rs1Value | (1 << index);
-      registerSet.setRegister(rd, result);
-    } else if(func7 === 0x24) { // bclr (Zbs)
-      const index = rs2Value & 31;
-      const result = rs1Value & ~(1 << index);
-      registerSet.setRegister(rd, result);
-    } else throw Error(`Unknown instruction, func7: 0x${func7.toString(16)}`);
-  }],
-
-  [0x2, (instruction: R_Type, cpu: CPU) => {
-    const { rd, rs1, rs2, func7 } = instruction;
-    const { registerSet } = cpu;
-
-    const rs1Value = registerSet.getRegister(rs1);
-    const rs2Value = registerSet.getRegister(rs2);
-
-    if(func7 === 0) { // slt
-      if(rd === 0 && rs1 === 0) {
-        if(rs2 === 0) { // h3.block (Xh3power) - slt x0, x0, x0
-          if(!cpu.eventRegistered) {
-            cpu.waiting = true;
-            return;
-          } else {
-            cpu.eventRegistered = false;
+      if (func7 === 0) {
+        // slt
+        if (rd === 0 && rs1 === 0) {
+          if (rs2 === 0) {
+            // h3.block (Xh3power) - slt x0, x0, x0
+            if (!cpu.eventRegistered) {
+              cpu.waiting = true;
+              return;
+            } else {
+              cpu.eventRegistered = false;
+              return;
+            }
+          } else if (rs2 === 1) {
+            // h3.unblock (Xh3power) - slt x0, x0, x1
+            if (cpu.onSEV) cpu.onSEV();
             return;
           }
-        } else if(rs2 === 1) { // h3.unblock (Xh3power) - slt x0, x0, x1
-          if(cpu.onSEV) cpu.onSEV();
-          return;
         }
-      }
-      const result = rs1Value < rs2Value ? 1 : 0;
-      registerSet.setRegister(rd, result);
-    } else if(func7 === 0x10) { // sh1add (Zbb)
-      const result = ((rs1Value << 1) + rs2Value) & 0xffffffff;
-      registerSet.setRegister(rd, result);
-    } else throw Error(`Unknown instruction, func7: 0x${func7.toString(16)}`);
-  }],
-
-  [0x3, (instruction: R_Type, cpu: CPU) => {
-    const { rd, rs1, rs2, func7 } = instruction;
-    const { registerSet } = cpu;
-
-    const rs1Value = registerSet.getRegisterU(rs1);
-    const rs2Value = registerSet.getRegisterU(rs2);
-
-    if(func7 === 0) {
-      const result = rs1Value < rs2Value ? 1 : 0;
-      registerSet.setRegister(rd, result);
-    } else if(func7 === 1) { // mulhu (rv32m)
-      const result = (rs1Value * rs2Value / 0x100000000) >>> 0;
-      registerSet.setRegister(rd, result);
-    } else throw Error(`Unknown instruction, func7: 0x${func7.toString(16)}`);
-  }],
-
-  [0x4, (instruction: R_Type, cpu: CPU) => {
-    const { rd, rs1, rs2, func7 } = instruction;
-    const { registerSet } = cpu;
-
-    const rs1Value = registerSet.getRegister(rs1);
-    const rs2Value = registerSet.getRegister(rs2);
-
-    if(func7 === 0) {
-      const result = rs1Value ^ rs2Value;
-      registerSet.setRegister(rd, result);
-    } else if(func7 === 0x1) { // div (rv32m)
-      if(rs2Value === 0) {
-        registerSet.setRegisterU(rd, 0xffffffff);
-      } else if((rs1Value >>> 0) === 0x80000000 && (rs2Value >>> 0) === 0xffffffff) {
-        registerSet.setRegisterU(rd, 0x80000000);
-      } else {
-        const result = (rs1Value / rs2Value) | 0;
+        const result = rs1Value < rs2Value ? 1 : 0;
         registerSet.setRegister(rd, result);
-      }
-      cpu.cycles += 17;
-    } else if(func7 === 0x10) { // sh2add (Zbb)
-      const result = ((rs1Value << 2) + rs2Value) & 0xffffffff;
-      registerSet.setRegister(rd, result);
-    } else if(func7 === 0x4) { // PACK (Zbkb)
-      const result = (rs1Value & 0xffff) | ((rs2Value & 0xffff) << 16);
-      registerSet.setRegister(rd, result);
-    } else if(func7 === 0x5) { // MIN (Zbb)
-      const result = rs1Value < rs2Value ? rs1Value : rs2Value;
-      registerSet.setRegister(rd, result);
-    } else if(func7 === 0x20) { // XNOR (Zbb)
-      const result = (~rs1Value) ^ rs2Value;
-      registerSet.setRegister(rd, result);
-    } else throw Error(`Unknown instruction, func7: 0x${func7.toString(16)}`);
-  }],
-
-  [0x5, (instruction: R_Type, cpu: CPU) => {
-    const { rd, rs1, rs2, func7 } = instruction;
-    const { registerSet } = cpu;
-
-    const rs1Value = registerSet.getRegister(rs1);
-    const rs2Value = registerSet.getRegister(rs2);
-
-    if (func7 === 0x00) {
-      const result = rs1Value >>> rs2Value;
-      registerSet.setRegister(rd, result);
-    } else if (func7 === 0x5) { // minu (Zbb)
-      const r1 = rs1Value >>> 0;
-      const r2 = rs2Value >>> 0;
-      const result = r1 < r2 ? r1 : r2;
-      registerSet.setRegister(rd, result);
-    } else if (func7 === 0x20) {
-      const result = rs1Value >> rs2Value;
-      registerSet.setRegister(rd, result);
-    } else if (func7 === 0x24) { // bext (Zbs)
-      const result = (rs1Value >>> (rs2Value & 31)) & 1;
-      registerSet.setRegister(rd, result);
-    } else if (func7 === 0x01) { // divu (rv32m)
-      if(rs2Value === 0) {
-        registerSet.setRegisterU(rd, 0xffffffff);
-      } else {
-        const result = ((rs1Value >>> 0) / (rs2Value >>> 0)) >>> 0;
+      } else if (func7 === 0x10) {
+        // sh1add (Zbb)
+        const result = ((rs1Value << 1) + rs2Value) & 0xffffffff;
         registerSet.setRegister(rd, result);
-      }
-      cpu.cycles += 17;
-    } else throw Error(`Unknown instruction, func7: 0x${func7.toString(16)}`);
+      } else throw Error(`Unknown instruction, func7: 0x${func7.toString(16)}`);
+    },
+  ],
 
-  }],
+  [
+    0x3,
+    (instruction: R_Type, cpu: CPU) => {
+      const { rd, rs1, rs2, func7 } = instruction;
+      const { registerSet } = cpu;
 
-  [0x6, (instruction: R_Type, cpu: CPU) => {
-    const { rd, rs1, rs2, func7 } = instruction;
-    const { registerSet } = cpu;
+      const rs1Value = registerSet.getRegisterU(rs1);
+      const rs2Value = registerSet.getRegisterU(rs2);
 
-    const rs1Value = registerSet.getRegister(rs1);
-    const rs2Value = registerSet.getRegister(rs2);
+      if (func7 === 0) {
+        const result = rs1Value < rs2Value ? 1 : 0;
+        registerSet.setRegister(rd, result);
+      } else if (func7 === 1) {
+        // mulhu (rv32m)
+        const result = ((rs1Value * rs2Value) / 0x100000000) >>> 0;
+        registerSet.setRegister(rd, result);
+      } else throw Error(`Unknown instruction, func7: 0x${func7.toString(16)}`);
+    },
+  ],
 
-    if(func7 === 0) { // OR
-      const result = rs1Value | rs2Value;
-      registerSet.setRegister(rd, result);
-    } else if(func7 === 0x1) { // REM (RV32M)
-      // 02c6e6b3 rem a3,a3,a2
-      const result = (rs2Value === 0) ? rs1Value : (rs1Value % rs2Value);
-      registerSet.setRegister(rd, result);
-      cpu.cycles += 17;
-    } else if(func7 === 0x5) { // MAX (Zbb)
-      const result = rs1Value > rs2Value ? rs1Value : rs2Value;
-      registerSet.setRegister(rd, result);
-    } else if(func7 === 0x20) { // ORN (Zbb)
-      const result = rs1Value | ~rs2Value;
-      registerSet.setRegister(rd, result);
-    } else if(func7 === 0x10) { // sh3add (Zbb)
-      const result = ((rs1Value << 3) + rs2Value) & 0xffffffff;
-      registerSet.setRegister(rd, result);
-    } else throw Error(`Unknown instruction, func7: 0x${func7.toString(16)}`);
-  }],
+  [
+    0x4,
+    (instruction: R_Type, cpu: CPU) => {
+      const { rd, rs1, rs2, func7 } = instruction;
+      const { registerSet } = cpu;
 
-  [0x7, (instruction: R_Type, cpu: CPU) => {
-    const { rd, rs1, rs2, func7 } = instruction;
-    const { registerSet } = cpu;
+      const rs1Value = registerSet.getRegister(rs1);
+      const rs2Value = registerSet.getRegister(rs2);
 
-    const rs1Value = registerSet.getRegister(rs1);
-    const rs2Value = registerSet.getRegister(rs2);
+      if (func7 === 0) {
+        const result = rs1Value ^ rs2Value;
+        registerSet.setRegister(rd, result);
+      } else if (func7 === 0x1) {
+        // div (rv32m)
+        if (rs2Value === 0) {
+          registerSet.setRegisterU(rd, 0xffffffff);
+        } else if (rs1Value >>> 0 === 0x80000000 && rs2Value >>> 0 === 0xffffffff) {
+          registerSet.setRegisterU(rd, 0x80000000);
+        } else {
+          const result = (rs1Value / rs2Value) | 0;
+          registerSet.setRegister(rd, result);
+        }
+        cpu.cycles += 17;
+      } else if (func7 === 0x10) {
+        // sh2add (Zbb)
+        const result = ((rs1Value << 2) + rs2Value) & 0xffffffff;
+        registerSet.setRegister(rd, result);
+      } else if (func7 === 0x4) {
+        // PACK (Zbkb)
+        const result = (rs1Value & 0xffff) | ((rs2Value & 0xffff) << 16);
+        registerSet.setRegister(rd, result);
+      } else if (func7 === 0x5) {
+        // MIN (Zbb)
+        const result = rs1Value < rs2Value ? rs1Value : rs2Value;
+        registerSet.setRegister(rd, result);
+      } else if (func7 === 0x20) {
+        // XNOR (Zbb)
+        const result = ~rs1Value ^ rs2Value;
+        registerSet.setRegister(rd, result);
+      } else throw Error(`Unknown instruction, func7: 0x${func7.toString(16)}`);
+    },
+  ],
 
-    if(func7 === 0) { // AND
-      const result = rs1Value & rs2Value;
-      registerSet.setRegister(rd, result);
-    } else if(func7 === 0x20) { // ANDN (Zbb)
-      const result = rs1Value & ~rs2Value;
-      registerSet.setRegister(rd, result);
-    } else if(func7 === 0x4) { // PACKH (Zbkb)
-      const result = (rs1Value & 0xff) | ((rs2Value & 0xff) << 8);
-      registerSet.setRegister(rd, result);
-    } else if(func7 === 0x5) { // MAXU (Zbb)
-      const result = (rs1Value >>> 0) > (rs2Value >>> 0) ? rs1Value : rs2Value;
-      registerSet.setRegisterU(rd, result >>> 0);
-    } else if(func7 === 0x1) { // REMU (RV32M)
-      const result = (rs2Value === 0) ? rs1Value : ((rs1Value >>> 0) % (rs2Value >>> 0));
-      registerSet.setRegisterU(rd, result >>> 0);
-      cpu.cycles += 17;
-    } else throw Error(`Unknown instruction, func7: 0x${func7.toString(16)}`);
-  }],
+  [
+    0x5,
+    (instruction: R_Type, cpu: CPU) => {
+      const { rd, rs1, rs2, func7 } = instruction;
+      const { registerSet } = cpu;
 
+      const rs1Value = registerSet.getRegister(rs1);
+      const rs2Value = registerSet.getRegister(rs2);
+
+      if (func7 === 0x00) {
+        const result = rs1Value >>> rs2Value;
+        registerSet.setRegister(rd, result);
+      } else if (func7 === 0x5) {
+        // minu (Zbb)
+        const r1 = rs1Value >>> 0;
+        const r2 = rs2Value >>> 0;
+        const result = r1 < r2 ? r1 : r2;
+        registerSet.setRegister(rd, result);
+      } else if (func7 === 0x20) {
+        const result = rs1Value >> rs2Value;
+        registerSet.setRegister(rd, result);
+      } else if (func7 === 0x24) {
+        // bext (Zbs)
+        const result = (rs1Value >>> (rs2Value & 31)) & 1;
+        registerSet.setRegister(rd, result);
+      } else if (func7 === 0x01) {
+        // divu (rv32m)
+        if (rs2Value === 0) {
+          registerSet.setRegisterU(rd, 0xffffffff);
+        } else {
+          const result = ((rs1Value >>> 0) / (rs2Value >>> 0)) >>> 0;
+          registerSet.setRegister(rd, result);
+        }
+        cpu.cycles += 17;
+      } else throw Error(`Unknown instruction, func7: 0x${func7.toString(16)}`);
+    },
+  ],
+
+  [
+    0x6,
+    (instruction: R_Type, cpu: CPU) => {
+      const { rd, rs1, rs2, func7 } = instruction;
+      const { registerSet } = cpu;
+
+      const rs1Value = registerSet.getRegister(rs1);
+      const rs2Value = registerSet.getRegister(rs2);
+
+      if (func7 === 0) {
+        // OR
+        const result = rs1Value | rs2Value;
+        registerSet.setRegister(rd, result);
+      } else if (func7 === 0x1) {
+        // REM (RV32M)
+        // 02c6e6b3 rem a3,a3,a2
+        const result = rs2Value === 0 ? rs1Value : rs1Value % rs2Value;
+        registerSet.setRegister(rd, result);
+        cpu.cycles += 17;
+      } else if (func7 === 0x5) {
+        // MAX (Zbb)
+        const result = rs1Value > rs2Value ? rs1Value : rs2Value;
+        registerSet.setRegister(rd, result);
+      } else if (func7 === 0x20) {
+        // ORN (Zbb)
+        const result = rs1Value | ~rs2Value;
+        registerSet.setRegister(rd, result);
+      } else if (func7 === 0x10) {
+        // sh3add (Zbb)
+        const result = ((rs1Value << 3) + rs2Value) & 0xffffffff;
+        registerSet.setRegister(rd, result);
+      } else throw Error(`Unknown instruction, func7: 0x${func7.toString(16)}`);
+    },
+  ],
+
+  [
+    0x7,
+    (instruction: R_Type, cpu: CPU) => {
+      const { rd, rs1, rs2, func7 } = instruction;
+      const { registerSet } = cpu;
+
+      const rs1Value = registerSet.getRegister(rs1);
+      const rs2Value = registerSet.getRegister(rs2);
+
+      if (func7 === 0) {
+        // AND
+        const result = rs1Value & rs2Value;
+        registerSet.setRegister(rd, result);
+      } else if (func7 === 0x20) {
+        // ANDN (Zbb)
+        const result = rs1Value & ~rs2Value;
+        registerSet.setRegister(rd, result);
+      } else if (func7 === 0x4) {
+        // PACKH (Zbkb)
+        const result = (rs1Value & 0xff) | ((rs2Value & 0xff) << 8);
+        registerSet.setRegister(rd, result);
+      } else if (func7 === 0x5) {
+        // MAXU (Zbb)
+        const result = rs1Value >>> 0 > rs2Value >>> 0 ? rs1Value : rs2Value;
+        registerSet.setRegisterU(rd, result >>> 0);
+      } else if (func7 === 0x1) {
+        // REMU (RV32M)
+        const result = rs2Value === 0 ? rs1Value : (rs1Value >>> 0) % (rs2Value >>> 0);
+        registerSet.setRegisterU(rd, result >>> 0);
+        cpu.cycles += 17;
+      } else throw Error(`Unknown instruction, func7: 0x${func7.toString(16)}`);
+    },
+  ],
 ]);
 
 const opcode0x63func3Table: FuncTable<B_Type> = new Map([
-  [0x0, (instruction: B_Type, cpu: CPU) => {
-    const { rs1, rs2, imm } = instruction;
-    const { registerSet } = cpu;
+  [
+    0x0,
+    (instruction: B_Type, cpu: CPU) => {
+      const { rs1, rs2, imm } = instruction;
+      const { registerSet } = cpu;
 
-    const rs1Value = registerSet.getRegister(rs1);
-    const rs2Value = registerSet.getRegister(rs2);
+      const rs1Value = registerSet.getRegister(rs1);
+      const rs2Value = registerSet.getRegister(rs2);
 
-    const do_branch = rs1Value === rs2Value;
-    if (do_branch) {
-      cpu.next_pc = cpu.pc + imm;
-    }
-    cpu.h3_branch_cycles(do_branch);
-  }],
+      const do_branch = rs1Value === rs2Value;
+      if (do_branch) {
+        cpu.next_pc = cpu.pc + imm;
+      }
+      cpu.h3_branch_cycles(do_branch);
+    },
+  ],
 
-  [0x1, (instruction: B_Type, cpu: CPU) => {
-    const { rs1, rs2, imm } = instruction;
-    const { registerSet } = cpu;
+  [
+    0x1,
+    (instruction: B_Type, cpu: CPU) => {
+      const { rs1, rs2, imm } = instruction;
+      const { registerSet } = cpu;
 
-    const rs1Value = registerSet.getRegister(rs1);
-    const rs2Value = registerSet.getRegister(rs2);
+      const rs1Value = registerSet.getRegister(rs1);
+      const rs2Value = registerSet.getRegister(rs2);
 
-    const do_branch = rs1Value !== rs2Value;
-    if (do_branch) {
-      cpu.next_pc = cpu.pc + imm;
-    }
-    cpu.h3_branch_cycles(do_branch);
-  }],
+      const do_branch = rs1Value !== rs2Value;
+      if (do_branch) {
+        cpu.next_pc = cpu.pc + imm;
+      }
+      cpu.h3_branch_cycles(do_branch);
+    },
+  ],
 
-  [0x4, (instruction: B_Type, cpu: CPU) => {
-    const { rs1, rs2, imm } = instruction;
-    const { registerSet } = cpu;
+  [
+    0x4,
+    (instruction: B_Type, cpu: CPU) => {
+      const { rs1, rs2, imm } = instruction;
+      const { registerSet } = cpu;
 
-    const rs1Value = registerSet.getRegister(rs1);
-    const rs2Value = registerSet.getRegister(rs2);
+      const rs1Value = registerSet.getRegister(rs1);
+      const rs2Value = registerSet.getRegister(rs2);
 
-    const do_branch = rs1Value < rs2Value;
-    if (do_branch) {
-      cpu.next_pc = cpu.pc + imm;
-    }
-    cpu.h3_branch_cycles(do_branch);
-  }],
+      const do_branch = rs1Value < rs2Value;
+      if (do_branch) {
+        cpu.next_pc = cpu.pc + imm;
+      }
+      cpu.h3_branch_cycles(do_branch);
+    },
+  ],
 
-  [0x5, (instruction: B_Type, cpu: CPU) => {
-    const { rs1, rs2, imm } = instruction;
-    const { registerSet } = cpu;
+  [
+    0x5,
+    (instruction: B_Type, cpu: CPU) => {
+      const { rs1, rs2, imm } = instruction;
+      const { registerSet } = cpu;
 
-    const rs1Value = registerSet.getRegister(rs1);
-    const rs2Value = registerSet.getRegister(rs2);
+      const rs1Value = registerSet.getRegister(rs1);
+      const rs2Value = registerSet.getRegister(rs2);
 
-    const do_branch = rs1Value >= rs2Value;
-    if (do_branch) {
-      cpu.next_pc = cpu.pc + imm;
-    }
-    cpu.h3_branch_cycles(do_branch);
-  }],
+      const do_branch = rs1Value >= rs2Value;
+      if (do_branch) {
+        cpu.next_pc = cpu.pc + imm;
+      }
+      cpu.h3_branch_cycles(do_branch);
+    },
+  ],
 
-  [0x6, (instruction: B_Type, cpu: CPU) => {
-    const { rs1, rs2, imm } = instruction;
-    const { registerSet } = cpu;
+  [
+    0x6,
+    (instruction: B_Type, cpu: CPU) => {
+      const { rs1, rs2, imm } = instruction;
+      const { registerSet } = cpu;
 
-    const rs1Value = registerSet.getRegisterU(rs1);
-    const rs2Value = registerSet.getRegisterU(rs2);
+      const rs1Value = registerSet.getRegisterU(rs1);
+      const rs2Value = registerSet.getRegisterU(rs2);
 
-    const do_branch = rs1Value < rs2Value;
-    if (do_branch) {
-      cpu.next_pc = cpu.pc + imm;
-    }
-    cpu.h3_branch_cycles(do_branch);
-  }],
+      const do_branch = rs1Value < rs2Value;
+      if (do_branch) {
+        cpu.next_pc = cpu.pc + imm;
+      }
+      cpu.h3_branch_cycles(do_branch);
+    },
+  ],
 
-  [0x7, (instruction: B_Type, cpu: CPU) => {
-    const { rs1, rs2, imm } = instruction;
-    const { registerSet } = cpu;
+  [
+    0x7,
+    (instruction: B_Type, cpu: CPU) => {
+      const { rs1, rs2, imm } = instruction;
+      const { registerSet } = cpu;
 
-    const rs1Value = registerSet.getRegisterU(rs1);
-    const rs2Value = registerSet.getRegisterU(rs2);
+      const rs1Value = registerSet.getRegisterU(rs1);
+      const rs2Value = registerSet.getRegisterU(rs2);
 
-    const do_branch = rs1Value >= rs2Value;
-    if (do_branch) {
-      cpu.next_pc = cpu.pc + imm;
-    }
-    cpu.h3_branch_cycles(do_branch);
-  }],
+      const do_branch = rs1Value >= rs2Value;
+      if (do_branch) {
+        cpu.next_pc = cpu.pc + imm;
+      }
+      cpu.h3_branch_cycles(do_branch);
+    },
+  ],
 ]);
 
 const opcode0x67func3Table: FuncTable<I_Type> = new Map([
-  [0x0, (instruction: I_Type, cpu: CPU) => {
-    const { rd, rs1, imm } = instruction;
-    const { registerSet } = cpu;
+  [
+    0x0,
+    (instruction: I_Type, cpu: CPU) => {
+      const { rd, rs1, imm } = instruction;
+      const { registerSet } = cpu;
 
-    const rs1Value = registerSet.getRegister(rs1);
+      const rs1Value = registerSet.getRegister(rs1);
 
-    registerSet.setRegister(rd, cpu.pc + cpu.inst_length);
-    cpu.next_pc = rs1Value + imm;
-    cpu.cycles++;
-  }]
+      registerSet.setRegister(rd, cpu.pc + cpu.inst_length);
+      cpu.next_pc = rs1Value + imm;
+      cpu.cycles++;
+    },
+  ],
 ]);
 
 const opcode0x73func3Table: FuncTable<I_Type> = new Map([
-  [0x0, (instruction: I_Type, cpu: CPU) => {
-    let mstatus = 0;
-    switch(instruction.binary) {
-      case 0x30200073: // mret
-        // TODO Restore core privilege level to the value of MSTATUS.MPP
-        mstatus = cpu.getCSR(0x300, 0);
-        mstatus &= ~(3<<11); // Write 0 (U-mode) to MSTATUS.MPP
-        mstatus &= ~0b1000; mstatus |= (mstatus >>> 4) & 0b1000; // Restore MSTATUS.MIE from MSTATUS.MPIE
-        mstatus |= 1<<7; // Write 1 to MSTATUS.MPIE
-        cpu.setCSR(0x300, mstatus, 0);
-        cpu.next_pc = cpu.getCSR(0x341, 0); // Jump to the address in MEPC.
-        cpu.cycles++;
-        cpu.updateMEICONTEXT_priority_restore(); // Xh3irq
-        cpu.interruptsUpdated = true;
-        break;
-      case 0x73: // ecall
-        const u_mode = 0; //TODO
-        const reason = u_mode?0x8:0xb;
-        cpu.trapEntry(reason, true);
-        break;
-      case 0x100073: // ebreak
-        cpu.trapEntry(3, true);
-        break;
-      default:
-        throw Error(`Unknown instruction 0x${instruction.binary.toString(16)}`);
-    }
-  }],
-  [0x1, (instruction: I_Type, cpu: CPU) => { // csrrw, csrw
-    const { rd, rs1, immU } = instruction; // immU is csr
-    const { registerSet } = cpu;
-    const newValue = registerSet.getRegister(rs1);
-    if(rd != 0) {
-      const oldValue = cpu.getCSR(immU, newValue);
+  [
+    0x0,
+    (instruction: I_Type, cpu: CPU) => {
+      let mstatus = 0;
+      switch (instruction.binary) {
+        case 0x30200073: // mret
+          // TODO Restore core privilege level to the value of MSTATUS.MPP
+          mstatus = cpu.getCSR(0x300, 0);
+          mstatus &= ~(3 << 11); // Write 0 (U-mode) to MSTATUS.MPP
+          mstatus &= ~0b1000;
+          mstatus |= (mstatus >>> 4) & 0b1000; // Restore MSTATUS.MIE from MSTATUS.MPIE
+          mstatus |= 1 << 7; // Write 1 to MSTATUS.MPIE
+          cpu.setCSR(0x300, mstatus, 0);
+          cpu.next_pc = cpu.getCSR(0x341, 0); // Jump to the address in MEPC.
+          cpu.cycles++;
+          cpu.updateMEICONTEXT_priority_restore(); // Xh3irq
+          cpu.interruptsUpdated = true;
+          break;
+        case 0x73: // ecall
+          const u_mode = 0; //TODO
+          const reason = u_mode ? 0x8 : 0xb;
+          cpu.trapEntry(reason, true);
+          break;
+        case 0x100073: // ebreak
+          cpu.trapEntry(3, true);
+          break;
+        default:
+          throw Error(`Unknown instruction 0x${instruction.binary.toString(16)}`);
+      }
+    },
+  ],
+  [
+    0x1,
+    (instruction: I_Type, cpu: CPU) => {
+      // csrrw, csrw
+      const { rd, rs1, immU } = instruction; // immU is csr
+      const { registerSet } = cpu;
+      const newValue = registerSet.getRegister(rs1);
+      if (rd != 0) {
+        const oldValue = cpu.getCSR(immU, newValue);
+        registerSet.setRegister(rd, oldValue);
+      }
+      cpu.setCSR(immU, newValue, newValue);
+    },
+  ],
+  [
+    0x2,
+    (instruction: I_Type, cpu: CPU) => {
+      // csrrs, csrs, csrr
+      const { rd, rs1, immU } = instruction; // immU is csr
+      const { registerSet } = cpu;
+      const orValue = registerSet.getRegister(rs1);
+      const oldValue = cpu.getCSR(immU, orValue);
+      if (rs1 != 0) {
+        const newValue = oldValue | orValue;
+        cpu.setCSR(immU, newValue, orValue);
+      }
       registerSet.setRegister(rd, oldValue);
-    }
-    cpu.setCSR(immU, newValue, newValue);
-  }],
-  [0x2, (instruction: I_Type, cpu: CPU) => { // csrrs, csrs, csrr
-    const { rd, rs1, immU } = instruction; // immU is csr
-    const { registerSet } = cpu;
-    const orValue = registerSet.getRegister(rs1);
-    const oldValue = cpu.getCSR(immU, orValue);
-    if(rs1 != 0) {
-      const newValue = oldValue | orValue;
-      cpu.setCSR(immU, newValue, orValue);
-    }
-    registerSet.setRegister(rd, oldValue);
-  }],
-  [0x3, (instruction: I_Type, cpu: CPU) => { // csrrc, csrc
-    const { rd, rs1, immU } = instruction; // immU is csr
-    const { registerSet } = cpu;
-    const notValue = registerSet.getRegister(rs1);
-    const oldValue = cpu.getCSR(immU, notValue);
-    const newValue = oldValue & (~notValue);
-    if(notValue != 0) {
-      cpu.setCSR(immU, newValue, notValue);
-    }
-    registerSet.setRegister(rd, oldValue);
-  }],
-  [0x5, (instruction: I_Type, cpu: CPU) => { // csrwi
-    const { rd, rs1, immU } = instruction; // rs1 is imm, immU is csr
-    const { registerSet } = cpu;
-    const newValue = rs1;
-    if(rd != 0) {
-      const oldValue = cpu.getCSR(immU, newValue);
+    },
+  ],
+  [
+    0x3,
+    (instruction: I_Type, cpu: CPU) => {
+      // csrrc, csrc
+      const { rd, rs1, immU } = instruction; // immU is csr
+      const { registerSet } = cpu;
+      const notValue = registerSet.getRegister(rs1);
+      const oldValue = cpu.getCSR(immU, notValue);
+      const newValue = oldValue & ~notValue;
+      if (notValue != 0) {
+        cpu.setCSR(immU, newValue, notValue);
+      }
       registerSet.setRegister(rd, oldValue);
-    }
-    cpu.setCSR(immU, newValue, newValue);
-  }],
-  [0x6, (instruction: I_Type, cpu: CPU) => { // csrrsi, csrsi
-    const { rd, rs1, immU } = instruction; // rs1 is imm, immU is csr
-    const { registerSet } = cpu;
-    const oldValue = cpu.getCSR(immU, rs1);
-    if(rs1 != 0) {
-      const newValue = oldValue | rs1;
-      cpu.setCSR(immU, newValue, rs1);
-    }
-    registerSet.setRegister(rd, oldValue);
-  }],
-  [0x7, (instruction: I_Type, cpu: CPU) => { // csrrci, csrci
-    const { rd, rs1, immU } = instruction; // rs1 is imm, immU is csr
-    const { registerSet } = cpu;
-    const oldValue = cpu.getCSR(immU, rs1);
-    if(rs1 != 0) {
-      const newValue = oldValue & (~rs1);
-      cpu.setCSR(immU, newValue, rs1);
-    }
-    registerSet.setRegister(rd, oldValue);
-  }]
+    },
+  ],
+  [
+    0x5,
+    (instruction: I_Type, cpu: CPU) => {
+      // csrwi
+      const { rd, rs1, immU } = instruction; // rs1 is imm, immU is csr
+      const { registerSet } = cpu;
+      const newValue = rs1;
+      if (rd != 0) {
+        const oldValue = cpu.getCSR(immU, newValue);
+        registerSet.setRegister(rd, oldValue);
+      }
+      cpu.setCSR(immU, newValue, newValue);
+    },
+  ],
+  [
+    0x6,
+    (instruction: I_Type, cpu: CPU) => {
+      // csrrsi, csrsi
+      const { rd, rs1, immU } = instruction; // rs1 is imm, immU is csr
+      const { registerSet } = cpu;
+      const oldValue = cpu.getCSR(immU, rs1);
+      if (rs1 != 0) {
+        const newValue = oldValue | rs1;
+        cpu.setCSR(immU, newValue, rs1);
+      }
+      registerSet.setRegister(rd, oldValue);
+    },
+  ],
+  [
+    0x7,
+    (instruction: I_Type, cpu: CPU) => {
+      // csrrci, csrci
+      const { rd, rs1, immU } = instruction; // rs1 is imm, immU is csr
+      const { registerSet } = cpu;
+      const oldValue = cpu.getCSR(immU, rs1);
+      if (rs1 != 0) {
+        const newValue = oldValue & ~rs1;
+        cpu.setCSR(immU, newValue, rs1);
+      }
+      registerSet.setRegister(rd, oldValue);
+    },
+  ],
 ]);
 
 const r_TypeOpcodeTable: OpcodeFuncTable<R_Type> = new Map([
   [0x2f, opcode0x2ffunc3Table],
-  [0x33, opcode0x33func3Table]
+  [0x33, opcode0x33func3Table],
 ]);
 
 const i_TypeOpcodeTable: OpcodeFuncTable<I_Type> = new Map([
@@ -1320,55 +1600,65 @@ const i_TypeOpcodeTable: OpcodeFuncTable<I_Type> = new Map([
   [0x0f, opcode0x0ffunc3Table],
   [0x13, opcode0x13func3Table],
   [0x67, opcode0x67func3Table],
-  [0x73, opcode0x73func3Table]
+  [0x73, opcode0x73func3Table],
 ]);
 
-const s_TypeOpcodeTable: OpcodeFuncTable<S_Type> = new Map([
-  [0x23, opcode0x23func3Table]
-]);
+const s_TypeOpcodeTable: OpcodeFuncTable<S_Type> = new Map([[0x23, opcode0x23func3Table]]);
 
-const b_TypeOpcodeTable: OpcodeFuncTable<B_Type> = new Map([
-  [0x63, opcode0x63func3Table]
-]);
+const b_TypeOpcodeTable: OpcodeFuncTable<B_Type> = new Map([[0x63, opcode0x63func3Table]]);
 
 const u_TypeOpcodeTable: OpcodeTable<U_Type> = new Map([
-  [0x37, (instruction: U_Type, cpu: CPU) => { // lui
-    const { rd, immU } = instruction;
-    const { registerSet } = cpu;
+  [
+    0x37,
+    (instruction: U_Type, cpu: CPU) => {
+      // lui
+      const { rd, immU } = instruction;
+      const { registerSet } = cpu;
 
-    registerSet.setRegisterU(rd, immU);
-  }],
+      registerSet.setRegisterU(rd, immU);
+    },
+  ],
 
-  [0x17, (instruction: U_Type, cpu: CPU) => { // auipc
-    const { rd, imm } = instruction;
-    const { registerSet } = cpu;
+  [
+    0x17,
+    (instruction: U_Type, cpu: CPU) => {
+      // auipc
+      const { rd, imm } = instruction;
+      const { registerSet } = cpu;
 
-    registerSet.setRegister(rd, imm + cpu.pc);
-  }]
-]); 
+      registerSet.setRegister(rd, imm + cpu.pc);
+    },
+  ],
+]);
 
 const j_TypeOpcodeTable: OpcodeTable<J_Type> = new Map([
-  [0x6F, (instruction: J_Type, cpu: CPU) => {
-    const { rd, imm } = instruction;
-    const { registerSet } = cpu;
+  [
+    0x6f,
+    (instruction: J_Type, cpu: CPU) => {
+      const { rd, imm } = instruction;
+      const { registerSet } = cpu;
 
-    registerSet.setRegister(rd, cpu.pc + cpu.inst_length);
+      registerSet.setRegister(rd, cpu.pc + cpu.inst_length);
 
-    // test for profiler trace magic
-    const magicStart = cpu.pc + cpu.inst_length;
-    if((cpu.chip.readUint16(magicStart) === 0xabcd) && (cpu.chip.readUint16(magicStart + 2) === 0xffff)) {
-      let profTag = "";
-      for(let i = magicStart + 4; 1; i++) {
-        let ch = cpu.chip.readUint8(i);
-        if(ch == 0) break;
-        profTag = profTag + String.fromCharCode(ch);
+      // test for profiler trace magic
+      const magicStart = cpu.pc + cpu.inst_length;
+      if (
+        cpu.chip.readUint16(magicStart) === 0xabcd &&
+        cpu.chip.readUint16(magicStart + 2) === 0xffff
+      ) {
+        let profTag = '';
+        for (let i = magicStart + 4; 1; i++) {
+          let ch = cpu.chip.readUint8(i);
+          if (ch == 0) break;
+          profTag = profTag + String.fromCharCode(ch);
+        }
+        cpu.chip.onTrace(cpu.mhartid, cpu.pc, profTag);
       }
-      cpu.chip.onTrace(cpu.mhartid, cpu.pc, profTag);
-    }
 
-    cpu.next_pc = cpu.pc + imm;
-    cpu.cycles++;
-  }]
+      cpu.next_pc = cpu.pc + imm;
+      cpu.cycles++;
+    },
+  ],
 ]);
 
 const opcodeTypeTable = new Map<number, InstructionType>([
@@ -1383,6 +1673,6 @@ const opcodeTypeTable = new Map<number, InstructionType>([
   [0x37, InstructionType.U], // LUI
   [0x63, InstructionType.B], // BRANCH
   [0x67, InstructionType.I], // JALR
-  [0x6F, InstructionType.J], // ?
+  [0x6f, InstructionType.J], // ?
   [0x73, InstructionType.I], // SYSTEM
-])
+]);
