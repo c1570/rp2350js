@@ -100,12 +100,12 @@ lb
 lbu
 lh
 lhu
-lr.w
 lui
 lw
 max
 min
 minu
+maxu
 mret *
 mul *
 mulh *
@@ -114,6 +114,8 @@ mv
 nop
 not
 or
+ori
+orn
 pack
 packh
 rem *
@@ -204,14 +206,12 @@ cm.mva01s
 cm.mvsa01
 cm.pop
 cm.popretz
-maxu
 mulhsu
 neg
 orc.b
-ori
-orn
 rol
 ror
+lr.w
 sc.w
 sgtz
 unzip
