@@ -47,11 +47,13 @@ const FLASH_SIZE = 16 * MB;
 
 export class RP2350 implements IRPChip {
   readonly bootrom = new Uint32Array((32 >>> 2) * KB);
+  readonly bootromBytes = this.bootrom.length * 4;
   readonly sram = new Uint8Array((256 * 2 + 8) * KB);
-  readonly sramView = new DataView(this.sram.buffer);
+  readonly sram32 = new Uint32Array(this.sram.buffer);
+  readonly sram16 = new Uint16Array(this.sram.buffer);
   readonly flash = new Uint8Array(FLASH_SIZE);
   readonly flash16 = new Uint16Array(this.flash.buffer);
-  readonly flashView = new DataView(this.flash.buffer);
+  readonly flash32 = new Uint32Array(this.flash.buffer);
   readonly usbDPRAM = new Uint8Array(4 * KB);
   readonly usbDPRAMView = new DataView(this.usbDPRAM.buffer);
 
@@ -201,30 +203,29 @@ export class RP2350 implements IRPChip {
         `read from address ${address.toString(16)}, which is not 32 bit aligned`
       );
     }
-
-    const { bootrom } = this;
-    const core = this.isCore0Running ? Core.Core0 : Core.Core1;
-    if (address < bootrom.length * 4) {
-      return bootrom[address / 4];
-    } else if (address >= FLASH_START_ADDRESS && address < RAM_START_ADDRESS) {
-      // XIP mirrors flash four times. Also, reads from invalid adresses
-      // don't seem to trigger exceptions (see Micropython)
-      const offset = address & (FLASH_SIZE - 1);
-      return this.flashView.getUint32(offset, true);
-    } else if (address >= RAM_START_ADDRESS && address < RAM_START_ADDRESS + this.sram.length) {
-      return this.sramView.getUint32(address - RAM_START_ADDRESS, true);
-    } else if (
-      address >= DPRAM_START_ADDRESS &&
-      address < DPRAM_START_ADDRESS + this.usbDPRAM.length
-    ) {
-      return this.usbDPRAMView.getUint32(address - DPRAM_START_ADDRESS, true);
+    if (address >= RAM_START_ADDRESS && address < RAM_START_ADDRESS + this.sram.length) {
+      return this.sram32[(address - RAM_START_ADDRESS) >>> 2];
     } else if (address >= SIO_START_ADDRESS && address < SIO_START_ADDRESS + 0x10000000) {
+      const core = this.isCore0Running ? Core.Core0 : Core.Core1;
       return this.sio.readUint32(address - SIO_START_ADDRESS, core);
     }
 
     const peripheral = this.findPeripheral(address);
     if (peripheral) {
       return peripheral.readUint32(address & 0x3fff);
+    }
+
+    if (address >= FLASH_START_ADDRESS && address < RAM_START_ADDRESS) {
+      // XIP mirrors flash four times. Also, reads from invalid adresses
+      // don't seem to trigger exceptions (see Micropython)
+      return this.flash32[(address & (FLASH_SIZE - 1)) >>> 2];
+    } else if (address < this.bootromBytes) {
+      return this.bootrom[address >>> 2];
+    } else if (
+      address >= DPRAM_START_ADDRESS &&
+      address < DPRAM_START_ADDRESS + this.usbDPRAM.length
+    ) {
+      return this.usbDPRAMView.getUint32(address - DPRAM_START_ADDRESS, true);
     }
 
     throw Error(`${LOG_NAME} Read from invalid memory address: ${address.toString(16)}`);
@@ -238,9 +239,9 @@ export class RP2350 implements IRPChip {
   /** We assume the address is 16-bit aligned */
   readUint16(address: number) {
     if (address >= FLASH_START_ADDRESS && address < RAM_START_ADDRESS) {
-      return this.flashView.getUint16(address & (FLASH_SIZE - 1), true);
+      return this.flash16[(address & (FLASH_SIZE - 1)) >>> 1];
     } else if (address >= RAM_START_ADDRESS && address < RAM_START_ADDRESS + this.sram.length) {
-      return this.sramView.getUint16(address - RAM_START_ADDRESS, true);
+      return this.sram16[(address - RAM_START_ADDRESS) >>> 1];
     }
 
     const value = this.readUint32(address & 0xfffffffc);
@@ -260,33 +261,31 @@ export class RP2350 implements IRPChip {
 
   writeUint32(address: number, value: number) {
     address = address >>> 0;
-    const { bootrom } = this;
-    const core = this.isCore0Running ? Core.Core0 : Core.Core1;
-    const peripheral = this.findPeripheral(address);
-    if (peripheral) {
-      const atomicType = (address & 0x3000) >> 12;
-      const offset = address & 0xfff;
-      peripheral.writeUint32Atomic(offset, value, atomicType);
-    } else if (address < bootrom.length * 4) {
-      bootrom[address / 4] = value;
-    } else if (
-      address >= FLASH_START_ADDRESS &&
-      address < RAM_START_ADDRESS
-    ) {
-      return; // "XIP memory is read-only by default" (writes get downgraded to reads)
-    } else if (address >= RAM_START_ADDRESS && address < RAM_START_ADDRESS + this.sram.length) {
-      this.sramView.setUint32(address - RAM_START_ADDRESS, value, true);
-    } else if (
-      address >= DPRAM_START_ADDRESS &&
-      address < DPRAM_START_ADDRESS + this.usbDPRAM.length
-    ) {
-      const offset = address - DPRAM_START_ADDRESS;
-      this.usbDPRAMView.setUint32(offset, value, true);
-      this.usbCtrl.DPRAMUpdated(offset, value);
+    if (address >= RAM_START_ADDRESS && address < RAM_START_ADDRESS + this.sram.length) {
+      this.sram32[(address - RAM_START_ADDRESS) >>> 2] = value;
     } else if (address >= SIO_START_ADDRESS && address < SIO_START_ADDRESS + 0x10000000) {
+      const core = this.isCore0Running ? Core.Core0 : Core.Core1;
       this.sio.writeUint32(address - SIO_START_ADDRESS, value, core);
     } else {
-      throw Error(`${LOG_NAME} Write to invalid memory address: ${address.toString(16)}`);
+      const peripheral = this.findPeripheral(address);
+      if (peripheral) {
+        const atomicType = (address & 0x3000) >> 12;
+        const offset = address & 0xfff;
+        peripheral.writeUint32Atomic(offset, value, atomicType);
+      } else if (address >= FLASH_START_ADDRESS && address < RAM_START_ADDRESS) {
+        return; // "XIP memory is read-only by default" (writes get downgraded to reads)
+      } else if (address < this.bootromBytes) {
+        this.bootrom[address >>> 2] = value;
+      } else if (
+        address >= DPRAM_START_ADDRESS &&
+        address < DPRAM_START_ADDRESS + this.usbDPRAM.length
+      ) {
+        const offset = address - DPRAM_START_ADDRESS;
+        this.usbDPRAMView.setUint32(offset, value, true);
+        this.usbCtrl.DPRAMUpdated(offset, value);
+      } else {
+        throw Error(`${LOG_NAME} Write to invalid memory address: ${address.toString(16)}`);
+      }
     }
   }
 
@@ -300,7 +299,6 @@ export class RP2350 implements IRPChip {
     }
 
     const alignedAddress = (address & 0xfffffffc) >>> 0;
-    const offset = address & 0x3;
     const peripheral = this.findPeripheral(address);
     if (peripheral) {
       const atomicType = (alignedAddress & 0x3000) >> 12;
@@ -312,10 +310,12 @@ export class RP2350 implements IRPChip {
       );
       return;
     }
+    const shift = (address & 0x3) << 3;
     const originalValue = this.readUint32(alignedAddress);
-    const newValue = new Uint32Array([originalValue]);
-    new DataView(newValue.buffer).setUint8(offset, value);
-    this.writeUint32(alignedAddress, newValue[0]);
+    this.writeUint32(
+      alignedAddress,
+      (originalValue & ~(0xff << shift)) | ((value & 0xff) << shift)
+    );
   }
 
   writeUint16(address: number, value: number) {
@@ -323,7 +323,7 @@ export class RP2350 implements IRPChip {
     // Ideally we should generate a fault if not!
 
     if (address >= RAM_START_ADDRESS && address < RAM_START_ADDRESS + this.sram.length) {
-      this.sramView.setUint16(address - RAM_START_ADDRESS, value, true);
+      this.sram16[(address - RAM_START_ADDRESS) >>> 1] = value;
       return;
     }
     if (address >= FLASH_START_ADDRESS && address < RAM_START_ADDRESS) {
@@ -331,7 +331,6 @@ export class RP2350 implements IRPChip {
     }
 
     const alignedAddress = (address & 0xfffffffc) >>> 0;
-    const offset = address & 0x3;
     const peripheral = this.findPeripheral(address);
     if (peripheral) {
       const atomicType = (alignedAddress & 0x3000) >> 12;
@@ -339,10 +338,12 @@ export class RP2350 implements IRPChip {
       peripheral.writeUint32Atomic(offset, (value & 0xffff) | ((value & 0xffff) << 16), atomicType);
       return;
     }
+    const shift = (address & 0x3) << 3;
     const originalValue = this.readUint32(alignedAddress);
-    const newValue = new Uint32Array([originalValue]);
-    new DataView(newValue.buffer).setUint16(offset, value, true);
-    this.writeUint32(alignedAddress, newValue[0]);
+    this.writeUint32(
+      alignedAddress,
+      (originalValue & ~(0xffff << shift)) | ((value & 0xffff) << shift)
+    );
   }
 
   dma_clearDREQ(dreq: number) {
