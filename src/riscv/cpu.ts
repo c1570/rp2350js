@@ -595,44 +595,28 @@ function signExtend16(value: number) {
 }
 
 export class RegisterSet {
-  private registerBuffer: ArrayBuffer;
-  private registerView: DataView;
+  private regs: Int32Array;
 
   constructor(numRegisters: number) {
-    this.registerBuffer = new ArrayBuffer(numRegisters * 4);
-    this.registerView = new DataView(this.registerBuffer);
+    this.regs = new Int32Array(numRegisters);
   }
 
   getRegister(index: number): number {
-    if (index === 0) {
-      return 0;
-    }
-
-    return this.registerView.getInt32(index * 4, true);
+    return index === 0 ? 0 : this.regs[index];
   }
 
   getRegisterU(index: number): number {
-    if (index === 0) {
-      return 0;
-    }
-
-    return this.registerView.getUint32(index * 4, true);
+    return index === 0 ? 0 : this.regs[index] >>> 0;
   }
 
   setRegister(index: number, value: number): void {
-    if (index === 0) {
-      return;
-    }
-
-    this.registerView.setInt32(index * 4, value, true);
+    // setRegister and setRegisterU are identical: Int32Array stores apply
+    // ToInt32, which preserves all 32 bits regardless of signedness.
+    if (index !== 0) this.regs[index] = value;
   }
 
   setRegisterU(index: number, value: number): void {
-    if (index === 0) {
-      return;
-    }
-
-    this.registerView.setUint32(index * 4, value, true);
+    if (index !== 0) this.regs[index] = value;
   }
 }
 
