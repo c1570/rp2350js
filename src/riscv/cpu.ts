@@ -1,16 +1,28 @@
-import {
-  B_Type,
-  I_Type,
-  Instruction,
-  InstructionType,
-  J_Type,
-  R_Type,
-  S_Type,
-  U_Type,
-} from './Assembler/instruction';
-import { getRange } from './binaryFunctions';
 import { IRPChip } from '../rpchip';
-import { decompress_rv32c_inst } from './rv32c';
+import { executeRv32c } from './rv32c';
+
+const opcode = (i: number) => i & 0x7f;
+const rd = (i: number) => (i >>> 7) & 0x1f;
+const func3 = (i: number) => (i >>> 12) & 0x7;
+const rs1 = (i: number) => (i >>> 15) & 0x1f;
+const rs2 = (i: number) => (i >>> 20) & 0x1f;
+const func7 = (i: number) => (i >>> 25) & 0x7f;
+const shamt = (i: number) => (i >>> 20) & 0x1f; // same bits as rs2 in shift-imm encodings
+
+const imm_i = (i: number) => i >> 20; // I-type, signed
+const immU_i = (i: number) => (i >>> 20) & 0xfff; // I-type, raw 12-bit
+const imm_s = (i: number) => ((i >> 25) << 5) | ((i >>> 7) & 0x1f); // S-type, signed
+const imm_b = (i: number) =>
+  ((i >> 31) << 12) |
+  (((i >>> 7) & 1) << 11) |
+  (((i >>> 25) & 0x3f) << 5) |
+  (((i >>> 8) & 0xf) << 1); // B-type, signed
+const imm_u = (i: number) => i & 0xfffff000; // U-type (bits[31:12] in place)
+const imm_j = (i: number) =>
+  ((i >> 31) << 20) |
+  (((i >>> 12) & 0xff) << 12) |
+  (((i >>> 20) & 1) << 11) |
+  (((i >>> 21) & 0x3ff) << 1); // J-type, signed
 
 enum ExecutionMode {
   Mode_Machine,
@@ -79,21 +91,22 @@ export class CPU {
   inst_length = 0;
 
   private fetchInstruction(): number {
-    let inst = this.chip.readUint16(this.pc);
+    const inst = this.chip.readUint16(this.pc);
     if ((inst & 3) != 3) {
       if (inst == 0) {
         throw Error(`Illegal 16 bit instruction 0 at 0x${this.pc.toString(16)}`);
       }
-
-      inst = decompress_rv32c_inst(this, inst);
+      // RV32C: execute the decompressed instruction inline and return a
+      // sentinel; step() will skip dispatch and only run the PC-update logic.
+      executeRv32c(this, inst);
       this.inst_length = 2;
-    } else {
-      // we have a 32 bit instruction
-      inst |= this.chip.readUint16(this.pc + 2) << 16;
-      if (this.did_just_jump && this.pc & 3) this.cycles++; // jumped to non 32 bit aligned instr
-      this.inst_length = 4;
+      return 0;
     }
-    return inst >>> 0;
+    // 32-bit instruction: fetch the remaining two bytes
+    const full = (inst | (this.chip.readUint16(this.pc + 2) << 16)) >>> 0;
+    if (this.did_just_jump && this.pc & 3) this.cycles++; // jumped to non 32 bit aligned instr
+    this.inst_length = 4;
+    return full;
   }
 
   printDisassembly() {
@@ -126,38 +139,60 @@ export class CPU {
   }
 
   step(instruction: number) {
-    const instructionType = opcodeTypeTable.get(getRange(instruction, 6, 0));
-
-    switch (instructionType as InstructionType) {
-      case InstructionType.R:
-        this.executeR_Type(new R_Type({ binary: instruction }));
-        break;
-      case InstructionType.I:
-        this.executeI_Type(new I_Type({ binary: instruction }));
-        break;
-      case InstructionType.S:
-        this.executeS_Type(new S_Type({ binary: instruction }));
-        break;
-      case InstructionType.B:
-        this.executeB_Type(new B_Type({ binary: instruction }));
-        break;
-      case InstructionType.U:
-        this.executeU_Type(new U_Type({ binary: instruction }));
-        break;
-      case InstructionType.J:
-        this.executeJ_Type(new J_Type({ binary: instruction }));
-        break;
-      case InstructionType.CUSTOM0:
-        this.executeCustom0_Type(instruction);
-        break;
-      default:
-        throw Error(
-          `Invalid instruction: 0x${instruction.toString(16)} at 0x${this.pc.toString(
-            16
-          )}, OpcodeType 0x${getRange(instruction, 6, 0).toString(16)}`
-        );
-        break;
-    }
+    // 0 = sentinel from fetchInstruction() meaning the compressed instruction
+    // was already executed inline by executeRv32c(); skip dispatch but still
+    // run the PC-update logic below.
+    if (instruction !== 0) {
+      // Cascaded switch on opcode (bits[6:0]); each case dispatches to a
+      // per-opcode executor that pre-extracts the relevant fields once.
+      switch (instruction & 0x7f) {
+        case 0x03:
+          executeLoad(instruction, this);
+          break; // LOAD
+        case 0x0f:
+          executeMiscMem(instruction, this);
+          break; // MISC-MEM
+        case 0x13:
+          executeOpImm(instruction, this);
+          break; // OP-IMM
+        case 0x17:
+          executeAuipc(instruction, this);
+          break; // AUIPC
+        case 0x23:
+          executeStore(instruction, this);
+          break; // STORE
+        case 0x2f:
+          executeAmo(instruction, this);
+          break; // AMO
+        case 0x33:
+          executeOp(instruction, this);
+          break; // OP
+        case 0x37:
+          executeLui(instruction, this);
+          break; // LUI
+        case 0x63:
+          executeBranch(instruction, this);
+          break; // BRANCH
+        case 0x67:
+          executeJalr(instruction, this);
+          break; // JALR
+        case 0x6f:
+          executeJal(instruction, this);
+          break; // JAL
+        case 0x73:
+          executeSystem(instruction, this);
+          break; // SYSTEM
+        case 0x0b:
+          executeCustom0(instruction, this);
+          break; // CUSTOM0
+        default:
+          throw Error(
+            `Invalid instruction: 0x${instruction.toString(16)} at 0x${this.pc.toString(
+              16
+            )}, opcode 0x${(instruction & 0x7f).toString(16)}`
+          );
+      }
+    } // end if (instruction !== 0)
 
     if (this.next_pc != 0) {
       this.pc = this.next_pc;
@@ -334,117 +369,6 @@ export class CPU {
     if (taken) {
       this.cycles++;
       if (jumped_back) this.btb = from_pc; // new backwards branch
-    }
-  }
-
-  private executeR_Type(instruction: R_Type) {
-    const { opcode, func3 } = instruction;
-
-    // Get func3 lookup table for R_Type instructions
-    const funcTable = r_TypeOpcodeTable.get(opcode);
-
-    const operation = funcTable?.get(func3);
-
-    if (operation !== undefined) {
-      operation(instruction, this);
-    } else {
-      throw Error(`Invalid Instruction opcode 0x${opcode.toString(16)}, func3 ${func3}`);
-    }
-  }
-
-  private executeI_Type(instruction: I_Type) {
-    const { opcode, func3 } = instruction;
-
-    // Get func3 lookup table for I_Type instructions
-    const funcTable = i_TypeOpcodeTable.get(opcode);
-
-    const operation = funcTable?.get(func3);
-
-    if (operation !== undefined) {
-      operation(instruction, this);
-    } else {
-      throw Error(`Invalid Instruction opcode 0x${opcode.toString(16)}, func3 ${func3}`);
-    }
-  }
-
-  private executeS_Type(instruction: S_Type) {
-    const { opcode, func3 } = instruction;
-
-    // Get func3 lookup table for S_Type instructions
-    const funcTable = s_TypeOpcodeTable.get(opcode);
-
-    const operation = funcTable?.get(func3);
-
-    if (operation !== undefined) {
-      operation(instruction, this);
-    } else {
-      throw Error(`Invalid Instruction opcode 0x${opcode.toString(16)}, func3 ${func3}`);
-    }
-  }
-
-  private executeB_Type(instruction: B_Type) {
-    const { opcode, func3 } = instruction;
-
-    // Get func3 lookup table for B_Type instructions
-    const funcTable = b_TypeOpcodeTable.get(opcode);
-
-    const operation = funcTable?.get(func3);
-
-    if (operation !== undefined) {
-      operation(instruction, this);
-    } else {
-      throw Error(`Invalid Instruction opcode 0x${opcode.toString(16)}, func3 ${func3}`);
-    }
-  }
-
-  private executeU_Type(instruction: U_Type) {
-    const { opcode } = instruction;
-
-    // Get lookup table for U_Type instructions
-    const operation = u_TypeOpcodeTable.get(opcode);
-
-    if (operation !== undefined) {
-      operation(instruction, this);
-    } else {
-      throw Error(`Invalid Instruction opcode 0x${opcode.toString(16)}`);
-    }
-  }
-
-  private executeJ_Type(instruction: J_Type) {
-    const { opcode } = instruction;
-
-    // Get lookup table for J_Type instructions
-    const operation = j_TypeOpcodeTable.get(opcode);
-
-    if (operation !== undefined) {
-      operation(instruction, this);
-    } else {
-      throw Error(`Invalid Instruction opcode 0x${opcode.toString(16)}`);
-    }
-  }
-
-  private executeCustom0_Type(instruction: number) {
-    const c_ident = instruction & 0b11100010000000000111000001111111;
-    if (c_ident === 0b00000000000000000000000000001011) {
-      // h3.bextm
-      const size = (instruction >>> 26) & 0b111;
-      const rs2 = (instruction >>> 20) & 0b11111;
-      const rs1 = (instruction >>> 15) & 0b11111;
-      const rd = (instruction >>> 7) & 0b11111;
-      let value = this.registerSet.getRegisterU(rs1) >>> this.registerSet.getRegisterU(rs2);
-      value &= (2 << size) - 1;
-      this.registerSet.setRegisterU(rd, value);
-    } else if (c_ident === 0b00000000000000000100000000001011) {
-      // h3.bextmi
-      const size = (instruction >>> 26) & 0b111;
-      const rs2 = (instruction >>> 20) & 0b11111;
-      const rs1 = (instruction >>> 15) & 0b11111;
-      const rd = (instruction >>> 7) & 0b11111;
-      let value = this.registerSet.getRegisterU(rs1) >>> rs2;
-      value &= (2 << size) - 1;
-      this.registerSet.setRegisterU(rd, value);
-    } else {
-      throw Error(`Invalid Instruction opcode 0x${instruction.toString(16)}`);
     }
   }
 
@@ -712,967 +636,494 @@ export class RegisterSet {
   }
 }
 
-type OpcodeTable<T extends Instruction> = Map<number, (instruction: T, cpu: CPU) => void>;
-type OpcodeFuncTable<T extends Instruction> = Map<
-  number,
-  Map<number, (instruction: T, cpu: CPU) => void>
->;
-type FuncTable<T extends Instruction> = Map<number, (instruction: T, cpu: CPU) => void>;
+// LOAD (0x03) - I-type
+function executeLoad(inst: number, cpu: CPU) {
+  const r = rd(inst),
+    s1 = rs1(inst),
+    im = imm_i(inst);
+  const addr = cpu.registerSet.getRegisterU(s1) + im;
+  switch (func3(inst)) {
+    case 0x0:
+      cpu.registerSet.setRegister(r, signExtend8(cpu.chip.readUint8(addr)));
+      break; // lb
+    case 0x1:
+      cpu.registerSet.setRegister(r, signExtend16(cpu.chip.readUint16(addr)));
+      break; // lh
+    case 0x2:
+      cpu.registerSet.setRegisterU(r, cpu.chip.readUint32(addr));
+      break; // lw
+    case 0x4:
+      cpu.registerSet.setRegister(r, cpu.chip.readUint8(addr));
+      break; // lbu
+    case 0x5:
+      cpu.registerSet.setRegister(r, cpu.chip.readUint16(addr));
+      break; // lhu
+    default:
+      throw Error(`Invalid LOAD func3 ${func3(inst)}`);
+  }
+}
 
-const opcode0x03func3Table: FuncTable<I_Type> = new Map([
-  [
-    0x0,
-    (instruction: I_Type, cpu: CPU) => {
-      // lb
-      const { registerSet, chip } = cpu;
-      const { rd, rs1, imm } = instruction;
-      const rs1Value = registerSet.getRegisterU(rs1);
+// MISC-MEM (0x0f) - fence / fence.i are no-ops here
+function executeMiscMem(inst: number, cpu: CPU) {
+  // intentionally empty
+}
 
-      const byte = signExtend8(chip.readUint8(rs1Value + imm));
-      registerSet.setRegister(rd, byte);
-    },
-  ],
-
-  [
-    0x1,
-    (instruction: I_Type, cpu: CPU) => {
-      // lh
-      const { registerSet, chip } = cpu;
-      const { rd, rs1, imm } = instruction;
-      const rs1Value = registerSet.getRegisterU(rs1);
-
-      const half = signExtend16(chip.readUint16(rs1Value + imm));
-      registerSet.setRegister(rd, half);
-    },
-  ],
-
-  [
-    0x2,
-    (instruction: I_Type, cpu: CPU) => {
-      // lw
-      const { registerSet, chip } = cpu;
-      const { rd, rs1, imm } = instruction;
-      const rs1Value = registerSet.getRegisterU(rs1);
-
-      const word = chip.readUint32(rs1Value + imm);
-      registerSet.setRegisterU(rd, word);
-    },
-  ],
-
-  [
-    0x4,
-    (instruction: I_Type, cpu: CPU) => {
-      // lbu
-      const { registerSet, chip } = cpu;
-      const { rd, rs1, imm } = instruction;
-      const rs1Value = registerSet.getRegisterU(rs1);
-
-      const byte = chip.readUint8(rs1Value + imm);
-      registerSet.setRegister(rd, byte);
-    },
-  ],
-
-  [
-    0x5,
-    (instruction: I_Type, cpu: CPU) => {
-      // lhu
-      const { registerSet, chip } = cpu;
-      const { rd, rs1, imm } = instruction;
-      const rs1Value = registerSet.getRegisterU(rs1);
-
-      const half = chip.readUint16(rs1Value + imm);
-      registerSet.setRegister(rd, half);
-    },
-  ],
-]);
-
-const opcode0x0ffunc3Table: FuncTable<I_Type> = new Map([
-  [
-    0x0,
-    (instruction: I_Type, cpu: CPU) => {
-      // TODO FENCE
-      const { registerSet, chip } = cpu;
-      const { rd, rs1, imm } = instruction;
-      const rs1Value = registerSet.getRegister(rs1);
-
-      //console.log("FENCE not implemented");
-    },
-  ],
-  [
-    0x1,
-    (instruction: I_Type, cpu: CPU) => {
-      // TODO FENCE.I
-      const { registerSet, chip } = cpu;
-      const { rd, rs1, imm } = instruction;
-      const rs1Value = registerSet.getRegister(rs1);
-
-      //console.log("FENCE.I not implemented");
-    },
-  ],
-]);
-
-const opcode0x13func3Table: FuncTable<I_Type> = new Map([
-  [
-    0x0,
-    (instruction: I_Type, cpu: CPU) => {
-      // addi
-      const { rd, rs1, imm } = instruction;
-      const { registerSet } = cpu;
-
-      const rs1Value = registerSet.getRegisterU(rs1);
-
-      const result = (rs1Value + imm) >>> 0; // make sure 0x80000000 - 1 works
-
-      registerSet.setRegisterU(rd, result);
-    },
-  ],
-
-  [
-    0x1,
-    (instruction: I_Type, cpu: CPU) => {
-      const { rd, rs1, func7, immU, shamt } = instruction;
-      const { registerSet } = cpu;
-
-      if (func7 === 0) {
-        // slli
-        const rs1Value = registerSet.getRegisterU(rs1);
-        const result = rs1Value << shamt;
-        registerSet.setRegisterU(rd, result);
-      } else if (func7 === 0x14) {
-        // bseti (Zbb)
-        const rs1Value = registerSet.getRegister(rs1);
-        const result = rs1Value | (1 << shamt);
-        registerSet.setRegister(rd, result);
-      } else if (func7 === 0x24) {
-        // bclri (Zbs)
-        const rs1Value = registerSet.getRegister(rs1);
-        const result = rs1Value & ~(1 << shamt);
-        registerSet.setRegister(rd, result);
-      } else if (func7 === 0x34) {
-        // binvi (Zbs)
-        const rs1Value = registerSet.getRegister(rs1);
-        const result = rs1Value ^ (1 << shamt);
-        registerSet.setRegister(rd, result);
-      } else if (immU === 0b011000000001) {
+// OP-IMM (0x13) - I-type; func3=1 and func3=5 carry sub-encodings via func7
+// and Zbb unary-op selectors (immU).
+function executeOpImm(inst: number, cpu: CPU) {
+  const r = rd(inst),
+    s1 = rs1(inst);
+  const rs = cpu.registerSet;
+  switch (func3(inst)) {
+    case 0x0: // addi
+      rs.setRegisterU(r, (rs.getRegisterU(s1) + imm_i(inst)) >>> 0);
+      break;
+    case 0x1: {
+      // slli / bseti / bclri / binvi / clz / ctz / cpop / sext.b / sext.h
+      const sh = shamt(inst),
+        f7 = func7(inst),
+        imu = immU_i(inst);
+      if (f7 === 0x00) rs.setRegisterU(r, rs.getRegisterU(s1) << sh); // slli
+      else if (f7 === 0x14) rs.setRegister(r, rs.getRegister(s1) | (1 << sh)); // bseti (Zbs)
+      else if (f7 === 0x24) rs.setRegister(r, rs.getRegister(s1) & ~(1 << sh)); // bclri
+      else if (f7 === 0x34) rs.setRegister(r, rs.getRegister(s1) ^ (1 << sh)); // binvi
+      else if (imu === 0b011000000001) {
         // ctz (Zbb)
-        const rs1Value = registerSet.getRegister(rs1);
-        let tmp = rs1Value >>> 0;
-        if (tmp === 0) {
-          registerSet.setRegister(rd, 32);
-        } else {
-          tmp &= -tmp;
-          tmp = 31 - Math.clz32(tmp);
-          registerSet.setRegister(rd, tmp);
-        }
-      } else if (immU === 0b011000000010) {
+        const t = rs.getRegister(s1) >>> 0;
+        rs.setRegister(r, t === 0 ? 32 : 31 - Math.clz32(t & -t));
+      } else if (imu === 0b011000000010) {
         // cpop (Zbb)
-        const rs1Value = registerSet.getRegister(rs1);
-        let tmp = rs1Value >>> 0;
-        tmp = tmp - ((tmp >> 1) & 0x55555555);
-        tmp = (tmp & 0x33333333) + ((tmp >> 2) & 0x33333333);
-        tmp = (((tmp + (tmp >> 4)) & 0xf0f0f0f) * 0x1010101) >> 24;
-        registerSet.setRegister(rd, tmp);
-      } else if (immU === 0b011000000101) {
+        let t = rs.getRegister(s1) >>> 0;
+        t = t - ((t >> 1) & 0x55555555);
+        t = (t & 0x33333333) + ((t >> 2) & 0x33333333);
+        rs.setRegister(r, (((t + (t >> 4)) & 0xf0f0f0f) * 0x1010101) >> 24);
+      } else if (imu === 0b011000000101) {
         // sext.h (Zbb)
-        const rs1Value = registerSet.getRegisterU(rs1);
-        const value = signExtend16(rs1Value & 0xffff);
-        registerSet.setRegister(rd, value);
-      } else if (immU === 0b011000000100) {
+        rs.setRegister(r, signExtend16(rs.getRegisterU(s1) & 0xffff));
+      } else if (imu === 0b011000000100) {
         // sext.b (Zbb)
-        const rs1Value = registerSet.getRegisterU(rs1);
-        const value = signExtend8(rs1Value & 0xff);
-        registerSet.setRegister(rd, value);
+        rs.setRegister(r, signExtend8(rs.getRegisterU(s1) & 0xff));
       } else if (
-        (instruction.binary & 0b11111111111100000111000001111111) ===
+        (inst & 0b11111111111100000111000001111111) ===
         0b01100000000000000001000000010011
       ) {
-        // clz (Zbb)
-        const rs1Value = registerSet.getRegisterU(rs1);
-        const lzc = Math.clz32(rs1Value);
-        registerSet.setRegister(rd, lzc);
-      } else throw Error(`Unknown instruction, func7: 0x${func7.toString(16)}`);
-    },
-  ],
-
-  [
-    0x2,
-    (instruction: I_Type, cpu: CPU) => {
-      // slti
-      const { rd, rs1, imm } = instruction;
-      const { registerSet } = cpu;
-
-      const rs1Value = registerSet.getRegister(rs1);
-
-      const result = rs1Value < imm ? 1 : 0;
-      registerSet.setRegister(rd, result);
-    },
-  ],
-
-  [
-    0x3,
-    (instruction: I_Type, cpu: CPU) => {
-      // sltiu
-      const { rd, rs1, immU } = instruction;
-      const { registerSet } = cpu;
-
-      const rs1Value = registerSet.getRegisterU(rs1);
-
-      const result = rs1Value < immU ? 1 : 0;
-      registerSet.setRegister(rd, result);
-    },
-  ],
-
-  [
-    0x4,
-    (instruction: I_Type, cpu: CPU) => {
-      // xori
-      const { rd, rs1, imm } = instruction;
-      const { registerSet } = cpu;
-
-      const rs1Value = registerSet.getRegister(rs1);
-
-      const result = rs1Value ^ imm;
-
-      registerSet.setRegister(rd, result);
-    },
-  ],
-
-  [
-    0x5,
-    (instruction: I_Type, cpu: CPU) => {
-      const { rd, rs1, imm, func7, shamt } = instruction;
-      const { registerSet } = cpu;
-
-      const rs1Value = registerSet.getRegister(rs1);
-
-      if (func7 === 0x00) {
-        // srli
-        const result = rs1Value >>> shamt;
-        registerSet.setRegister(rd, result);
-      } else if (func7 === 0x20) {
-        // srai
-        const result = rs1Value >> shamt;
-        registerSet.setRegister(rd, result);
-      } else if (func7 === 0x24) {
-        // bexti (Zbs)
-        const result = (rs1Value >>> shamt) & 1;
-        registerSet.setRegister(rd, result);
-      } else if (func7 === 0x30) {
+        rs.setRegister(r, Math.clz32(rs.getRegisterU(s1))); // clz (Zbb)
+      } else throw Error(`Unknown OP-IMM func3=1, func7: 0x${f7.toString(16)}`);
+      break;
+    }
+    case 0x2:
+      rs.setRegister(r, rs.getRegister(s1) < imm_i(inst) ? 1 : 0);
+      break; // slti
+    case 0x3:
+      rs.setRegister(r, rs.getRegisterU(s1) < immU_i(inst) ? 1 : 0);
+      break; // sltiu
+    case 0x4:
+      rs.setRegister(r, rs.getRegister(s1) ^ imm_i(inst));
+      break; // xori
+    case 0x5: {
+      // srli / srai / bexti / rori / rev8
+      const sh = shamt(inst),
+        f7 = func7(inst),
+        v = rs.getRegister(s1);
+      if (f7 === 0x00) rs.setRegister(r, v >>> sh); // srli
+      else if (f7 === 0x20) rs.setRegister(r, v >> sh); // srai
+      else if (f7 === 0x24) rs.setRegister(r, (v >>> sh) & 1); // bexti (Zbs)
+      else if (f7 === 0x30) {
         // rori (Zbs)
-        const rs1Val = registerSet.getRegisterU(rs1);
-        const result = ((rs1Val << (32 - shamt)) >>> 0) | (rs1Val >>> shamt);
-        registerSet.setRegister(rd, result);
-      } else if (func7 === 0x34) {
+        const u = rs.getRegisterU(s1);
+        rs.setRegister(r, ((u << (32 - sh)) >>> 0) | (u >>> sh));
+      } else if (f7 === 0x34) {
         // rev8 (Zbb)
-        const result =
-          (rs1Value >>> 24) |
-          ((rs1Value >>> 8) & 0xff00) |
-          ((rs1Value << 8) & 0xff0000) |
-          (((rs1Value & 0xff) << 24) >>> 0);
-        registerSet.setRegisterU(rd, result >>> 0);
-      } else throw Error(`Unknown instruction, func7: 0x${func7.toString(16)}`);
-    },
-  ],
+        rs.setRegisterU(
+          r,
+          ((v >>> 24) |
+            ((v >>> 8) & 0xff00) |
+            ((v << 8) & 0xff0000) |
+            (((v & 0xff) << 24) >>> 0)) >>>
+            0
+        );
+      } else throw Error(`Unknown OP-IMM func3=5, func7: 0x${f7.toString(16)}`);
+      break;
+    }
+    case 0x6:
+      rs.setRegister(r, rs.getRegister(s1) | imm_i(inst));
+      break; // ori
+    case 0x7:
+      rs.setRegister(r, rs.getRegister(s1) & imm_i(inst));
+      break; // andi
+    default:
+      throw Error(`Invalid OP-IMM func3 ${func3(inst)}`);
+  }
+}
 
-  [
-    0x6,
-    (instruction: I_Type, cpu: CPU) => {
-      // ori
-      const { rd, rs1, imm } = instruction;
-      const { registerSet } = cpu;
+// STORE (0x23) - S-type
+function executeStore(inst: number, cpu: CPU) {
+  const s1 = rs1(inst),
+    s2 = rs2(inst);
+  const addr = cpu.registerSet.getRegister(s1) + imm_s(inst);
+  const v = cpu.registerSet.getRegister(s2);
+  switch (func3(inst)) {
+    case 0x0:
+      cpu.chip.writeUint8(addr, v & 0xff);
+      break; // sb
+    case 0x1:
+      cpu.chip.writeUint16(addr, v & 0xffff);
+      break; // sh
+    case 0x2:
+      cpu.chip.writeUint32(addr, v);
+      break; // sw
+    default:
+      throw Error(`Invalid STORE func3 ${func3(inst)}`);
+  }
+}
 
-      const rs1Value = registerSet.getRegister(rs1);
+// AMO (0x2f) - R-type; only func3=0x2 implemented
+function executeAmo(inst: number, cpu: CPU) {
+  if (func3(inst) !== 0x2) throw Error(`Invalid AMO func3 ${func3(inst)}`);
+  const r = rd(inst),
+    s1 = rs1(inst),
+    s2 = rs2(inst),
+    f7 = func7(inst);
+  const rs = cpu.registerSet,
+    chip = cpu.chip;
+  const addr = rs.getRegisterU(s1);
+  const v = rs.getRegisterU(s2);
+  const mem = chip.readUint32(addr);
+  rs.setRegisterU(r, mem);
+  if (f7 === 0x04) chip.writeUint32(addr, v); // amoswap.w
+  else if (f7 === 0x20 || f7 === 0x22) chip.writeUint32(addr, mem | v); // amoor.w(.aq)
+  else if (f7 === 0x30) chip.writeUint32(addr, mem & v); // amoand.w
+  else throw Error(`Unknown AMO func7: 0x${f7.toString(16)}`);
+  cpu.cycles += 3;
+}
 
-      const result = rs1Value | imm;
-      registerSet.setRegister(rd, result);
-    },
-  ],
-
-  [
-    0x7,
-    (instruction: I_Type, cpu: CPU) => {
-      // andi
-      const { rd, rs1, imm } = instruction;
-      const { registerSet } = cpu;
-
-      const rs1Value = registerSet.getRegister(rs1);
-
-      const result = rs1Value & imm;
-      registerSet.setRegister(rd, result);
-    },
-  ],
-]);
-
-const opcode0x23func3Table: FuncTable<S_Type> = new Map([
-  [
-    0x0,
-    (instruction: S_Type, cpu: CPU) => {
-      const { rs1, rs2, imm } = instruction;
-      const { registerSet, chip } = cpu;
-
-      const rs1Value = registerSet.getRegister(rs1);
-      const rs2Value = registerSet.getRegister(rs2);
-
-      const byte = getRange(rs2Value, 7, 0);
-
-      chip.writeUint8(rs1Value + imm, byte); //CHECK Int8?
-    },
-  ],
-
-  [
-    0x1,
-    (instruction: S_Type, cpu: CPU) => {
-      const { rs1, rs2, imm } = instruction;
-      const { registerSet, chip } = cpu;
-
-      const rs1Value = registerSet.getRegister(rs1);
-      const rs2Value = registerSet.getRegister(rs2);
-
-      const half = getRange(rs2Value, 15, 0);
-
-      chip.writeUint16(rs1Value + imm, half); //CHECK Int16?
-    },
-  ],
-
-  [
-    0x2,
-    (instruction: S_Type, cpu: CPU) => {
-      const { rs1, rs2, imm } = instruction;
-      const { registerSet, chip } = cpu;
-
-      const rs1Value = registerSet.getRegister(rs1);
-      const rs2Value = registerSet.getRegister(rs2);
-
-      chip.writeUint32(rs1Value + imm, rs2Value); //CHECK Int32?
-    },
-  ],
-]);
-
-const opcode0x2ffunc3Table: FuncTable<R_Type> = new Map([
-  [
-    0x2,
-    (instruction: R_Type, cpu: CPU) => {
-      const { rd, rs1, rs2, func7 } = instruction;
-      const { registerSet, chip } = cpu;
-
-      const rs1Value = registerSet.getRegisterU(rs1);
-      const rs2Value = registerSet.getRegisterU(rs2);
-      if (func7 === 0x4) {
-        // amoswap.w (rv32a)
-        // 08a5a52f amoswap.w a0,a0,(a1)
-        const rs1Mem = chip.readUint32(rs1Value);
-        const value = rs2Value;
-        registerSet.setRegisterU(rd, rs1Mem);
-        chip.writeUint32(rs1Value, value);
-        cpu.cycles += 3;
-      } else if (func7 === 0x22 || func7 === 0x20) {
-        // amoor.w.aq and amoor.w (rv32a)
-        // 44e7a6af amoor.w.aq a3,a4,(a5)
-        // 40c3a52f amoor.w a0,a2,(t2)
-        const rs1Mem = chip.readUint32(rs1Value);
-        registerSet.setRegisterU(rd, rs1Mem);
-        const value = rs1Mem | rs2Value;
-        chip.writeUint32(rs1Value, value);
-        cpu.cycles += 3;
-      } else if (func7 === 0x30) {
-        // amoand.w (rv32a)
-        // 60b7a02f amoand.w zero,a1,(a5)
-        const rs1Mem = chip.readUint32(rs1Value);
-        registerSet.setRegisterU(rd, rs1Mem);
-        const value = rs1Mem & rs2Value;
-        chip.writeUint32(rs1Value, value);
-        cpu.cycles += 3;
-      } else throw Error(`Unknown instruction, func7: 0x${func7.toString(16)}`);
-    },
-  ],
-]);
-
-const opcode0x33func3Table: FuncTable<R_Type> = new Map([
-  [
-    0x0,
-    (instruction: R_Type, cpu: CPU) => {
-      const { rd, rs1, rs2, func7 } = instruction;
-      const { registerSet } = cpu;
-
-      const rs1Value = registerSet.getRegister(rs1);
-      const rs2Value = registerSet.getRegister(rs2);
-
-      if (func7 === 0x00) {
-        const sum = rs1Value + rs2Value;
-        registerSet.setRegister(rd, sum);
-      } else if (func7 === 0x20) {
-        const difference = registerSet.getRegister(rs1) - registerSet.getRegister(rs2);
-        registerSet.setRegister(rd, difference);
-      } else if (func7 === 0x1) {
-        // mul (rv32m)
-        const result = registerSet.getRegister(rs1) * registerSet.getRegister(rs2);
-        registerSet.setRegister(rd, result & 0xffffffff); // FIXME check sign
-      } else throw Error(`Unknown instruction, func7: 0x${func7.toString(16)}`);
-    },
-  ],
-
-  [
-    0x1,
-    (instruction: R_Type, cpu: CPU) => {
-      const { rd, rs1, rs2, func7 } = instruction;
-      const { registerSet } = cpu;
-
-      const rs1Value = registerSet.getRegister(rs1);
-      const rs2Value = registerSet.getRegisterU(rs2);
-
-      if (func7 === 0) {
-        // sll
-        const result = rs1Value << rs2Value;
-        registerSet.setRegister(rd, result);
-      } else if (func7 === 0x1) {
-        // mulh (rv32m)
-        const result = ((rs1Value * registerSet.getRegister(rs2)) / 0x100000000) >>> 0;
-        registerSet.setRegisterU(rd, result);
-      } else if (func7 === 0x14) {
-        // bset (Zbs)
-        const index = rs2Value & 31;
-        const result = rs1Value | (1 << index);
-        registerSet.setRegister(rd, result);
-      } else if (func7 === 0x24) {
-        // bclr (Zbs)
-        const index = rs2Value & 31;
-        const result = rs1Value & ~(1 << index);
-        registerSet.setRegister(rd, result);
-      } else throw Error(`Unknown instruction, func7: 0x${func7.toString(16)}`);
-    },
-  ],
-
-  [
-    0x2,
-    (instruction: R_Type, cpu: CPU) => {
-      const { rd, rs1, rs2, func7 } = instruction;
-      const { registerSet } = cpu;
-
-      const rs1Value = registerSet.getRegister(rs1);
-      const rs2Value = registerSet.getRegister(rs2);
-
-      if (func7 === 0) {
-        // slt
-        if (rd === 0 && rs1 === 0) {
-          if (rs2 === 0) {
-            // h3.block (Xh3power) - slt x0, x0, x0
+// OP (0x33) - R-type; sub-dispatched by func7 within func3
+function executeOp(inst: number, cpu: CPU) {
+  const r = rd(inst),
+    s1 = rs1(inst),
+    s2 = rs2(inst);
+  const rs = cpu.registerSet;
+  switch (func3(inst)) {
+    case 0x0: {
+      const a = rs.getRegister(s1),
+        b = rs.getRegister(s2),
+        f7 = func7(inst);
+      if (f7 === 0x00) rs.setRegister(r, a + b); // add
+      else if (f7 === 0x20) rs.setRegister(r, a - b); // sub
+      else if (f7 === 0x01) rs.setRegister(r, (a * b) & 0xffffffff); // mul (RV32M)
+      else throw Error(`Unknown OP func3=0, func7: 0x${f7.toString(16)}`);
+      break;
+    }
+    case 0x1: {
+      const a = rs.getRegister(s1),
+        b = rs.getRegisterU(s2),
+        f7 = func7(inst);
+      if (f7 === 0x00) rs.setRegister(r, a << b); // sll
+      else if (f7 === 0x01)
+        rs.setRegisterU(r, ((a * rs.getRegister(s2)) / 0x100000000) >>> 0); // mulh
+      else if (f7 === 0x14) rs.setRegister(r, a | (1 << (b & 31))); // bset (Zbs)
+      else if (f7 === 0x24) rs.setRegister(r, a & ~(1 << (b & 31))); // bclr (Zbs)
+      else throw Error(`Unknown OP func3=1, func7: 0x${f7.toString(16)}`);
+      break;
+    }
+    case 0x2: {
+      const f7 = func7(inst);
+      if (f7 === 0x00) {
+        // slt - but special-case h3.block / h3.unblock (Xh3power) for slt x0,x0,x0|1
+        if (r === 0 && s1 === 0) {
+          if (s2 === 0) {
+            // h3.block
             if (!cpu.eventRegistered) {
               cpu.waiting = true;
               return;
-            } else {
-              cpu.eventRegistered = false;
-              return;
             }
-          } else if (rs2 === 1) {
-            // h3.unblock (Xh3power) - slt x0, x0, x1
+            cpu.eventRegistered = false;
+            return;
+          } else if (s2 === 1) {
+            // h3.unblock
             if (cpu.onSEV) cpu.onSEV();
             return;
           }
         }
-        const result = rs1Value < rs2Value ? 1 : 0;
-        registerSet.setRegister(rd, result);
-      } else if (func7 === 0x10) {
+        rs.setRegister(r, rs.getRegister(s1) < rs.getRegister(s2) ? 1 : 0);
+      } else if (f7 === 0x10) {
         // sh1add (Zbb)
-        const result = ((rs1Value << 1) + rs2Value) & 0xffffffff;
-        registerSet.setRegister(rd, result);
-      } else throw Error(`Unknown instruction, func7: 0x${func7.toString(16)}`);
-    },
-  ],
-
-  [
-    0x3,
-    (instruction: R_Type, cpu: CPU) => {
-      const { rd, rs1, rs2, func7 } = instruction;
-      const { registerSet } = cpu;
-
-      const rs1Value = registerSet.getRegisterU(rs1);
-      const rs2Value = registerSet.getRegisterU(rs2);
-
-      if (func7 === 0) {
-        const result = rs1Value < rs2Value ? 1 : 0;
-        registerSet.setRegister(rd, result);
-      } else if (func7 === 1) {
-        // mulhu (rv32m)
-        const result = ((rs1Value * rs2Value) / 0x100000000) >>> 0;
-        registerSet.setRegister(rd, result);
-      } else throw Error(`Unknown instruction, func7: 0x${func7.toString(16)}`);
-    },
-  ],
-
-  [
-    0x4,
-    (instruction: R_Type, cpu: CPU) => {
-      const { rd, rs1, rs2, func7 } = instruction;
-      const { registerSet } = cpu;
-
-      const rs1Value = registerSet.getRegister(rs1);
-      const rs2Value = registerSet.getRegister(rs2);
-
-      if (func7 === 0) {
-        const result = rs1Value ^ rs2Value;
-        registerSet.setRegister(rd, result);
-      } else if (func7 === 0x1) {
-        // div (rv32m)
-        if (rs2Value === 0) {
-          registerSet.setRegisterU(rd, 0xffffffff);
-        } else if (rs1Value >>> 0 === 0x80000000 && rs2Value >>> 0 === 0xffffffff) {
-          registerSet.setRegisterU(rd, 0x80000000);
-        } else {
-          const result = (rs1Value / rs2Value) | 0;
-          registerSet.setRegister(rd, result);
-        }
+        rs.setRegister(r, ((rs.getRegister(s1) << 1) + rs.getRegister(s2)) & 0xffffffff);
+      } else throw Error(`Unknown OP func3=2, func7: 0x${f7.toString(16)}`);
+      break;
+    }
+    case 0x3: {
+      const a = rs.getRegisterU(s1),
+        b = rs.getRegisterU(s2),
+        f7 = func7(inst);
+      if (f7 === 0x00) rs.setRegister(r, a < b ? 1 : 0); // sltu
+      else if (f7 === 0x01) rs.setRegister(r, ((a * b) / 0x100000000) >>> 0); // mulhu
+      else throw Error(`Unknown OP func3=3, func7: 0x${f7.toString(16)}`);
+      break;
+    }
+    case 0x4: {
+      const a = rs.getRegister(s1),
+        b = rs.getRegister(s2),
+        f7 = func7(inst);
+      if (f7 === 0x00) rs.setRegister(r, a ^ b); // xor
+      else if (f7 === 0x01) {
+        // div (RV32M)
+        if (b === 0) rs.setRegisterU(r, 0xffffffff);
+        else if (a >>> 0 === 0x80000000 && b >>> 0 === 0xffffffff) rs.setRegisterU(r, 0x80000000);
+        else rs.setRegister(r, (a / b) | 0);
         cpu.cycles += 17;
-      } else if (func7 === 0x10) {
-        // sh2add (Zbb)
-        const result = ((rs1Value << 2) + rs2Value) & 0xffffffff;
-        registerSet.setRegister(rd, result);
-      } else if (func7 === 0x4) {
-        // PACK (Zbkb)
-        const result = (rs1Value & 0xffff) | ((rs2Value & 0xffff) << 16);
-        registerSet.setRegister(rd, result);
-      } else if (func7 === 0x5) {
-        // MIN (Zbb)
-        const result = rs1Value < rs2Value ? rs1Value : rs2Value;
-        registerSet.setRegister(rd, result);
-      } else if (func7 === 0x20) {
-        // XNOR (Zbb)
-        const result = ~rs1Value ^ rs2Value;
-        registerSet.setRegister(rd, result);
-      } else throw Error(`Unknown instruction, func7: 0x${func7.toString(16)}`);
-    },
-  ],
-
-  [
-    0x5,
-    (instruction: R_Type, cpu: CPU) => {
-      const { rd, rs1, rs2, func7 } = instruction;
-      const { registerSet } = cpu;
-
-      const rs1Value = registerSet.getRegister(rs1);
-      const rs2Value = registerSet.getRegister(rs2);
-
-      if (func7 === 0x00) {
-        const result = rs1Value >>> rs2Value;
-        registerSet.setRegister(rd, result);
-      } else if (func7 === 0x5) {
+      } else if (f7 === 0x10) rs.setRegister(r, ((a << 2) + b) & 0xffffffff); // sh2add (Zbb)
+      else if (f7 === 0x04) rs.setRegister(r, (a & 0xffff) | ((b & 0xffff) << 16)); // pack (Zbkb)
+      else if (f7 === 0x05) rs.setRegister(r, a < b ? a : b); // min (Zbb)
+      else if (f7 === 0x20) rs.setRegister(r, ~a ^ b); // xnor (Zbb)
+      else throw Error(`Unknown OP func3=4, func7: 0x${f7.toString(16)}`);
+      break;
+    }
+    case 0x5: {
+      const a = rs.getRegister(s1),
+        b = rs.getRegister(s2),
+        f7 = func7(inst);
+      if (f7 === 0x00) rs.setRegister(r, a >>> b); // srl
+      else if (f7 === 0x05) {
         // minu (Zbb)
-        const r1 = rs1Value >>> 0;
-        const r2 = rs2Value >>> 0;
-        const result = r1 < r2 ? r1 : r2;
-        registerSet.setRegister(rd, result);
-      } else if (func7 === 0x20) {
-        const result = rs1Value >> rs2Value;
-        registerSet.setRegister(rd, result);
-      } else if (func7 === 0x24) {
-        // bext (Zbs)
-        const result = (rs1Value >>> (rs2Value & 31)) & 1;
-        registerSet.setRegister(rd, result);
-      } else if (func7 === 0x01) {
-        // divu (rv32m)
-        if (rs2Value === 0) {
-          registerSet.setRegisterU(rd, 0xffffffff);
-        } else {
-          const result = ((rs1Value >>> 0) / (rs2Value >>> 0)) >>> 0;
-          registerSet.setRegister(rd, result);
-        }
+        const u1 = a >>> 0,
+          u2 = b >>> 0;
+        rs.setRegister(r, u1 < u2 ? u1 : u2);
+      } else if (f7 === 0x20) rs.setRegister(r, a >> b); // sra
+      else if (f7 === 0x24) rs.setRegister(r, (a >>> (b & 31)) & 1); // bext (Zbs)
+      else if (f7 === 0x01) {
+        // divu (RV32M)
+        if (b === 0) rs.setRegisterU(r, 0xffffffff);
+        else rs.setRegister(r, ((a >>> 0) / (b >>> 0)) >>> 0);
         cpu.cycles += 17;
-      } else throw Error(`Unknown instruction, func7: 0x${func7.toString(16)}`);
-    },
-  ],
-
-  [
-    0x6,
-    (instruction: R_Type, cpu: CPU) => {
-      const { rd, rs1, rs2, func7 } = instruction;
-      const { registerSet } = cpu;
-
-      const rs1Value = registerSet.getRegister(rs1);
-      const rs2Value = registerSet.getRegister(rs2);
-
-      if (func7 === 0) {
-        // OR
-        const result = rs1Value | rs2Value;
-        registerSet.setRegister(rd, result);
-      } else if (func7 === 0x1) {
-        // REM (RV32M)
-        // 02c6e6b3 rem a3,a3,a2
-        const result = rs2Value === 0 ? rs1Value : rs1Value % rs2Value;
-        registerSet.setRegister(rd, result);
+      } else throw Error(`Unknown OP func3=5, func7: 0x${f7.toString(16)}`);
+      break;
+    }
+    case 0x6: {
+      const a = rs.getRegister(s1),
+        b = rs.getRegister(s2),
+        f7 = func7(inst);
+      if (f7 === 0x00) rs.setRegister(r, a | b); // or
+      else if (f7 === 0x01) {
+        rs.setRegister(r, b === 0 ? a : a % b);
         cpu.cycles += 17;
-      } else if (func7 === 0x5) {
-        // MAX (Zbb)
-        const result = rs1Value > rs2Value ? rs1Value : rs2Value;
-        registerSet.setRegister(rd, result);
-      } else if (func7 === 0x20) {
-        // ORN (Zbb)
-        const result = rs1Value | ~rs2Value;
-        registerSet.setRegister(rd, result);
-      } else if (func7 === 0x10) {
-        // sh3add (Zbb)
-        const result = ((rs1Value << 3) + rs2Value) & 0xffffffff;
-        registerSet.setRegister(rd, result);
-      } else throw Error(`Unknown instruction, func7: 0x${func7.toString(16)}`);
-    },
-  ],
-
-  [
-    0x7,
-    (instruction: R_Type, cpu: CPU) => {
-      const { rd, rs1, rs2, func7 } = instruction;
-      const { registerSet } = cpu;
-
-      const rs1Value = registerSet.getRegister(rs1);
-      const rs2Value = registerSet.getRegister(rs2);
-
-      if (func7 === 0) {
-        // AND
-        const result = rs1Value & rs2Value;
-        registerSet.setRegister(rd, result);
-      } else if (func7 === 0x20) {
-        // ANDN (Zbb)
-        const result = rs1Value & ~rs2Value;
-        registerSet.setRegister(rd, result);
-      } else if (func7 === 0x4) {
-        // PACKH (Zbkb)
-        const result = (rs1Value & 0xff) | ((rs2Value & 0xff) << 8);
-        registerSet.setRegister(rd, result);
-      } else if (func7 === 0x5) {
-        // MAXU (Zbb)
-        const result = rs1Value >>> 0 > rs2Value >>> 0 ? rs1Value : rs2Value;
-        registerSet.setRegisterU(rd, result >>> 0);
-      } else if (func7 === 0x1) {
-        // REMU (RV32M)
-        const result = rs2Value === 0 ? rs1Value : (rs1Value >>> 0) % (rs2Value >>> 0);
-        registerSet.setRegisterU(rd, result >>> 0);
+      } // rem (RV32M)
+      else if (f7 === 0x05) rs.setRegister(r, a > b ? a : b); // max (Zbb)
+      else if (f7 === 0x20) rs.setRegister(r, a | ~b); // orn (Zbb)
+      else if (f7 === 0x10) rs.setRegister(r, ((a << 3) + b) & 0xffffffff); // sh3add (Zbb)
+      else throw Error(`Unknown OP func3=6, func7: 0x${f7.toString(16)}`);
+      break;
+    }
+    case 0x7: {
+      const a = rs.getRegister(s1),
+        b = rs.getRegister(s2),
+        f7 = func7(inst);
+      if (f7 === 0x00) rs.setRegister(r, a & b); // and
+      else if (f7 === 0x20) rs.setRegister(r, a & ~b); // andn (Zbb)
+      else if (f7 === 0x04) rs.setRegister(r, (a & 0xff) | ((b & 0xff) << 8)); // packh (Zbkb)
+      else if (f7 === 0x05) rs.setRegisterU(r, (a >>> 0 > b >>> 0 ? a : b) >>> 0); // maxu (Zbb)
+      else if (f7 === 0x01) {
+        rs.setRegisterU(r, (b === 0 ? a : (a >>> 0) % (b >>> 0)) >>> 0);
         cpu.cycles += 17;
-      } else throw Error(`Unknown instruction, func7: 0x${func7.toString(16)}`);
-    },
-  ],
-]);
+      } // remu (RV32M)
+      else throw Error(`Unknown OP func3=7, func7: 0x${f7.toString(16)}`);
+      break;
+    }
+    default:
+      throw Error(`Invalid OP func3 ${func3(inst)}`);
+  }
+}
 
-const opcode0x63func3Table: FuncTable<B_Type> = new Map([
-  [
-    0x0,
-    (instruction: B_Type, cpu: CPU) => {
-      const { rs1, rs2, imm } = instruction;
-      const { registerSet } = cpu;
+// BRANCH (0x63) - B-type; signed (blt/bge) vs unsigned (bltu/bgeu) by func3
+function executeBranch(inst: number, cpu: CPU) {
+  const s1 = rs1(inst),
+    s2 = rs2(inst),
+    im = imm_b(inst);
+  const rs = cpu.registerSet;
+  let taken = false;
+  switch (func3(inst)) {
+    case 0x0:
+      taken = rs.getRegister(s1) === rs.getRegister(s2);
+      break; // beq
+    case 0x1:
+      taken = rs.getRegister(s1) !== rs.getRegister(s2);
+      break; // bne
+    case 0x4:
+      taken = rs.getRegister(s1) < rs.getRegister(s2);
+      break; // blt
+    case 0x5:
+      taken = rs.getRegister(s1) >= rs.getRegister(s2);
+      break; // bge
+    case 0x6:
+      taken = rs.getRegisterU(s1) < rs.getRegisterU(s2);
+      break; // bltu
+    case 0x7:
+      taken = rs.getRegisterU(s1) >= rs.getRegisterU(s2);
+      break; // bgeu
+    default:
+      throw Error(`Invalid BRANCH func3 ${func3(inst)}`);
+  }
+  if (taken) cpu.next_pc = cpu.pc + im;
+  cpu.h3_branch_cycles(taken);
+}
 
-      const rs1Value = registerSet.getRegister(rs1);
-      const rs2Value = registerSet.getRegister(rs2);
+// JALR (0x67) - I-type; only func3=0 defined
+function executeJalr(inst: number, cpu: CPU) {
+  if (func3(inst) !== 0) throw Error(`Invalid JALR func3 ${func3(inst)}`);
+  // Read rs1 before writing rd - they may be the same register (e.g. jalr ra, ra, imm).
+  const target = cpu.registerSet.getRegister(rs1(inst)) + imm_i(inst);
+  cpu.registerSet.setRegister(rd(inst), cpu.pc + cpu.inst_length);
+  cpu.next_pc = target;
+  cpu.cycles++;
+}
 
-      const do_branch = rs1Value === rs2Value;
-      if (do_branch) {
-        cpu.next_pc = cpu.pc + imm;
-      }
-      cpu.h3_branch_cycles(do_branch);
-    },
-  ],
+// LUI (0x37) - U-type. Top 20 bits of the immediate land directly in rd.
+function executeLui(inst: number, cpu: CPU) {
+  cpu.registerSet.setRegisterU(rd(inst), imm_u(inst));
+}
 
-  [
-    0x1,
-    (instruction: B_Type, cpu: CPU) => {
-      const { rs1, rs2, imm } = instruction;
-      const { registerSet } = cpu;
+// AUIPC (0x17) - U-type. rd = pc + upper-immediate.
+function executeAuipc(inst: number, cpu: CPU) {
+  cpu.registerSet.setRegister(rd(inst), imm_u(inst) + cpu.pc);
+}
 
-      const rs1Value = registerSet.getRegister(rs1);
-      const rs2Value = registerSet.getRegister(rs2);
+// JAL (0x6f) - J-type. Link register gets pc+inst_length, then jump.
+function executeJal(inst: number, cpu: CPU) {
+  cpu.registerSet.setRegister(rd(inst), cpu.pc + cpu.inst_length);
 
-      const do_branch = rs1Value !== rs2Value;
-      if (do_branch) {
-        cpu.next_pc = cpu.pc + imm;
-      }
-      cpu.h3_branch_cycles(do_branch);
-    },
-  ],
+  // Profiler trace magic: a 0xabcd/0xffff marker at the return-address slot
+  // signals that a NUL-terminated trace-tag string follows; onTrace consumes it.
+  const magicStart = cpu.pc + cpu.inst_length;
+  if (
+    cpu.chip.readUint16(magicStart) === 0xabcd &&
+    cpu.chip.readUint16(magicStart + 2) === 0xffff
+  ) {
+    let profTag = '';
+    for (let i = magicStart + 4; ; i++) {
+      const ch = cpu.chip.readUint8(i);
+      if (ch === 0) break;
+      profTag += String.fromCharCode(ch);
+    }
+    cpu.chip.onTrace(cpu.mhartid, cpu.pc, profTag);
+  }
 
-  [
-    0x4,
-    (instruction: B_Type, cpu: CPU) => {
-      const { rs1, rs2, imm } = instruction;
-      const { registerSet } = cpu;
+  cpu.next_pc = cpu.pc + imm_j(inst);
+  cpu.cycles++;
+}
 
-      const rs1Value = registerSet.getRegister(rs1);
-      const rs2Value = registerSet.getRegister(rs2);
-
-      const do_branch = rs1Value < rs2Value;
-      if (do_branch) {
-        cpu.next_pc = cpu.pc + imm;
-      }
-      cpu.h3_branch_cycles(do_branch);
-    },
-  ],
-
-  [
-    0x5,
-    (instruction: B_Type, cpu: CPU) => {
-      const { rs1, rs2, imm } = instruction;
-      const { registerSet } = cpu;
-
-      const rs1Value = registerSet.getRegister(rs1);
-      const rs2Value = registerSet.getRegister(rs2);
-
-      const do_branch = rs1Value >= rs2Value;
-      if (do_branch) {
-        cpu.next_pc = cpu.pc + imm;
-      }
-      cpu.h3_branch_cycles(do_branch);
-    },
-  ],
-
-  [
-    0x6,
-    (instruction: B_Type, cpu: CPU) => {
-      const { rs1, rs2, imm } = instruction;
-      const { registerSet } = cpu;
-
-      const rs1Value = registerSet.getRegisterU(rs1);
-      const rs2Value = registerSet.getRegisterU(rs2);
-
-      const do_branch = rs1Value < rs2Value;
-      if (do_branch) {
-        cpu.next_pc = cpu.pc + imm;
-      }
-      cpu.h3_branch_cycles(do_branch);
-    },
-  ],
-
-  [
-    0x7,
-    (instruction: B_Type, cpu: CPU) => {
-      const { rs1, rs2, imm } = instruction;
-      const { registerSet } = cpu;
-
-      const rs1Value = registerSet.getRegisterU(rs1);
-      const rs2Value = registerSet.getRegisterU(rs2);
-
-      const do_branch = rs1Value >= rs2Value;
-      if (do_branch) {
-        cpu.next_pc = cpu.pc + imm;
-      }
-      cpu.h3_branch_cycles(do_branch);
-    },
-  ],
-]);
-
-const opcode0x67func3Table: FuncTable<I_Type> = new Map([
-  [
-    0x0,
-    (instruction: I_Type, cpu: CPU) => {
-      const { rd, rs1, imm } = instruction;
-      const { registerSet } = cpu;
-
-      const rs1Value = registerSet.getRegister(rs1);
-
-      registerSet.setRegister(rd, cpu.pc + cpu.inst_length);
-      cpu.next_pc = rs1Value + imm;
-      cpu.cycles++;
-    },
-  ],
-]);
-
-const opcode0x73func3Table: FuncTable<I_Type> = new Map([
-  [
-    0x0,
-    (instruction: I_Type, cpu: CPU) => {
-      let mstatus = 0;
-      switch (instruction.binary) {
-        case 0x30200073: // mret
-          // TODO Restore core privilege level to the value of MSTATUS.MPP
-          mstatus = cpu.getCSR(0x300, 0);
-          mstatus &= ~(3 << 11); // Write 0 (U-mode) to MSTATUS.MPP
+// SYSTEM (0x73) - CSR ops + mret/ecall/ebreak
+function executeSystem(inst: number, cpu: CPU) {
+  const rs = cpu.registerSet;
+  switch (func3(inst)) {
+    case 0x0: {
+      // mret / ecall / ebreak - dispatched by the full 32-bit word
+      switch (inst >>> 0) {
+        case 0x30200073: {
+          // mret
+          let mstatus = cpu.getCSR(0x300, 0);
+          mstatus &= ~(3 << 11); // MSTATUS.MPP <- 0 (U-mode)
           mstatus &= ~0b1000;
-          mstatus |= (mstatus >>> 4) & 0b1000; // Restore MSTATUS.MIE from MSTATUS.MPIE
-          mstatus |= 1 << 7; // Write 1 to MSTATUS.MPIE
+          mstatus |= (mstatus >>> 4) & 0b1000; // MIE <- MPIE
+          mstatus |= 1 << 7; // MPIE <- 1
           cpu.setCSR(0x300, mstatus, 0);
-          cpu.next_pc = cpu.getCSR(0x341, 0); // Jump to the address in MEPC.
+          cpu.next_pc = cpu.getCSR(0x341, 0); // jump to MEPC
           cpu.cycles++;
           cpu.updateMEICONTEXT_priority_restore(); // Xh3irq
           cpu.interruptsUpdated = true;
           break;
-        case 0x73: // ecall
-          const u_mode = 0; //TODO
-          const reason = u_mode ? 0x8 : 0xb;
-          cpu.trapEntry(reason, true);
-          break;
-        case 0x100073: // ebreak
-          cpu.trapEntry(3, true);
-          break;
-        default:
-          throw Error(`Unknown instruction 0x${instruction.binary.toString(16)}`);
-      }
-    },
-  ],
-  [
-    0x1,
-    (instruction: I_Type, cpu: CPU) => {
-      // csrrw, csrw
-      const { rd, rs1, immU } = instruction; // immU is csr
-      const { registerSet } = cpu;
-      const newValue = registerSet.getRegister(rs1);
-      if (rd != 0) {
-        const oldValue = cpu.getCSR(immU, newValue);
-        registerSet.setRegister(rd, oldValue);
-      }
-      cpu.setCSR(immU, newValue, newValue);
-    },
-  ],
-  [
-    0x2,
-    (instruction: I_Type, cpu: CPU) => {
-      // csrrs, csrs, csrr
-      const { rd, rs1, immU } = instruction; // immU is csr
-      const { registerSet } = cpu;
-      const orValue = registerSet.getRegister(rs1);
-      const oldValue = cpu.getCSR(immU, orValue);
-      if (rs1 != 0) {
-        const newValue = oldValue | orValue;
-        cpu.setCSR(immU, newValue, orValue);
-      }
-      registerSet.setRegister(rd, oldValue);
-    },
-  ],
-  [
-    0x3,
-    (instruction: I_Type, cpu: CPU) => {
-      // csrrc, csrc
-      const { rd, rs1, immU } = instruction; // immU is csr
-      const { registerSet } = cpu;
-      const notValue = registerSet.getRegister(rs1);
-      const oldValue = cpu.getCSR(immU, notValue);
-      const newValue = oldValue & ~notValue;
-      if (notValue != 0) {
-        cpu.setCSR(immU, newValue, notValue);
-      }
-      registerSet.setRegister(rd, oldValue);
-    },
-  ],
-  [
-    0x5,
-    (instruction: I_Type, cpu: CPU) => {
-      // csrwi
-      const { rd, rs1, immU } = instruction; // rs1 is imm, immU is csr
-      const { registerSet } = cpu;
-      const newValue = rs1;
-      if (rd != 0) {
-        const oldValue = cpu.getCSR(immU, newValue);
-        registerSet.setRegister(rd, oldValue);
-      }
-      cpu.setCSR(immU, newValue, newValue);
-    },
-  ],
-  [
-    0x6,
-    (instruction: I_Type, cpu: CPU) => {
-      // csrrsi, csrsi
-      const { rd, rs1, immU } = instruction; // rs1 is imm, immU is csr
-      const { registerSet } = cpu;
-      const oldValue = cpu.getCSR(immU, rs1);
-      if (rs1 != 0) {
-        const newValue = oldValue | rs1;
-        cpu.setCSR(immU, newValue, rs1);
-      }
-      registerSet.setRegister(rd, oldValue);
-    },
-  ],
-  [
-    0x7,
-    (instruction: I_Type, cpu: CPU) => {
-      // csrrci, csrci
-      const { rd, rs1, immU } = instruction; // rs1 is imm, immU is csr
-      const { registerSet } = cpu;
-      const oldValue = cpu.getCSR(immU, rs1);
-      if (rs1 != 0) {
-        const newValue = oldValue & ~rs1;
-        cpu.setCSR(immU, newValue, rs1);
-      }
-      registerSet.setRegister(rd, oldValue);
-    },
-  ],
-]);
-
-const r_TypeOpcodeTable: OpcodeFuncTable<R_Type> = new Map([
-  [0x2f, opcode0x2ffunc3Table],
-  [0x33, opcode0x33func3Table],
-]);
-
-const i_TypeOpcodeTable: OpcodeFuncTable<I_Type> = new Map([
-  [0x03, opcode0x03func3Table],
-  [0x0f, opcode0x0ffunc3Table],
-  [0x13, opcode0x13func3Table],
-  [0x67, opcode0x67func3Table],
-  [0x73, opcode0x73func3Table],
-]);
-
-const s_TypeOpcodeTable: OpcodeFuncTable<S_Type> = new Map([[0x23, opcode0x23func3Table]]);
-
-const b_TypeOpcodeTable: OpcodeFuncTable<B_Type> = new Map([[0x63, opcode0x63func3Table]]);
-
-const u_TypeOpcodeTable: OpcodeTable<U_Type> = new Map([
-  [
-    0x37,
-    (instruction: U_Type, cpu: CPU) => {
-      // lui
-      const { rd, immU } = instruction;
-      const { registerSet } = cpu;
-
-      registerSet.setRegisterU(rd, immU);
-    },
-  ],
-
-  [
-    0x17,
-    (instruction: U_Type, cpu: CPU) => {
-      // auipc
-      const { rd, imm } = instruction;
-      const { registerSet } = cpu;
-
-      registerSet.setRegister(rd, imm + cpu.pc);
-    },
-  ],
-]);
-
-const j_TypeOpcodeTable: OpcodeTable<J_Type> = new Map([
-  [
-    0x6f,
-    (instruction: J_Type, cpu: CPU) => {
-      const { rd, imm } = instruction;
-      const { registerSet } = cpu;
-
-      registerSet.setRegister(rd, cpu.pc + cpu.inst_length);
-
-      // test for profiler trace magic
-      const magicStart = cpu.pc + cpu.inst_length;
-      if (
-        cpu.chip.readUint16(magicStart) === 0xabcd &&
-        cpu.chip.readUint16(magicStart + 2) === 0xffff
-      ) {
-        let profTag = '';
-        for (let i = magicStart + 4; 1; i++) {
-          let ch = cpu.chip.readUint8(i);
-          if (ch == 0) break;
-          profTag = profTag + String.fromCharCode(ch);
         }
-        cpu.chip.onTrace(cpu.mhartid, cpu.pc, profTag);
+        case 0x73:
+          cpu.trapEntry(0xb, true);
+          break; // ecall (M-mode)
+        case 0x100073:
+          cpu.trapEntry(3, true);
+          break; // ebreak
+        default:
+          throw Error(`Unknown SYSTEM instruction 0x${(inst >>> 0).toString(16)}`);
       }
+      break;
+    }
+    case 0x1: {
+      // csrrw
+      const csr = immU_i(inst),
+        r = rd(inst),
+        s1 = rs1(inst);
+      const newVal = rs.getRegister(s1);
+      if (r !== 0) rs.setRegister(r, cpu.getCSR(csr, newVal));
+      cpu.setCSR(csr, newVal, newVal);
+      break;
+    }
+    case 0x2: {
+      // csrrs
+      const csr = immU_i(inst),
+        r = rd(inst),
+        s1 = rs1(inst);
+      const orVal = rs.getRegister(s1);
+      const old = cpu.getCSR(csr, orVal);
+      if (s1 !== 0) cpu.setCSR(csr, old | orVal, orVal);
+      rs.setRegister(r, old);
+      break;
+    }
+    case 0x3: {
+      // csrrc
+      const csr = immU_i(inst),
+        r = rd(inst),
+        s1 = rs1(inst);
+      const notVal = rs.getRegister(s1);
+      const old = cpu.getCSR(csr, notVal);
+      if (notVal !== 0) cpu.setCSR(csr, old & ~notVal, notVal);
+      rs.setRegister(r, old);
+      break;
+    }
+    case 0x5: {
+      // csrwi - rs1 field holds the 5-bit immediate
+      const csr = immU_i(inst),
+        r = rd(inst),
+        imm5 = rs1(inst);
+      if (r !== 0) rs.setRegister(r, cpu.getCSR(csr, imm5));
+      cpu.setCSR(csr, imm5, imm5);
+      break;
+    }
+    case 0x6: {
+      // csrrsi
+      const csr = immU_i(inst),
+        r = rd(inst),
+        imm5 = rs1(inst);
+      const old = cpu.getCSR(csr, imm5);
+      if (imm5 !== 0) cpu.setCSR(csr, old | imm5, imm5);
+      rs.setRegister(r, old);
+      break;
+    }
+    case 0x7: {
+      // csrrci
+      const csr = immU_i(inst),
+        r = rd(inst),
+        imm5 = rs1(inst);
+      const old = cpu.getCSR(csr, imm5);
+      if (imm5 !== 0) cpu.setCSR(csr, old & ~imm5, imm5);
+      rs.setRegister(r, old);
+      break;
+    }
+    default:
+      throw Error(`Invalid SYSTEM func3 ${func3(inst)}`);
+  }
+}
 
-      cpu.next_pc = cpu.pc + imm;
-      cpu.cycles++;
-    },
-  ],
-]);
+// CUSTOM0 (Hazard3 bit-field extract with mask) - non-standard c_ident match.
+function executeCustom0(inst: number, cpu: CPU) {
+  const c_ident = inst & 0b11100010000000000111000001111111;
+  const size = (inst >>> 26) & 0b111;
+  if (c_ident === 0b00000000000000000000000000001011) {
+    // h3.bextm - shift amount from rs2 register
+    const sh = cpu.registerSet.getRegisterU(rs2(inst));
+    let v = cpu.registerSet.getRegisterU(rs1(inst)) >>> sh;
+    cpu.registerSet.setRegisterU(rd(inst), v & ((2 << size) - 1));
+  } else if (c_ident === 0b00000000000000000100000000001011) {
+    // h3.bextmi - shift amount is the immediate rs2 field
+    let v = cpu.registerSet.getRegisterU(rs1(inst)) >>> rs2(inst);
+    cpu.registerSet.setRegisterU(rd(inst), v & ((2 << size) - 1));
+  } else {
+    throw Error(`Invalid CUSTOM0 instruction 0x${inst.toString(16)}`);
+  }
+}
 
-const opcodeTypeTable = new Map<number, InstructionType>([
-  [0x03, InstructionType.I], // LOAD
-  [0x0b, InstructionType.CUSTOM0], // H3.BEXTM
-  [0x0f, InstructionType.I], // MISC-MEM
-  [0x13, InstructionType.I], // OP-IMM
-  [0x17, InstructionType.U], // AUIPC
-  [0x23, InstructionType.S], // STORE
-  [0x2f, InstructionType.R], // AMO
-  [0x33, InstructionType.R], // OP
-  [0x37, InstructionType.U], // LUI
-  [0x63, InstructionType.B], // BRANCH
-  [0x67, InstructionType.I], // JALR
-  [0x6f, InstructionType.J], // ?
-  [0x73, InstructionType.I], // SYSTEM
-]);
