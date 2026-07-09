@@ -264,7 +264,7 @@ export class CPU {
     }
   }
 
-  trapEntry(mcause: number) {
+  trapEntry(mcause: number, fromStep: boolean = false) {
     //this.logger.info(this.coreLabel, `Entering trap handler, mcause 0x${mcause.toString(16)}`);
     if(mcause != (((1<<31) | 11) >>> 0)) this.csrs[0xbe5] &= ~1; // clear MIECONTEXT.MRETEIRQ on any trap that's not an external interrupt
     this.setCSR(0x341, this.pc, 0); // Save the address of the interrupted or excepting instruction to MEPC
@@ -279,18 +279,27 @@ export class CPU {
     // 7. Disable interrupts by clearing MSTATUS.MIE
     mstatus &= 1<<7;
     this.setCSR(0x300, mstatus, 0);
-    // 8. Jump to the correct offset from MTVEC depending on the trap cause
+    // 8. Jump to the correct offset from MTVEC depending on the trap cause.
+    // For synchronous exceptions (ecall/ebreak during step), set next_pc so the
+    // post-step PC-update logic redirects without adding inst_length. For
+    // asynchronous interrupts (checkForInterrupts before fetch), set pc directly.
     const mtvec = this.getCSR(0x305, 0);
+    let target: number;
     if(mcause >> 31) {
       if((mtvec & 1) == 0) {
-        this.pc = mtvec; // direct mtvec mode
+        target = mtvec; // direct mtvec mode
       } else {
-        this.pc = (mtvec & ~0b11) + ((mcause & 0b1111) << 2); // vectored mtvec mode
+        target = (mtvec & ~0b11) + ((mcause & 0b1111) << 2); // vectored mtvec mode
       }
     } else {
-      this.pc = mtvec; // "Exceptions jump to exactly the address of MTVEC"
+      target = mtvec; // "Exceptions jump to exactly the address of MTVEC"
     }
-    this.next_pc = 0;
+    if(fromStep) {
+      this.next_pc = target;
+    } else {
+      this.pc = target;
+      this.next_pc = 0;
+    }
     this.cycles += 2;
   }
 
@@ -1228,10 +1237,10 @@ const opcode0x73func3Table: FuncTable<I_Type> = new Map([
       case 0x73: // ecall
         const u_mode = 0; //TODO
         const reason = u_mode?0x8:0xb;
-        cpu.trapEntry(reason);
+        cpu.trapEntry(reason, true);
         break;
       case 0x100073: // ebreak
-        cpu.trapEntry(3);
+        cpu.trapEntry(3, true);
         break;
       default:
         throw Error(`Unknown instruction 0x${instruction.binary.toString(16)}`);

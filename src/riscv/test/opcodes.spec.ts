@@ -409,10 +409,7 @@ describe('RISC-V opcode regression', () => {
 
     // mret / ecall / ebreak transfer control via the trap machinery, so we
     // set up mtvec/mepc/mstatus in CSRs first and assert the target PC via
-    // the expectedPcInc delta. Emulator quirk: trapEntry() sets next_pc=0,
-    // which the post-step PC logic treats as "sequential", adding inst_length
-    // to the already-set mtvec. So traps land at mtvec+4 (32-bit) or mtvec+2
-    // (16-bit). mret is unaffected (it sets next_pc=mepc, non-zero).
+    // the expectedPcInc delta.
     const TRAPHANDLER = 0x20020000;
 
     // mret                -> 0x30200073    ; pc <- mepc, restore MSTATUS.MIE
@@ -422,12 +419,12 @@ describe('RISC-V opcode regression', () => {
 
     // ecall               -> 0x00000073    ; M-mode trap, mcause=0xb
     cpu.csrs[0x305] = TRAPHANDLER; // mtvec
-    run(cpu, 'ecall', {}, 0x00000073, TRAPHANDLER - SCRATCH + 4, {});
+    run(cpu, 'ecall', {}, 0x00000073, TRAPHANDLER - SCRATCH, {});
     expect(cpu.csrs[0x342]).toBe(0xb); // mcause
     expect(cpu.csrs[0x341]).toBe(SCRATCH >>> 0); // mepc = faulting pc
 
     // ebreak              -> 0x00100073    ; trap, mcause=3
-    run(cpu, 'ebreak', {}, 0x00100073, TRAPHANDLER - SCRATCH + 4, {});
+    run(cpu, 'ebreak', {}, 0x00100073, TRAPHANDLER - SCRATCH, {});
     expect(cpu.csrs[0x342]).toBe(3); // mcause
 
     // CUSTOM0 (opcode 0x0b): Hazard3 bit-field extract with mask.
@@ -531,7 +528,7 @@ describe('RISC-V opcode regression', () => {
 
     // c.ebreak             -> 0x9002        ; decompresses to ebreak -> trap
     cpu.csrs[0x305] = TRAPHANDLER; // mtvec
-    run(cpu, 'c.ebreak', {}, 0x9002, TRAPHANDLER - SCRATCH + 2, {});
+    run(cpu, 'c.ebreak', {}, 0x9002, TRAPHANDLER - SCRATCH, {});
     expect(cpu.csrs[0x342]).toBe(3); // mcause
 
     // c.jalr x1, x5        -> 0x9282        ; decompresses to jalr x1, x5, 0
