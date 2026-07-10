@@ -327,7 +327,7 @@ export class CPU {
     mstatus &= ~0b10000000;
     mstatus |= (mstatus << 4) & 0b10000000;
     // 7. Disable interrupts by clearing MSTATUS.MIE
-    mstatus &= 1 << 7;
+    mstatus &= ~(1 << 3);
     this.setCSR(0x300, mstatus, 0);
     // 8. Jump to the correct offset from MTVEC depending on the trap cause.
     // For synchronous exceptions (ecall/ebreak during step), set next_pc so the
