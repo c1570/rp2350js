@@ -1,4 +1,5 @@
 ## rp2040js / rp2350js
+
 https://github.com/c1570/rp2040js
 
 Raspberry Pi Pico (2) emulator. Develop/test/debug RP2040/2350 projects on your PC/in your CI stack.
@@ -6,13 +7,15 @@ Raspberry Pi Pico (2) emulator. Develop/test/debug RP2040/2350 projects on your 
 For generic/original rp2040js docs, [see below](#rp2040js).
 
 ### Status of rp2350js
-* 95% RISC-V/Hazard3 machine mode support (no ARM support, no user mode support)
-* runs both no_flash/RAM binaries and flash binaries
-* runs pico-examples/blink_simple.c, hello_timer.c, hello_usb.c
-* runs [Connomore64](https://github.com/c1570/Connomore64) main and video mcu (dual core, PIO, DMA)
-* _almost_ runs MicroPython (flash access needs some more work)
+
+- 95% RISC-V/Hazard3 machine mode support (no ARM support, no user mode support)
+- runs both no_flash/RAM binaries and flash binaries
+- runs pico-examples/blink_simple.c, hello_timer.c, hello_usb.c
+- runs [Connomore64](https://github.com/c1570/Connomore64) main and video mcu (dual core, PIO, DMA)
+- _almost_ runs MicroPython (flash access needs some more work)
 
 #### Implemented
+
 `*` = needs checking/fixing
 
 ```
@@ -34,7 +37,7 @@ Xh3irq (MEIEA, MEIPA, MEIFA, MEIPRA, MEINEXT, MEICONTEXT) *
 Xh3power (h3.block and h3.unblock)
 Xh3bextm (h3.bextmi and h3.bextm)
 RV32C
-RV32Zcb (lbu, lhu, not)
+RV32Zcb (lbu, lhu, lh, sb, sh, mul, not, zext.b, zext.h, sext.b, sext.h)
 somewhat correct instruction cycle counts *
 add
 addi
@@ -193,7 +196,6 @@ GLITCH_DETECTOR_BASE
 Hazard3: Machine vs. User mode
 Xh3pmpm (Physical Memory Protection PMP)
 cycle penalties for dependent register usage, APB access, XIP access
-RV32Zcb (lh, mul, sb, sext.b, sext.h, sh, zext.b, zext.h)
 amoadd.w
 amomax.w
 amomaxu.w
@@ -220,14 +222,24 @@ zip
 ```
 
 Notes
-* Xh3irq [CSR write bypass](https://github.com/Wren6991/Hazard3/blob/787da131a1e982543d9b308c1c25a09160e71a65/hdl/hazard3_core.v#L921)
-* Hazard3 [rv_opcodes.vh](https://github.com/Wren6991/Hazard3/blob/stable/hdl/rv_opcodes.vh) and [hazard3_decode.v](https://github.com/Wren6991/Hazard3/blob/787da131a1e982543d9b308c1c25a09160e71a65/hdl/hazard3_decode.v#L305):
+
+- Xh3irq [CSR write bypass](https://github.com/Wren6991/Hazard3/blob/787da131a1e982543d9b308c1c25a09160e71a65/hdl/hazard3_core.v#L921)
+- Hazard3 [rv_opcodes.vh](https://github.com/Wren6991/Hazard3/blob/stable/hdl/rv_opcodes.vh) and [hazard3_decode.v](https://github.com/Wren6991/Hazard3/blob/787da131a1e982543d9b308c1c25a09160e71a65/hdl/hazard3_decode.v#L305)
+
+## License
+
+Released under the MIT licence.
+Copyright (c) 2021-2025, Uri Shaked.
+Copyright (c) 2023-2026, github.com/c1570
 
 ## This is a project specific fork of rp2040js.
+
 ## It is used for developing the [Connomore64](https://github.com/c1570/Connomore64).
+
 https://github.com/c1570/rp2040js
 
 Features:
+
 - somewhat accurate PIO timings (also, MUCH slower emulation)
 - built-in cycle profiler using markers in the code
 - Dual Core support (by mingpepe)

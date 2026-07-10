@@ -50,7 +50,7 @@ describe('RISC-V opcode regression', () => {
     inputRegs: RegMap,
     encoding: number,
     expectedPcInc: number,
-    expectedRegs: RegMap = {},
+    expectedRegs: RegMap = {}
   ) {
     const label = `${description}: `;
     for (const idx in inputRegs) {
@@ -460,6 +460,20 @@ describe('RISC-V opcode regression', () => {
     chip.writeUint32(DATA, 0x80);
     run(cpu, 'c.lbu x9, 0(x9)', { 9: DATA }, 0x8084, 2, { 9: 0x80 });
 
+    // c.lh x8, 0(x9)       -> 0x84c0        ; Zcb: sign-extended halfword: 0x8000 -> 0xffff8000
+    chip.writeUint32(DATA, 0x8000);
+    run(cpu, 'c.lh x8, 0(x9)', { 9: DATA }, 0x84c0, 2, { 8: 0xffff8000 });
+
+    // c.sb x8, 0(x9)       -> 0x8880        ; Zcb: stores low byte of 0x42
+    chip.writeUint32(DATA, 0xdeadbeef);
+    run(cpu, 'c.sb x8, 0(x9)', { 8: 0x42, 9: DATA }, 0x8880, 2, {});
+    expect(chip.readUint8(DATA)).toBe(0x42);
+
+    // c.sh x9, 0(x9)       -> 0x8c84        ; Zcb: stores low halfword of x9
+    chip.writeUint32(DATA, 0xdeadbeef);
+    run(cpu, 'c.sh x9, 0(x9)', { 9: DATA }, 0x8c84, 2, {});
+    expect(chip.readUint16(DATA)).toBe(DATA & 0xffff);
+
     // c.addi x5, 3         -> 0x028d        ; decompresses to addi x5, x5, 3
     run(cpu, 'c.addi x5, 3', { 5: 0x10 }, 0x028d, 2, { 5: 0x13 });
 
@@ -498,8 +512,23 @@ describe('RISC-V opcode regression', () => {
     // c.and x9, x10        -> 0x8ce9        ; decompresses to and x9, x9, x10
     run(cpu, 'c.and x9, x10', { 9: 0xff, 10: 0x0f }, 0x8ce9, 2, { 9: 0x0f });
 
-    // c.not x9 (Zcb)       -> 0x9cf5        ; decompresses to xori x9, x9, -1
-    run(cpu, 'c.not x9', { 9: 0x0f }, 0x9cf5, 2, { 9: 0xfffffff0 });
+    // c.not x8 (Zcb)       -> 0x9c75        ; decompresses to xori x8, x8, -1
+    run(cpu, 'c.not x8', { 8: 0x0f }, 0x9c75, 2, { 8: 0xfffffff0 });
+
+    // c.mul x8, x10 (Zcb)  -> 0x9c49        ; decompresses to mul x8, x8, x10
+    run(cpu, 'c.mul x8, x10', { 8: 6, 10: 7 }, 0x9c49, 2, { 8: 42 });
+
+    // c.zext.b x8 (Zcb)    -> 0x9c61        ; decompresses to andi x8, x8, 0xff
+    run(cpu, 'c.zext.b x8', { 8: 0x12345678 }, 0x9c61, 2, { 8: 0x78 });
+
+    // c.sext.b x8 (Zcb)    -> 0x9c65        ; decompresses to sext.b x8, x8
+    run(cpu, 'c.sext.b x8', { 8: 0x80 }, 0x9c65, 2, { 8: 0xffffff80 });
+
+    // c.zext.h x8 (Zcb)    -> 0x9c69        ; decompresses to zext.h x8, x8
+    run(cpu, 'c.zext.h x8', { 8: 0x12345678 }, 0x9c69, 2, { 8: 0x5678 });
+
+    // c.sext.h x8 (Zcb)    -> 0x9c6d        ; decompresses to sext.h x8, x8
+    run(cpu, 'c.sext.h x8', { 8: 0x8000 }, 0x9c6d, 2, { 8: 0xffff8000 });
 
     // c.j 4                -> 0xa011        ; decompresses to jal x0, 4 (jump, no link)
     run(cpu, 'c.j 4', {}, 0xa011, 4, {});

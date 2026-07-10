@@ -90,21 +90,43 @@ function clw(cpu: CPU, inst: number): void {
   cpu.registerSet.setRegisterU(rd, cpu.chip.readUint32(addr));
 }
 
-// Zcb extension, funct3 = 100, opcode = 00 part
+// Zcb extension, funct3 = 100, opcode = 00. Sub-op in bits[12:10]
 function zcb_100_00(cpu: CPU, inst: number): void {
-  if ((inst & 0b1111110001000011) === 0b1000010000000000) {
-    // c.lhu rd', uimm(rs1')
-    const uimm = ((inst >>> 5) & 1) << 1;
-    const rs1 = dec_rs1_short(inst);
-    const rd = dec_rd_short(inst);
-    cpu.registerSet.setRegister(rd, cpu.chip.readUint16(cpu.registerSet.getRegisterU(rs1) + uimm));
-  } else if ((inst & 0b1111110000000011) === 0b1000000000000000) {
-    // c.lbu rd', uimm(rs1')
-    const uimm = (((inst >>> 5) & 1) << 1) | ((inst >>> 6) & 1);
-    const rs1 = dec_rs1_short(inst);
-    const rd = dec_rd_short(inst);
-    cpu.registerSet.setRegister(rd, cpu.chip.readUint8(cpu.registerSet.getRegisterU(rs1) + uimm));
-  } else throw Error(`Unsupported Zcb instruction: 0x${inst.toString(16)}`);
+  const base = cpu.registerSet.getRegisterU(dec_rs1_short(inst));
+  const sub = (inst >>> 10) & 0b111;
+  switch (sub) {
+    case 0b000: {
+      // c.lbu
+      const uimm = (((inst >>> 5) & 1) << 1) | ((inst >>> 6) & 1);
+      const rd = dec_rd_short(inst);
+      cpu.registerSet.setRegister(rd, cpu.chip.readUint8(base + uimm));
+      return;
+    }
+    case 0b001: {
+      const uimm = ((inst >>> 5) & 1) << 1;
+      const rd = dec_rd_short(inst);
+      const half = cpu.chip.readUint16(base + uimm);
+      if ((inst >>> 6) & 1) cpu.registerSet.setRegister(rd, sign_extend(half, 15)); // c.lh
+      else cpu.registerSet.setRegister(rd, half); // c.lhu
+      return;
+    }
+    case 0b010: {
+      // c.sb
+      const uimm = (((inst >>> 5) & 1) << 1) | ((inst >>> 6) & 1);
+      const rs2 = dec_rs2_short(inst);
+      cpu.chip.writeUint8(base + uimm, cpu.registerSet.getRegister(rs2) & 0xff);
+      return;
+    }
+    case 0b011: {
+      if ((inst >>> 6) & 1) break;
+      // c.sh
+      const uimm = ((inst >>> 5) & 1) << 1;
+      const rs2 = dec_rs2_short(inst);
+      cpu.chip.writeUint16(base + uimm, cpu.registerSet.getRegister(rs2) & 0xffff);
+      return;
+    }
+  }
+  throw Error(`Unsupported Zcb instruction: 0x${inst.toString(16)}`);
 }
 
 // C.SW, funct3 = 110, opcode = 00
@@ -384,12 +406,37 @@ function parse_100_01(cpu: CPU, inst: number): void {
         case 0b011:
           cand(cpu, inst);
           return;
-        case 0b111: // c.not (Zcb) — xori rd, rd, -1
-          if ((inst & 0b1111110001111111) === 0b1001110001110101) {
-            const rd = dec_rs1_short(inst);
-            cpu.registerSet.setRegister(rd, ~cpu.registerSet.getRegister(rd));
+        case 0b110: {
+          // c.mul (Zcb): mul rd', rd', rs2'
+          const rd = dec_rs1_short(inst);
+          const rs2 = dec_rs2_short(inst);
+          const rs = cpu.registerSet;
+          rs.setRegister(rd, (rs.getRegister(rd) * rs.getRegister(rs2)) & 0xffffffff);
+          return;
+        }
+        case 0b111: {
+          // Zcb unary ops, sub-op in bits[4:2]
+          const rd = dec_rs1_short(inst);
+          const rs = cpu.registerSet;
+          switch ((inst >>> 2) & 0b111) {
+            case 0b000: // c.zext.b -> andi rd, rd, 0xff
+              rs.setRegister(rd, rs.getRegister(rd) & 0xff);
+              return;
+            case 0b001: // c.sext.b -> sext.b rd, rd
+              rs.setRegister(rd, sign_extend(rs.getRegisterU(rd) & 0xff, 7));
+              return;
+            case 0b010: // c.zext.h -> zext.h rd, rd (pack rd, rd, x0)
+              rs.setRegister(rd, rs.getRegisterU(rd) & 0xffff);
+              return;
+            case 0b011: // c.sext.h -> sext.h rd, rd
+              rs.setRegister(rd, sign_extend(rs.getRegisterU(rd) & 0xffff, 15));
+              return;
+            case 0b101: // c.not -> xori rd, rd, -1
+              rs.setRegister(rd, ~rs.getRegister(rd));
+              return;
           }
           return;
+        }
       }
   }
   throw Error(`Unknown compressed instruction: 0x${inst.toString(16)}`);
