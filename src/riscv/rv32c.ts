@@ -495,10 +495,39 @@ function parse_101_10(cpu: CPU, inst: number): void {
       cpu.registerSet.setRegisterU(2, sp - stack_adj);
       return;
     }
-    case 0b1011101000000010:
-      throw new Error('cm.pop unsupported');
-    case 0b1011110000000010:
-      throw new Error('cm.popretz unsupported');
+    case 0b1011101000000010: {
+      // cm.pop (Zcmp) — load registers, adjust SP, no return
+      const rlist = (inst & 0b11110000) >>> 4;
+      const spimm = (inst & 0b1100) << 2;
+      const stack_adj = stack_adj_base[rlist] + spimm;
+      const sp = cpu.registerSet.getRegisterU(2);
+      let addr = sp + stack_adj - 4;
+      for (let reg of xreg_list[rlist]) {
+        cpu.registerSet.setRegisterU(reg, cpu.chip.readUint32(addr));
+        addr -= 4;
+        cpu.cycles++;
+      }
+      cpu.registerSet.setRegisterU(2, sp + stack_adj);
+      return;
+    }
+    case 0b1011110000000010: {
+      // cm.popretz (Zcmp) — load registers, adjust SP, clear a0, then ret
+      const rlist = (inst & 0b11110000) >>> 4;
+      const spimm = (inst & 0b1100) << 2;
+      const stack_adj = stack_adj_base[rlist] + spimm;
+      const sp = cpu.registerSet.getRegisterU(2);
+      let addr = sp + stack_adj - 4;
+      for (let reg of xreg_list[rlist]) {
+        cpu.registerSet.setRegisterU(reg, cpu.chip.readUint32(addr));
+        addr -= 4;
+        cpu.cycles++;
+      }
+      cpu.registerSet.setRegisterU(2, sp + stack_adj);
+      cpu.registerSet.setRegister(10, 0); // li a0, 0
+      cpu.next_pc = cpu.registerSet.getRegister(1); // ret = jalr x0, x1, 0
+      cpu.cycles++;
+      return;
+    }
     case 0b1011111000000010: {
       // cm.popret (Zcmp)
       const rlist = (inst & 0b11110000) >>> 4;
@@ -518,10 +547,24 @@ function parse_101_10(cpu: CPU, inst: number): void {
     }
   }
   switch (inst & 0b1111110001100011) {
-    case 0b1010110000100010:
-      throw new Error('cm.mvsa01 unsupported');
-    case 0b1010110001100010:
-      throw new Error('cm.mva01s unsupported');
+    case 0b1010110000100010: {
+      // cm.mvsa01 r1s, r2s (Zcmp) — s0/s1 <- a0/a1
+      const r1s = 8 + ((inst >>> 7) & 1);
+      const r2s = 8 + ((inst >>> 2) & 1);
+      const rs = cpu.registerSet;
+      rs.setRegister(r1s, rs.getRegister(10));
+      rs.setRegister(r2s, rs.getRegister(11));
+      return;
+    }
+    case 0b1010110001100010: {
+      // cm.mva01s r1s, r2s (Zcmp) — a0/a1 <- s0/s1
+      const r1s = 8 + ((inst >>> 7) & 1);
+      const r2s = 8 + ((inst >>> 2) & 1);
+      const rs = cpu.registerSet;
+      rs.setRegister(10, rs.getRegister(r1s));
+      rs.setRegister(11, rs.getRegister(r2s));
+      return;
+    }
   }
   throw new Error(`Unsupported instruction: 0x${inst.toString(16)}`);
 }

@@ -635,5 +635,26 @@ describe('RISC-V opcode regression', () => {
       1: TRAPHANDLER,
       2: STACK + 16,
     });
+
+    // cm.pop {ra}, 16       -> 0xba42        ; restores x1, sp += 16, no ret
+    chip.writeUint32(STACK + 12, 0x12345678);
+    run(cpu, 'cm.pop {ra}, 16', { 2: STACK, 1: 0 }, 0xba42, 2, {
+      1: 0x12345678,
+      2: STACK + 16,
+    });
+
+    // cm.popretz {ra}, 16   -> 0xbc42        ; restores x1, sp += 16, a0 <- 0, ret
+    chip.writeUint32(STACK + 12, TRAPHANDLER);
+    run(cpu, 'cm.popretz {ra}, 16', { 2: STACK, 1: 0, 10: 0x42 }, 0xbc42, TRAPHANDLER - SCRATCH, {
+      1: TRAPHANDLER,
+      2: STACK + 16,
+      10: 0,
+    });
+
+    // cm.mvsa01 s0, s1      -> 0xac26        ; s0 <- a0, s1 <- a1
+    run(cpu, 'cm.mvsa01 s0, s1', { 10: 0xaa, 11: 0xbb }, 0xac26, 2, { 8: 0xaa, 9: 0xbb });
+
+    // cm.mva01s s0, s1      -> 0xac66        ; a0 <- s0, a1 <- s1
+    run(cpu, 'cm.mva01s s0, s1', { 8: 0xcc, 9: 0xdd }, 0xac66, 2, { 10: 0xcc, 11: 0xdd });
   });
 });

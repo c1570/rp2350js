@@ -78,8 +78,12 @@ bnez
 bset
 bseti
 clz
+cm.pop
 cm.popret
+cm.popretz
 cm.push
+cm.mva01s
+cm.mvsa01
 cpop
 csrc
 csrci
@@ -206,10 +210,6 @@ GLITCH_DETECTOR_BASE
 Hazard3: Machine vs. User mode
 Xh3pmpm (Physical Memory Protection PMP)
 cycle penalties for dependent register usage, APB access, XIP access
-cm.mva01s
-cm.mvsa01
-cm.pop
-cm.popretz
 lr.w
 sc.w
 unzip
