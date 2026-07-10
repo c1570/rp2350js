@@ -219,8 +219,14 @@ describe('RISC-V opcode regression', () => {
     // rori x6, x7, 4     ->  0x6043d313   ; 0x12345678 ror 4 = 0x81234567 (Zbs rotate)
     run(cpu, 'rori x6, x7, 4', { 7: 0x12345678 }, 0x6043d313, 4, { 6: 0x81234567 });
 
-    // rev8 x6, x7        ->  0x6843d313   ; byte-reverse: 0x12345678 -> 0x78563412 (Zbb)
-    run(cpu, 'rev8 x6, x7', { 7: 0x12345678 }, 0x6843d313, 4, { 6: 0x78563412 });
+    // rev8 x6, x7        ->  0x6983d313   ; byte-reverse: 0x12345678 -> 0x78563412 (Zbb)
+    run(cpu, 'rev8 x6, x7', { 7: 0x12345678 }, 0x6983d313, 4, { 6: 0x78563412 });
+
+    // orc.b x6, x7       ->  0x2873d313   ; broadcast bit 7 of each byte (Zbb)
+    run(cpu, 'orc.b x6, x7', { 7: 0x807f0080 }, 0x2873d313, 4, { 6: 0xff0000ff });
+
+    // brev8 x6, x7       ->  0x6873d313   ; reverse bits within each byte (Zbkb)
+    run(cpu, 'brev8 x6, x7', { 7: 0x01020408 }, 0x6873d313, 4, { 6: 0x80402010 });
 
     // ori x6, x7, 0x0f   ->  0x00f3e313   ; 0xf0 | 0x0f = 0xff
     run(cpu, 'ori x6, x7, 0x0f', { 7: 0xf0 }, 0x00f3e313, 4, { 6: 0xff });
@@ -249,11 +255,20 @@ describe('RISC-V opcode regression', () => {
     // bclr x6, x7, x8    ->  0x48839333   ; 0xff & ~(1<<4) = 0xef (Zbs)
     run(cpu, 'bclr x6, x7, x8', { 7: 0xff, 8: 4 }, 0x48839333, 4, { 6: 0xef });
 
+    // binv x6, x7, x8    ->  0x68839333   ; 0xff ^ (1<<4) = 0xef (Zbs)
+    run(cpu, 'binv x6, x7, x8', { 7: 0xff, 8: 4 }, 0x68839333, 4, { 6: 0xef });
+
+    // rol x6, x7, x8     ->  0x60839333   ; 0x12345678 rot-left 4 = 0x23456781 (Zbb)
+    run(cpu, 'rol x6, x7, x8', { 7: 0x12345678, 8: 4 }, 0x60839333, 4, { 6: 0x23456781 });
+
     // slt x6, x7, x8     ->  0x0083a333   ; signed: -1 < 1 -> 1
     run(cpu, 'slt x6, x7, x8', { 7: 0xffffffff, 8: 1 }, 0x0083a333, 4, { 6: 1 });
 
     // sh1add x6, x7, x8  ->  0x2083a333   ; (0x1 << 1) + 0x3 = 5 (Zbb)
     run(cpu, 'sh1add x6, x7, x8', { 7: 0x1, 8: 0x3 }, 0x2083a333, 4, { 6: 5 });
+
+    // mulhsu x6, x7, x8  ->  0x0283a333   ; signed*unsigned: 0x10000*0x10000 high=1 (RV32M)
+    run(cpu, 'mulhsu x6, x7, x8', { 7: 0x10000, 8: 0x10000 }, 0x0283a333, 4, { 6: 1 });
 
     // sltu x6, x7, x8    ->  0x0083b333   ; unsigned: 0xffffffff < 1 -> 0
     run(cpu, 'sltu x6, x7, x8', { 7: 0xffffffff, 8: 1 }, 0x0083b333, 4, { 6: 0 });
@@ -300,6 +315,9 @@ describe('RISC-V opcode regression', () => {
     run(cpu, 'sra x6, x7, x8', { 7: 0x80000000, 8: 4 }, 0x4083d333, 4, {
       6: 0xf8000000,
     });
+
+    // ror x6, x7, x8     ->  0x6083d333   ; 0x12345678 rot-right 4 = 0x81234567 (Zbb)
+    run(cpu, 'ror x6, x7, x8', { 7: 0x12345678, 8: 4 }, 0x6083d333, 4, { 6: 0x81234567 });
 
     // bext x6, x7, x8    ->  0x4883d333   ; (0x10 >> 4) & 1 = 1 (Zbs single-bit extract)
     run(cpu, 'bext x6, x7, x8', { 7: 0x10, 8: 4 }, 0x4883d333, 4, { 6: 1 });

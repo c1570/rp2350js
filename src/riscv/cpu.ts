@@ -721,18 +721,19 @@ function executeOpImm(inst: number, cpu: CPU) {
       rs.setRegister(r, rs.getRegister(s1) ^ imm_i(inst));
       break; // xori
     case 0x5: {
-      // srli / srai / bexti / rori / rev8
+      // srli / srai / bexti / rori / rev8 / orc.b / brev8
       const sh = shamt(inst),
         f7 = func7(inst),
+        imu = immU_i(inst),
         v = rs.getRegister(s1);
       if (f7 === 0x00) rs.setRegister(r, v >>> sh); // srli
       else if (f7 === 0x20) rs.setRegister(r, v >> sh); // srai
       else if (f7 === 0x24) rs.setRegister(r, (v >>> sh) & 1); // bexti (Zbs)
       else if (f7 === 0x30) {
-        // rori (Zbs)
+        // rori (Zbb)
         const u = rs.getRegisterU(s1);
         rs.setRegister(r, ((u << (32 - sh)) >>> 0) | (u >>> sh));
-      } else if (f7 === 0x34) {
+      } else if (imu === 0x698) {
         // rev8 (Zbb)
         rs.setRegisterU(
           r,
@@ -742,6 +743,26 @@ function executeOpImm(inst: number, cpu: CPU) {
             (((v & 0xff) << 24) >>> 0)) >>>
             0
         );
+      } else if (imu === 0x687) {
+        // brev8 (Zbkb) — reverse bits within each byte
+        const u = rs.getRegisterU(s1);
+        let result = 0;
+        for (let i = 0; i < 32; i += 8) {
+          let by = (u >>> i) & 0xff;
+          by = ((by & 0xf0) >> 4) | ((by & 0x0f) << 4);
+          by = ((by & 0xcc) >> 2) | ((by & 0x33) << 2);
+          by = ((by & 0xaa) >> 1) | ((by & 0x55) << 1);
+          result |= by << i;
+        }
+        rs.setRegisterU(r, result >>> 0);
+      } else if (imu === 0x287) {
+        // orc.b (Zbb) — broadcast bit 7 of each byte across all 8 bits
+        const u = rs.getRegisterU(s1);
+        let result = 0;
+        for (let i = 0; i < 32; i += 8) {
+          if (u & (0x80 << i)) result |= 0xff << i;
+        }
+        rs.setRegisterU(r, result >>> 0);
       } else throw Error(`Unknown OP-IMM func3=5, func7: 0x${f7.toString(16)}`);
       break;
     }
@@ -823,6 +844,11 @@ function executeOp(inst: number, cpu: CPU) {
         rs.setRegisterU(r, ((a * rs.getRegister(s2)) / 0x100000000) >>> 0); // mulh
       else if (f7 === 0x14) rs.setRegister(r, a | (1 << (b & 31))); // bset (Zbs)
       else if (f7 === 0x24) rs.setRegister(r, a & ~(1 << (b & 31))); // bclr (Zbs)
+      else if (f7 === 0x30) {
+        // rol (Zbb)
+        const sh = b & 31;
+        rs.setRegister(r, ((a << sh) | (a >>> (32 - sh))) >>> 0);
+      } else if (f7 === 0x34) rs.setRegister(r, a ^ (1 << (b & 31))); // binv (Zbs)
       else throw Error(`Unknown OP func3=1, func7: 0x${f7.toString(16)}`);
       break;
     }
@@ -846,6 +872,14 @@ function executeOp(inst: number, cpu: CPU) {
           }
         }
         rs.setRegister(r, rs.getRegister(s1) < rs.getRegister(s2) ? 1 : 0);
+      } else if (f7 === 0x01) {
+        // mulhsu (RV32M): signed * unsigned, return high 32 bits
+        const a = rs.getRegister(s1); // signed
+        const b = rs.getRegisterU(s2); // unsigned
+        const negate = a < 0;
+        let hi = Math.floor(((a >>> 0) * b) / 0x100000000);
+        if (negate) hi = (hi - b) >>> 0;
+        rs.setRegisterU(r, hi);
       } else if (f7 === 0x10) {
         // sh1add (Zbb)
         rs.setRegister(r, ((rs.getRegister(s1) << 1) + rs.getRegister(s2)) & 0xffffffff);
@@ -891,7 +925,12 @@ function executeOp(inst: number, cpu: CPU) {
         rs.setRegister(r, u1 < u2 ? u1 : u2);
       } else if (f7 === 0x20) rs.setRegister(r, a >> b); // sra
       else if (f7 === 0x24) rs.setRegister(r, (a >>> (b & 31)) & 1); // bext (Zbs)
-      else if (f7 === 0x01) {
+      else if (f7 === 0x30) {
+        // ror (Zbb)
+        const sh = b & 31;
+        const u = rs.getRegisterU(s1);
+        rs.setRegister(r, ((u << (32 - sh)) >>> 0) | (u >>> sh));
+      } else if (f7 === 0x01) {
         // divu (RV32M)
         if (b === 0) rs.setRegisterU(r, 0xffffffff);
         else rs.setRegister(r, ((a >>> 0) / (b >>> 0)) >>> 0);

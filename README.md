@@ -109,6 +109,7 @@ max
 min
 minu
 maxu
+mulhsu
 mret *
 mul *
 mulh *
@@ -118,6 +119,7 @@ nop
 not
 or
 ori
+orc.b
 orn
 pack
 packh
@@ -125,6 +127,8 @@ rem *
 remu *
 ret
 rev8
+rol
+ror
 rori
 sb
 seqz
@@ -202,20 +206,12 @@ amomaxu.w
 amomin.w
 amominu.w
 amoxor.w
-binv
-brev8
 cm.mva01s
 cm.mvsa01
 cm.pop
 cm.popretz
-mulhsu
-neg
-orc.b
-rol
-ror
 lr.w
 sc.w
-sgtz
 unzip
 wfi
 zip
