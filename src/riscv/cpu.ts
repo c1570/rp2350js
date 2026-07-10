@@ -333,16 +333,14 @@ export class CPU {
     // For synchronous exceptions (ecall/ebreak during step), set next_pc so the
     // post-step PC-update logic redirects without adding inst_length. For
     // asynchronous interrupts (checkForInterrupts before fetch), set pc directly.
+    // Trap target: (mtvec & ~3) | (vector_sel << 2), where vector_sel is 0 for
+    // exceptions and direct-mode interrupts (hazard3_csr.v, mtvec wire).
     const mtvec = this.getCSR(0x305, 0);
     let target: number;
-    if (mcause >> 31) {
-      if ((mtvec & 1) == 0) {
-        target = mtvec; // direct mtvec mode
-      } else {
-        target = (mtvec & ~0b11) + ((mcause & 0b1111) << 2); // vectored mtvec mode
-      }
+    if (mcause >> 31 && mtvec & 1) {
+      target = (mtvec & ~0b11) | ((mcause & 0b1111) << 2); // vectored interrupt
     } else {
-      target = mtvec; // "Exceptions jump to exactly the address of MTVEC"
+      target = mtvec & ~0b11; // exception or direct-mode interrupt
     }
     if (fromStep) {
       this.next_pc = target;
