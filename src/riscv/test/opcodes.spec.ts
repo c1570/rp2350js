@@ -228,6 +228,14 @@ describe('RISC-V opcode regression', () => {
     // brev8 x6, x7       ->  0x6873d313   ; reverse bits within each byte (Zbkb)
     run(cpu, 'brev8 x6, x7', { 7: 0x01020408 }, 0x6873d313, 4, { 6: 0x80402010 });
 
+    // zip x6, x7         ->  0x08f39313   ; interleave high/low halves (Zbkb)
+    // 0xFFFF0000 -> even bits from high half=1, odd bits from low half=0 -> 0x55555555
+    run(cpu, 'zip x6, x7', { 7: 0xffff0000 }, 0x08f39313, 4, { 6: 0x55555555 });
+
+    // unzip x6, x7       ->  0x08f3d313   ; deinterleave odd/even bits (Zbkb)
+    // 0xAAAAAAAA -> odd bits to low half (0xFFFF), even bits to high half (0x0000)
+    run(cpu, 'unzip x6, x7', { 7: 0xaaaaaaaa }, 0x08f3d313, 4, { 6: 0x0000ffff });
+
     // ori x6, x7, 0x0f   ->  0x00f3e313   ; 0xf0 | 0x0f = 0xff
     run(cpu, 'ori x6, x7, 0x0f', { 7: 0xf0 }, 0x00f3e313, 4, { 6: 0xff });
 

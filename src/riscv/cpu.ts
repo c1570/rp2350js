@@ -708,6 +708,15 @@ function executeOpImm(inst: number, cpu: CPU) {
         0b01100000000000000001000000010011
       ) {
         rs.setRegister(r, Math.clz32(rs.getRegisterU(s1))); // clz (Zbb)
+      } else if (imu === 0b000010001111) {
+        // zip (Zbkb) — interleave: even bits from high half, odd bits from low half
+        const u = rs.getRegisterU(s1);
+        let result = 0;
+        for (let i = 0; i < 16; i++) {
+          result |= ((u >>> (16 + i)) & 1) << (2 * i); // even positions
+          result |= ((u >>> i) & 1) << (2 * i + 1); // odd positions
+        }
+        rs.setRegisterU(r, result >>> 0);
       } else throw Error(`Unknown OP-IMM func3=1, func7: 0x${f7.toString(16)}`);
       break;
     }
@@ -761,6 +770,15 @@ function executeOpImm(inst: number, cpu: CPU) {
         let result = 0;
         for (let i = 0; i < 32; i += 8) {
           if (u & (0x80 << i)) result |= 0xff << i;
+        }
+        rs.setRegisterU(r, result >>> 0);
+      } else if (imu === 0b000010001111) {
+        // unzip (Zbkb) — deinterleave: odd bits to low half, even bits to high half
+        const u = rs.getRegisterU(s1);
+        let result = 0;
+        for (let i = 0; i < 16; i++) {
+          result |= ((u >>> (2 * i + 1)) & 1) << i; // odd positions -> low half
+          result |= ((u >>> (2 * i)) & 1) << (16 + i); // even positions -> high half
         }
         rs.setRegisterU(r, result >>> 0);
       } else throw Error(`Unknown OP-IMM func3=5, func7: 0x${f7.toString(16)}`);

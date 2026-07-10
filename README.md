@@ -166,6 +166,8 @@ wfi
 xnor
 xor
 xori
+zip
+unzip
 zext.b
 zext.h
 ```
@@ -213,8 +215,6 @@ Xh3pmpm (Physical Memory Protection PMP)
 cycle penalties for dependent register usage, APB access, XIP access
 lr.w
 sc.w
-unzip
-zip
 ```
 
 Notes
