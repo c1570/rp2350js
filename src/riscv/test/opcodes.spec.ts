@@ -475,6 +475,12 @@ describe('RISC-V opcode regression', () => {
     run(cpu, 'ebreak', {}, 0x00100073, TRAPHANDLER - SCRATCH, {});
     expect(cpu.csrs[0x342]).toBe(3); // mcause
 
+    // wfi                 -> 0x10500073    ; halt until interrupt
+    cpu.waiting = false;
+    run(cpu, 'wfi', {}, 0x10500073, 4, {});
+    expect(cpu.waiting).toBe(true);
+    cpu.waiting = false; // reset for subsequent tests
+
     // CUSTOM0 (opcode 0x0b): Hazard3 bit-field extract with mask.
     // h3.bextm: rd = (rs1 >> rs2) & ((2<<size)-1). size=2 -> 3-bit mask.
     // h3.bextm x6, x7, x8, size=2 -> 0x0883830b   ; (0xff >> 4) & 0x7 = 7

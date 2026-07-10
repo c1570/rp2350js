@@ -1113,6 +1113,9 @@ function executeSystem(inst: number, cpu: CPU) {
         case 0x100073:
           cpu.trapEntry(3, true);
           break; // ebreak
+        case 0x10500073:
+          cpu.waiting = true;
+          break; // wfi
         default:
           throw Error(`Unknown SYSTEM instruction 0x${(inst >>> 0).toString(16)}`);
       }

@@ -162,6 +162,7 @@ srl
 srli
 sub
 sw
+wfi
 xnor
 xor
 xori
@@ -213,7 +214,6 @@ cycle penalties for dependent register usage, APB access, XIP access
 lr.w
 sc.w
 unzip
-wfi
 zip
 ```
 
