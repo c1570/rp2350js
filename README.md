@@ -45,9 +45,15 @@ and
 andi
 andn
 auipc
+amoadd.w
 amoand.w
+amomax.w
+amomaxu.w
+amomin.w
+amominu.w
 amoor.w
 amoswap.w
+amoxor.w
 beq
 beqz
 bclr
@@ -200,12 +206,6 @@ GLITCH_DETECTOR_BASE
 Hazard3: Machine vs. User mode
 Xh3pmpm (Physical Memory Protection PMP)
 cycle penalties for dependent register usage, APB access, XIP access
-amoadd.w
-amomax.w
-amomaxu.w
-amomin.w
-amominu.w
-amoxor.w
 cm.mva01s
 cm.mvsa01
 cm.pop

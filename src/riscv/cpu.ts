@@ -798,23 +798,59 @@ function executeStore(inst: number, cpu: CPU) {
   }
 }
 
-// AMO (0x2f) - R-type; only func3=0x2 implemented
+// AMO (0x2f) - R-type; only func3=0x2 implemented. funct5 (bits[31:27])
+// selects the operation; aq/rl bits (26:25) are no-ops in the emulator.
 function executeAmo(inst: number, cpu: CPU) {
   if (func3(inst) !== 0x2) throw Error(`Invalid AMO func3 ${func3(inst)}`);
+  const funct5 = (inst >>> 27) & 0x1f;
   const r = rd(inst),
     s1 = rs1(inst),
-    s2 = rs2(inst),
-    f7 = func7(inst);
+    s2 = rs2(inst);
   const rs = cpu.registerSet,
     chip = cpu.chip;
   const addr = rs.getRegisterU(s1);
   const v = rs.getRegisterU(s2);
   const mem = chip.readUint32(addr);
   rs.setRegisterU(r, mem);
-  if (f7 === 0x04) chip.writeUint32(addr, v); // amoswap.w
-  else if (f7 === 0x20 || f7 === 0x22) chip.writeUint32(addr, mem | v); // amoor.w(.aq)
-  else if (f7 === 0x30) chip.writeUint32(addr, mem & v); // amoand.w
-  else throw Error(`Unknown AMO func7: 0x${f7.toString(16)}`);
+  switch (funct5) {
+    case 0x00:
+      chip.writeUint32(addr, (mem + v) >>> 0);
+      break; // amoadd.w
+    case 0x01:
+      chip.writeUint32(addr, v);
+      break; // amoswap.w
+    case 0x04:
+      chip.writeUint32(addr, mem ^ v);
+      break; // amoxor.w
+    case 0x08:
+      chip.writeUint32(addr, mem | v);
+      break; // amoor.w
+    case 0x0c:
+      chip.writeUint32(addr, mem & v);
+      break; // amoand.w
+    case 0x10: {
+      // amomin.w (signed)
+      const ms = mem | 0,
+        vs = v | 0; // force signed interpretation
+      chip.writeUint32(addr, ms < vs ? mem : v);
+      break;
+    }
+    case 0x14: {
+      // amomax.w (signed)
+      const ms = mem | 0,
+        vs = v | 0;
+      chip.writeUint32(addr, ms > vs ? mem : v);
+      break;
+    }
+    case 0x18:
+      chip.writeUint32(addr, mem < v ? mem : v);
+      break; // amominu.w (unsigned)
+    case 0x1c:
+      chip.writeUint32(addr, mem > v ? mem : v);
+      break; // amomaxu.w (unsigned)
+    default:
+      throw Error(`Unknown AMO funct5: 0x${funct5.toString(16)}`);
+  }
   cpu.cycles += 3;
 }
 

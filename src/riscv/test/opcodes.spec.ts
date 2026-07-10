@@ -386,6 +386,36 @@ describe('RISC-V opcode regression', () => {
     run(cpu, 'amoand.w x6, x8, (x7)', { 7: DATA, 8: 0x0f }, 0x6083a32f, 4, { 6: 0xff });
     expect(chip.readUint32(DATA)).toBe(0x0f);
 
+    // amoadd.w x6, x8, (x7)  -> 0x0083a32f ; rd <- mem, mem <- mem + x8
+    chip.writeUint32(DATA, 10);
+    run(cpu, 'amoadd.w x6, x8, (x7)', { 7: DATA, 8: 20 }, 0x0083a32f, 4, { 6: 10 });
+    expect(chip.readUint32(DATA)).toBe(30);
+
+    // amoxor.w x6, x8, (x7)  -> 0x2083a32f ; rd <- mem, mem <- mem ^ x8
+    chip.writeUint32(DATA, 0xff);
+    run(cpu, 'amoxor.w x6, x8, (x7)', { 7: DATA, 8: 0x0f }, 0x2083a32f, 4, { 6: 0xff });
+    expect(chip.readUint32(DATA)).toBe(0xf0);
+
+    // amomin.w x6, x8, (x7)  -> 0x8083a32f ; rd <- mem, mem <- min(mem, x8) signed
+    chip.writeUint32(DATA, 0xffffffff);
+    run(cpu, 'amomin.w x6, x8, (x7)', { 7: DATA, 8: 1 }, 0x8083a32f, 4, { 6: 0xffffffff });
+    expect(chip.readUint32(DATA)).toBe(0xffffffff);
+
+    // amomax.w x6, x8, (x7)  -> 0xa083a32f ; rd <- mem, mem <- max(mem, x8) signed
+    chip.writeUint32(DATA, 0xffffffff);
+    run(cpu, 'amomax.w x6, x8, (x7)', { 7: DATA, 8: 1 }, 0xa083a32f, 4, { 6: 0xffffffff });
+    expect(chip.readUint32(DATA)).toBe(1);
+
+    // amominu.w x6, x8, (x7) -> 0xc083a32f ; rd <- mem, mem <- min(mem, x8) unsigned
+    chip.writeUint32(DATA, 0xffffffff);
+    run(cpu, 'amominu.w x6, x8, (x7)', { 7: DATA, 8: 1 }, 0xc083a32f, 4, { 6: 0xffffffff });
+    expect(chip.readUint32(DATA)).toBe(1);
+
+    // amomaxu.w x6, x8, (x7) -> 0xe083a32f ; rd <- mem, mem <- max(mem, x8) unsigned
+    chip.writeUint32(DATA, 0xffffffff);
+    run(cpu, 'amomaxu.w x6, x8, (x7)', { 7: DATA, 8: 1 }, 0xe083a32f, 4, { 6: 0xffffffff });
+    expect(chip.readUint32(DATA)).toBe(0xffffffff);
+
     // MISC-MEM (opcode 0x0f): fence / fence.i are no-ops in the emulator but
     // must execute without throwing. No register or memory side effects.
     // fence               -> 0x0000000f
