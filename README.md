@@ -33,7 +33,7 @@ TIMER1_BASE
 PLL_SYS_BASE *
 External interrupts *
 updated IRQ constants
-Xh3irq (MEIEA, MEIPA, MEIFA, MEIPRA, MEINEXT, MEICONTEXT) *
+Xh3irq (MEIEA, MEIPA, MEIFA, MEIPRA, MEINEXT, MEICONTEXT)
 Xh3power (h3.block and h3.unblock)
 Xh3bextm (h3.bextmi and h3.bextm)
 RV32C

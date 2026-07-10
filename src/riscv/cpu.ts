@@ -82,7 +82,8 @@ export class CPU {
     this.csrs[0x305] = 0x00001fff00;
     this.csrs[0x320] = 0x101;
     //TODO 0x3a1 - 0x7b0
-    this.csrs[0xbe5] = 1 << 15;
+    this.csrs[0xbe4] = (1 << 31) >>> 0; // meinext: noirq
+    this.csrs[0xbe5] = 1 << 15; // meicontext: noirq=1
     this.csrs[0xf11] = (0x9 << 7) | 0x13;
     this.csrs[0xf12] = 0x1b;
     this.csrs[0xf13] = 0x86fc4e3f;
@@ -220,12 +221,17 @@ export class CPU {
 
   setInterrupt(irq: number, value: boolean) {
     //this.logger.warn(this.coreLabel, `New interrupt: ${irq} = ${value}`);
-    if (value && !this.meipa[irq] && this.meiea[irq]) {
-      this.meipa[irq] = 1;
-      this.meicand.push(new EICAND(irq, this.meipra[irq]));
-      this.meicand.sort((a, b) => ((b.priority - a.priority) << 9) + (a.irq_number - b.irq_number));
-      this.updateMEINEXT();
-      this.interruptsUpdated = true;
+    if (value && !this.meipa[irq]) {
+      this.meipa[irq] = 1; // Spec: meipa = irq_r | meifa, unconditional on meiea
+      if (this.meiea[irq]) {
+        // Only add to candidate list if the IRQ is enabled
+        this.meicand.push(new EICAND(irq, this.meipra[irq]));
+        this.meicand.sort(
+          (a, b) => ((b.priority - a.priority) << 9) + (a.irq_number - b.irq_number)
+        );
+        this.updateMEINEXT();
+        this.interruptsUpdated = true;
+      }
     } else if (!value && this.meipa[irq]) {
       this.meipa[irq] = 0;
       this.meicand = this.meicand.filter((icand) => icand.irq_number != irq);
@@ -249,14 +255,22 @@ export class CPU {
 
   updateMEICONTEXT_update() {
     // called on MEINEXT.UPDATE write
-    // clear NOIRQ and IRQ
     let meicontext = this.csrs[0xbe5];
-    meicontext &= ~0b1001111111110000;
+    const meinext = this.csrs[0xbe4] >>> 0;
+    const noirq = meinext >> 31;
+    // clear NOIRQ, IRQ, and PREEMPT
+    meicontext &= ~((0b1 << 15) | (0x1ff << 4) | (0x1f << 16));
     // update NOIRQ
-    meicontext |= (this.csrs[0xbe4] >>> 31) << 15;
-    // update IRQ
-    const current_irq = (this.csrs[0xbe4] >>> 2) & 511;
-    meicontext |= current_irq << 4;
+    meicontext |= noirq << 15;
+    // update IRQ and PREEMPT
+    if (!noirq) {
+      const current_irq = (meinext >>> 2) & 511;
+      meicontext |= current_irq << 4;
+      // Spec: preempt_level_next = 1 + priority (for IRQ_PRIORITY_BITS=4)
+      meicontext |= (this.meipra[current_irq] + 1) << 16;
+    } else {
+      meicontext |= 16 << 16; // no preemption when noirq
+    }
     this.csrs[0xbe5] = meicontext;
   }
 
@@ -270,8 +284,10 @@ export class CPU {
     // update PPPREEMPT from old PPREEMPT
     meicontext |= ((this.csrs[0xbe5] >>> 24) & 0b1111) << 28;
     // update PREEMPT
-    const current_irq = (this.csrs[0xbe4] >>> 2) & 511;
-    if (current_irq > 0) {
+    const meinext = this.csrs[0xbe4] >>> 0;
+    if (!(meinext >> 31)) {
+      // Valid IRQ: preempt = 1 + priority (IRQ_PRIORITY_BITS=4)
+      const current_irq = (meinext >>> 2) & 511;
       meicontext |= (this.meipra[current_irq] + 1) << 16;
     } else {
       meicontext |= 16 << 16;
@@ -298,10 +314,12 @@ export class CPU {
     this.interruptsUpdated = false;
     if (this.csrs[0x304] & 0b100000000000) {
       // if MIE.MEIE is set... TODO consider software and timer interrupts as well
-      const meinext_irq_number = (this.csrs[0xbe4] >>> 2) & 511;
+      const meinext = this.csrs[0xbe4] >>> 0;
+      const meinext_noirq = meinext >> 31;
+      const meinext_irq_number = (meinext >>> 2) & 511;
       const meinext_irq_prio = this.meipra[meinext_irq_number];
       const meicontext_preempt = (this.csrs[0xbe5] >>> 16) & 0b11111;
-      if (meinext_irq_number > 0 && meinext_irq_prio >= meicontext_preempt) {
+      if (!meinext_noirq && meinext_irq_prio >= meicontext_preempt) {
         // ...and the interrupt visible in MEINEXT has at least PREEMPT priority...
         if (this.csrs[0x300] & 0b1000) {
           // ...and MSTATUS.MIE is set...
@@ -1108,4 +1126,3 @@ function executeCustom0(inst: number, cpu: CPU) {
     throw Error(`Invalid CUSTOM0 instruction 0x${inst.toString(16)}`);
   }
 }
-
