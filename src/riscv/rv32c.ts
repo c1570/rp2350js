@@ -1,38 +1,73 @@
 import { CPU } from './cpu';
 
 export function executeRv32c(cpu: CPU, inst: number): void {
-  let index = ((inst & 0x0003) << 3) | ((inst & 0xe000) >> 13);
-  let decompressor: any = decompressors[index];
-  if (!decompressor) throw new Error(`cannot handle index 0b${index.toString(2)}`);
-  return decompressor(cpu, inst);
+  switch (inst & 3) {
+    case 0:
+      switch ((inst >> 13) & 7) {
+        case 0:
+          caddi4spn(cpu, inst);
+          return;
+        case 2:
+          clw(cpu, inst);
+          return;
+        case 4:
+          zcb_100_00(cpu, inst);
+          return;
+        case 6:
+          csw(cpu, inst);
+          return;
+      }
+      break;
+    case 1:
+      switch ((inst >> 13) & 7) {
+        case 0:
+          caddi(cpu, inst);
+          return;
+        case 1:
+          cjal(cpu, inst);
+          return;
+        case 2:
+          cli(cpu, inst);
+          return;
+        case 3:
+          parse_011_01(cpu, inst);
+          return;
+        case 4:
+          parse_100_01(cpu, inst);
+          return;
+        case 5:
+          cj(cpu, inst);
+          return;
+        case 6:
+          cbeqz(cpu, inst);
+          return;
+        case 7:
+          cbenz(cpu, inst);
+          return;
+      }
+      break;
+    case 2:
+      switch ((inst >> 13) & 7) {
+        case 0:
+          cslli(cpu, inst);
+          return;
+        case 2:
+          clwsp(cpu, inst);
+          return;
+        case 4:
+          parse_100_10(cpu, inst);
+          return;
+        case 5:
+          parse_101_10(cpu, inst);
+          return;
+        case 6:
+          cswsp(cpu, inst);
+          return;
+      }
+      break;
+  }
+  throw new Error(`Unsupported compressed instruction: 0x${inst.toString(16)}`);
 }
-
-const decompressors: Array<((cpu: CPU, inst: number) => void) | null> = [
-  caddi4spn,
-  null,
-  clw,
-  null,
-  zcb_100_00,
-  null,
-  csw,
-  null,
-  caddi,
-  cjal,
-  cli,
-  parse_011_01,
-  parse_100_01,
-  cj,
-  cbeqz,
-  cbenz,
-  cslli,
-  null,
-  clwsp,
-  null,
-  parse_100_10,
-  parse_101_10,
-  cswsp,
-  null,
-];
 
 function assert(a: boolean) {}
 
