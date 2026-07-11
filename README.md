@@ -102,9 +102,9 @@ ctz
 div
 divu
 ebreak
-ecall *
-fence *
-fence.i *
+ecall
+fence
+fence.i
 j
 jal
 jalr
@@ -121,10 +121,10 @@ min
 minu
 maxu
 mulhsu
-mret *
-mul *
-mulh *
-mulhu *
+mret
+mul
+mulh
+mulhu
 mv
 nop
 not
@@ -134,8 +134,8 @@ orc.b
 orn
 pack
 packh
-rem *
-remu *
+rem
+remu
 ret
 rev8
 rol

@@ -250,6 +250,10 @@ describe('RISC-V opcode regression', () => {
 
     // mul x6, x7, x8     ->  0x02838333   ; 6 * 7 = 42 (RV32M)
     run(cpu, 'mul x6, x7, x8', { 7: 6, 8: 7 }, 0x02838333, 4, { 6: 42 });
+    // Large operands that exceed double precision — Math.imul gives correct low 32 bits
+    run(cpu, 'mul x6, x7, x8 (precision)', { 7: 0x08000001, 8: 0x08000001 }, 0x02838333, 4, {
+      6: 0x10000001,
+    });
 
     // sll x6, x7, x8     ->  0x00839333   ; 0x1 << 4 = 0x10
     run(cpu, 'sll x6, x7, x8', { 7: 0x1, 8: 4 }, 0x00839333, 4, { 6: 0x10 });

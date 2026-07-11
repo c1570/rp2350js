@@ -929,7 +929,7 @@ function executeOp(inst: number, cpu: CPU) {
         f7 = func7(inst);
       if (f7 === 0x00) rs.setRegister(r, a + b); // add
       else if (f7 === 0x20) rs.setRegister(r, a - b); // sub
-      else if (f7 === 0x01) rs.setRegister(r, (a * b) & 0xffffffff); // mul (RV32M)
+      else if (f7 === 0x01) rs.setRegister(r, Math.imul(a, b)); // mul (RV32M)
       else throw Error(`Unknown OP func3=0, func7: 0x${f7.toString(16)}`);
       break;
     }
