@@ -114,10 +114,8 @@ export class StateMachine {
   execValid = false;
   nextPC: number = 0;
 
-  clockDivInt: number = 1;
-  clockDivFrac: number = 0;
-  curClockInt: number = 0;
-  curClockFrac: number = 0;
+  clockDiv: number = 256; // INT*256 + FRAC
+  curClockPhase: number = 0;
   remainingDelay: number = 0;
   execCtrl = 0x1f << 12;
   shiftCtrl = 0b11 << 18;
@@ -715,17 +713,13 @@ export class StateMachine {
       return;
     }
 
-    this.curClockFrac += this.clockDivFrac;
-    if (this.curClockFrac > 255) {
-      this.curClockInt++;
-      this.curClockFrac -= 255;
-    }
-    this.curClockInt++;
-    if (this.curClockInt < this.clockDivInt) {
+    // Fractional clock divider via phase accumulator: advance by 256 each
+    // sys_clk cycle, execute when phase >= INT*256+FRAC.
+    this.curClockPhase += 256;
+    if (this.curClockPhase < this.clockDiv) {
       return;
-    } else {
-      this.curClockInt -= this.clockDivInt;
     }
+    this.curClockPhase -= this.clockDiv;
 
     this.cycles++;
 
@@ -830,7 +824,7 @@ export class StateMachine {
   readUint32(offset: number) {
     switch (offset + SM0_CLKDIV) {
       case SM0_CLKDIV:
-        return (this.clockDivInt << 16) | (this.clockDivFrac << 8);
+        return ((this.clockDiv / 256) << 16) | (((this.clockDiv & 0xff) << 8) >>> 0);
       case SM0_EXECCTRL:
         return this.execCtrl;
       case SM0_SHIFTCTRL:
@@ -849,8 +843,7 @@ export class StateMachine {
   writeUint32(offset: number, value: number) {
     switch (offset + SM0_CLKDIV) {
       case SM0_CLKDIV:
-        this.clockDivFrac = (value >>> 8) & 0xff;
-        this.clockDivInt = value >>> 16;
+        this.clockDiv = (value >>> 16) * 256 + ((value >>> 8) & 0xff);
         break;
       case SM0_EXECCTRL:
         this.execCtrl = ((value & 0x7fffffff) | (this.execCtrl & 0x80000000)) >>> 0;
@@ -900,8 +893,7 @@ export class StateMachine {
 
   restart() {
     this.cycles = 0;
-    this.curClockInt = 0;
-    this.curClockFrac = 0;
+    this.curClockPhase = 0;
     this.remainingDelay = 0;
     this.inputShiftCount = 0;
     this.outputShiftCount = 32;
@@ -911,8 +903,7 @@ export class StateMachine {
   }
 
   clkDivRestart() {
-    this.curClockInt = 0;
-    this.curClockFrac = 0;
+    this.curClockPhase = 0;
   }
 
   checkWait() {

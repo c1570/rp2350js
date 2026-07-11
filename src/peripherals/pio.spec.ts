@@ -816,3 +816,44 @@ describe('RP2350 PIO1 with gpio_base=16 reads high GPIOs correctly', () => {
     expect(result & (1 << 0)).toBeFalsy();
   });
 });
+
+describe('PIO clock divider', () => {
+  let rp2350: RP2350;
+
+  beforeEach(() => {
+    rp2350 = new RP2350();
+  });
+
+  afterEach(() => {
+    for (const pio of rp2350.pio) {
+      pio.stop();
+    }
+  });
+
+  it('integer divider slows instruction execution', () => {
+    const sm = rp2350.pio[0].machines[0];
+    // A simple loop: jmp 0 (1 cycle per instruction, no delay)
+    rp2350.pio[0].instructions[0] = pioJMP(PIO_COND_ALWAYS, 0);
+    sm.clockDiv = 4 * 256;
+    sm.enabled = true;
+
+    // 4 sys_clk cycles per instruction step → 1 instruction per 4 steps
+    for (let i = 0; i < 3; i++) sm.step();
+    expect(sm.pc).toBe(0); // not enough cycles yet
+    sm.step();
+    expect(sm.cycles).toBe(1); // 4th cycle executes
+  });
+
+  it('fractional divider produces correct average rate', () => {
+    const sm = rp2350.pio[0].machines[0];
+    rp2350.pio[0].instructions[0] = pioJMP(PIO_COND_ALWAYS, 0);
+    // div = 2.5 (INT=2, FRAC=128): 5 sys_clk cycles per 2 instructions
+    sm.clockDiv = 2 * 256 + 128;
+    sm.enabled = true;
+
+    // Step 100 cycles and count how many instructions executed
+    for (let i = 0; i < 100; i++) sm.step();
+    // 100 / 2.5 = 40 instructions expected
+    expect(sm.cycles).toBe(40);
+  });
+});
