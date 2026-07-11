@@ -161,21 +161,6 @@ export class RP2350 implements IRPChip {
 
   constructor(readonly debug: boolean = false, readonly clock: IClock = new SimulationClock()) {
     this.reset();
-    this.core0.onSEV = () => {
-      if (this.core1.waiting) {
-        this.core1.waiting = false;
-      } else {
-        this.core1.eventRegistered = true;
-      }
-    };
-    this.core1.onSEV = () => {
-      if (this.core0.waiting) {
-        this.core0.waiting = false;
-      } else {
-        this.core0.eventRegistered = true;
-      }
-    };
-    // Wire cross-hart LR/SC reservation invalidation
     this.core0.otherCpu = this.core1;
     this.core1.otherCpu = this.core0;
   }

@@ -34,7 +34,6 @@ class EICAND {
 }
 
 export class CPU {
-  public onSEV?: () => void;
   public waiting = false;
   public eventRegistered = false;
 
@@ -63,6 +62,15 @@ export class CPU {
 
   invalidateLrReservation(addr: number) {
     if (this.lr_addr === (addr & ~0xf)) this.lr_addr = -1;
+  }
+
+  // h3.unblock (SEV): wake the other hart if it's sleeping, otherwise flag a pending event.
+  fireSEV() {
+    if (this.otherCpu.waiting) {
+      this.otherCpu.waiting = false;
+    } else {
+      this.otherCpu.eventRegistered = true;
+    }
   }
 
   constructor(readonly chip: IRPChip, readonly coreLabel: string, readonly mhartid: number) {
@@ -957,7 +965,7 @@ function executeOp(inst: number, cpu: CPU) {
             return;
           } else if (s2 === 1) {
             // h3.unblock
-            if (cpu.onSEV) cpu.onSEV();
+            cpu.fireSEV();
             return;
           }
         }
