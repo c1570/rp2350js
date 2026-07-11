@@ -55,6 +55,16 @@ export class CPU {
 
   did_just_jump = false;
 
+  // LR/SC reservation: -1 = no active reservation, otherwise the 16-byte
+  // granule-aligned reservation address. lr.w sets it; sc.w checks it;
+  // lr.w or AMO on the other hart to the same granule invalidates it.
+  lr_addr = -1;
+  otherCpu!: CPU;
+
+  invalidateLrReservation(addr: number) {
+    if (this.lr_addr === (addr & ~0xf)) this.lr_addr = -1;
+  }
+
   constructor(readonly chip: IRPChip, readonly coreLabel: string, readonly mhartid: number) {
     this.reset();
   }
@@ -816,8 +826,8 @@ function executeStore(inst: number, cpu: CPU) {
   }
 }
 
-// AMO (0x2f) - R-type; only func3=0x2 implemented. funct5 (bits[31:27])
-// selects the operation; aq/rl bits (26:25) are no-ops in the emulator.
+// AMO/LR/SC (0x2f) - R-type; func3=0x2. funct5 (bits[31:27]) selects the
+// operation; aq/rl bits (26:25) are no-ops in the emulator.
 function executeAmo(inst: number, cpu: CPU) {
   if (func3(inst) !== 0x2) throw Error(`Invalid AMO func3 ${func3(inst)}`);
   const funct5 = (inst >>> 27) & 0x1f;
@@ -827,44 +837,70 @@ function executeAmo(inst: number, cpu: CPU) {
   const rs = cpu.registerSet,
     chip = cpu.chip;
   const addr = rs.getRegisterU(s1);
+
+  // lr.w: load + set reservation (no write)
+  if (funct5 === 0x02) {
+    rs.setRegisterU(r, chip.readUint32(addr));
+    cpu.lr_addr = addr & ~0xf;
+    cpu.otherCpu.invalidateLrReservation(addr);
+    cpu.cycles += 3;
+    return;
+  }
+
+  // sc.w: conditional store; rd=0 on success, rd=1 on failure
+  if (funct5 === 0x03) {
+    if (cpu.lr_addr === (addr & ~0xf)) {
+      chip.writeUint32(addr, rs.getRegisterU(s2));
+      rs.setRegisterU(r, 0);
+    } else {
+      rs.setRegisterU(r, 1);
+    }
+    cpu.lr_addr = -1;
+    cpu.cycles += 3;
+    return;
+  }
+
   const v = rs.getRegisterU(s2);
   const mem = chip.readUint32(addr);
   rs.setRegisterU(r, mem);
+  // AMO store + invalidate other hart's reservation
+  const store = (val: number) => {
+    chip.writeUint32(addr, val);
+    cpu.otherCpu.invalidateLrReservation(addr);
+  };
   switch (funct5) {
     case 0x00:
-      chip.writeUint32(addr, (mem + v) >>> 0);
+      store((mem + v) >>> 0);
       break; // amoadd.w
     case 0x01:
-      chip.writeUint32(addr, v);
+      store(v);
       break; // amoswap.w
     case 0x04:
-      chip.writeUint32(addr, mem ^ v);
+      store(mem ^ v);
       break; // amoxor.w
     case 0x08:
-      chip.writeUint32(addr, mem | v);
+      store(mem | v);
       break; // amoor.w
     case 0x0c:
-      chip.writeUint32(addr, mem & v);
+      store(mem & v);
       break; // amoand.w
     case 0x10: {
-      // amomin.w (signed)
-      const ms = mem | 0,
-        vs = v | 0; // force signed interpretation
-      chip.writeUint32(addr, ms < vs ? mem : v);
-      break;
-    }
-    case 0x14: {
-      // amomax.w (signed)
       const ms = mem | 0,
         vs = v | 0;
-      chip.writeUint32(addr, ms > vs ? mem : v);
-      break;
+      store(ms < vs ? mem : v);
+      break; // amomin.w (signed)
+    }
+    case 0x14: {
+      const ms = mem | 0,
+        vs = v | 0;
+      store(ms > vs ? mem : v);
+      break; // amomax.w (signed)
     }
     case 0x18:
-      chip.writeUint32(addr, mem < v ? mem : v);
+      store(mem < v ? mem : v);
       break; // amominu.w (unsigned)
     case 0x1c:
-      chip.writeUint32(addr, mem > v ? mem : v);
+      store(mem > v ? mem : v);
       break; // amomaxu.w (unsigned)
     default:
       throw Error(`Unknown AMO funct5: 0x${funct5.toString(16)}`);

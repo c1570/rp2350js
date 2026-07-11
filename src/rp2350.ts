@@ -175,6 +175,9 @@ export class RP2350 implements IRPChip {
         this.core0.eventRegistered = true;
       }
     };
+    // Wire cross-hart LR/SC reservation invalidation
+    this.core0.otherCpu = this.core1;
+    this.core1.otherCpu = this.core0;
   }
 
   isCore0Running = true;

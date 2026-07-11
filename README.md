@@ -113,6 +113,7 @@ lb
 lbu
 lh
 lhu
+lr.w (reservation simplified)
 lui
 lw
 max
@@ -141,6 +142,7 @@ rol
 ror
 rori
 sb
+sc.w (reservation simplified)
 seqz
 sext.b
 sext.h
@@ -213,8 +215,7 @@ GLITCH_DETECTOR_BASE
 Hazard3: Machine vs. User mode
 Xh3pmpm (Physical Memory Protection PMP)
 cycle penalties for dependent register usage, APB access, XIP access
-lr.w
-sc.w
+full lr.w/sc.w reservation semantics would need (expensive) tracking of all SRAM (DMA etc.) writes
 ```
 
 Notes

@@ -424,6 +424,43 @@ describe('RISC-V opcode regression', () => {
     run(cpu, 'amomaxu.w x6, x8, (x7)', { 7: DATA, 8: 1 }, 0xe083a32f, 4, { 6: 0xffffffff });
     expect(chip.readUint32(DATA)).toBe(0xffffffff);
 
+    // lr.w x6, (x7)          -> 0x1003a32f ; load-reserved: rd <- mem, set reservation
+    chip.writeUint32(DATA, 0xdeadbeef);
+    run(cpu, 'lr.w x6, (x7)', { 7: DATA }, 0x1003a32f, 4, { 6: 0xdeadbeef });
+    expect(cpu.lr_addr).toBe(DATA & ~0xf);
+
+    // sc.w x6, x8, (x7)      -> 0x1883a32f ; store-conditional: succeeds (rd=0) if reservation valid
+    run(cpu, 'sc.w x6, x8, (x7)', { 7: DATA, 8: 0xcafef00d }, 0x1883a32f, 4, { 6: 0 });
+    expect(chip.readUint32(DATA)).toBe(0xcafef00d);
+    expect(cpu.lr_addr).toBe(-1);
+
+    // sc.w without prior lr.w -> fails (rd=1), no store
+    run(cpu, 'sc.w x6, x8, (x7) (no lr)', { 7: DATA, 8: 0x11111111 }, 0x1883a32f, 4, { 6: 1 });
+    expect(chip.readUint32(DATA)).toBe(0xcafef00d);
+
+    // sc.w to same 16-byte granule but different word succeeds
+    chip.writeUint32(DATA, 0x2222);
+    run(cpu, 'lr.w x6, (x7)', { 7: DATA }, 0x1003a32f, 4, { 6: 0x2222 });
+    // sc.w to DATA+4 (same granule since DATA is 16-aligned) should succeed
+    run(cpu, 'sc.w x6, x8, (x7)', { 7: DATA + 4, 8: 0x3333 }, 0x1883a32f, 4, { 6: 0 });
+    expect(chip.readUint32(DATA + 4)).toBe(0x3333);
+    expect(cpu.lr_addr).toBe(-1);
+
+    // Cross-core invalidation: core1 lr.w to same granule invalidates core0's reservation
+    chip.writeUint32(DATA, 0xaaaa);
+    run(cpu, 'lr.w x6, (x7)', { 7: DATA }, 0x1003a32f, 4, { 6: 0xaaaa });
+    expect(cpu.lr_addr).toBe(DATA & ~0xf);
+    // core1 does lr.w to the same granule
+    chip.core1.waiting = false;
+    chip.core1.registerSet.setRegister(7, DATA);
+    chip.writeUint32(SCRATCH, 0x1003a32f); // lr.w x0, (x7)
+    chip.core1.pc = SCRATCH;
+    chip.core1.executeInstruction();
+    chip.core1.waiting = true;
+    expect(cpu.lr_addr).toBe(-1); // core0's reservation invalidated
+    run(cpu, 'sc.w x6, x8, (x7) (invalidated)', { 7: DATA, 8: 0xcccc }, 0x1883a32f, 4, { 6: 1 });
+    expect(chip.readUint32(DATA)).toBe(0xaaaa);
+
     // MISC-MEM (opcode 0x0f): fence / fence.i are no-ops in the emulator but
     // must execute without throwing. No register or memory side effects.
     // fence               -> 0x0000000f
