@@ -141,11 +141,12 @@ export class CPU {
     }
   }
 
-  executeInstruction() {
+  executeInstruction(): number {
+    const before = this.cycles;
     this.checkForInterrupts();
     if (this.waiting) {
       this.cycles++;
-      return;
+      return this.cycles - before;
     }
     const instruction = this.fetchInstruction();
     try {
@@ -155,6 +156,7 @@ export class CPU {
       throw e;
     }
     this.cycles++;
+    return this.cycles - before;
   }
 
   step(instruction: number) {

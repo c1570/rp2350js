@@ -588,7 +588,7 @@ export class CortexM0Core {
     return 1;
   }
 
-  executeInstruction() {
+  executeInstruction(): number {
     if (this.waiting) {
       this.cycles++;
       return 1;

@@ -10,6 +10,7 @@ import { GPIOPinState } from '../src/gpio-pin';
 import { bootrom_rp2350_A2 } from './bootrom_rp2350';
 import { loadHex } from './intelhex';
 import { GDBTCPServer } from '../src/gdb/gdb-tcp-server';
+import { RISCVGDBServer } from '../src/gdb/riscv-gdb-server';
 
 const homedir = require('os').homedir();
 
@@ -25,7 +26,7 @@ if(initial_pc < 0x20000000) {
 const disassembly = fs.readFileSync('./demo/bootrom_rp2350.dis', 'utf-8') + fs.readFileSync(`${filename}.dis`);
 mcu.loadDisassembly(disassembly);
 
-//const gdbServer = new GDBTCPServer(mcu, 3333);
+//const gdbServer = new GDBTCPServer(new RISCVGDBServer(mcu), 3333);
 //console.log(`GDB Server ready! Listening on port ${gdbServer.port}`);
 
 mcu.uart[0].onByte = (value: number) => {

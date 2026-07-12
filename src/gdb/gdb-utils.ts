@@ -20,7 +20,7 @@ export function encodeHexUint32(value: number) {
 export function decodeHexBuf(encoded: string) {
   const result = new Uint8Array(encoded.length / 2);
   for (let i = 0; i < result.length; i++) {
-    result[i] = parseInt(encoded.substr(i * 2, 2), 16);
+    result[i] = parseInt(encoded.substring(i * 2, i * 2 + 2), 16);
   }
   return result;
 }
@@ -31,6 +31,21 @@ export function decodeHexUint32Array(encoded: string) {
 
 export function decodeHexUint32(encoded: string) {
   return decodeHexUint32Array(encoded)[0];
+}
+
+// Unescape GDB binary data: '}' is the escape char, next byte XOR'd with 0x20.
+// Used by the X (binary memory write) packet.
+export function unescapeBinary(escaped: string): Uint8Array {
+  const result: number[] = [];
+  for (let i = 0; i < escaped.length; i++) {
+    const c = escaped.charCodeAt(i);
+    if (c === 0x7d && i + 1 < escaped.length) {
+      result.push(escaped.charCodeAt(++i) ^ 0x20);
+    } else {
+      result.push(c);
+    }
+  }
+  return new Uint8Array(result);
 }
 
 export function gdbChecksum(text: string) {

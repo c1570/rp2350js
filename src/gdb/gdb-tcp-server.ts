@@ -1,25 +1,24 @@
 import { createServer, Socket } from 'net';
 import { GDBConnection } from './gdb-connection';
 import { GDBServer } from './gdb-server';
-import { IGDBTarget } from './gdb-target';
 
-export class GDBTCPServer extends GDBServer {
+/**
+ * TCP wrapper for any GDBServer subclass. Listens on a port and creates
+ * a GDBConnection for each incoming socket.
+ */
+export class GDBTCPServer {
   private socketServer = createServer();
 
-  constructor(
-    target: IGDBTarget,
-    readonly port: number = 3333,
-  ) {
-    super(target);
+  constructor(readonly server: GDBServer, readonly port: number = 3333) {
     this.socketServer.listen(port);
     this.socketServer.on('connection', (socket) => this.handleConnection(socket));
   }
 
   handleConnection(socket: Socket) {
-    this.info('GDB connected');
+    this.server.info('GDB connected');
     socket.setNoDelay(true);
 
-    const connection = new GDBConnection(this, (data) => {
+    const connection = new GDBConnection(this.server, (data) => {
       socket.write(data);
     });
 
@@ -28,13 +27,13 @@ export class GDBTCPServer extends GDBServer {
     });
 
     socket.on('error', (err) => {
-      this.removeConnection(connection);
-      this.error(`GDB socket error ${err}`);
+      this.server.removeConnection(connection);
+      this.server.error(`GDB socket error ${err}`);
     });
 
     socket.on('close', () => {
-      this.removeConnection(connection);
-      this.info('GDB disconnected');
+      this.server.removeConnection(connection);
+      this.server.info('GDB disconnected');
     });
   }
 }

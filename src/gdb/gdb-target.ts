@@ -1,4 +1,4 @@
-import { RP2040 } from '../rp2040.js';
+import { RP2040 } from '../rp2040';
 
 export interface IGDBTarget {
   readonly executing: boolean;

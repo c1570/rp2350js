@@ -1,6 +1,7 @@
 import { RP2040 } from '../src';
 import { Simulator } from '../src/simulator';
 import { GDBTCPServer } from '../src/gdb/gdb-tcp-server';
+import { ArmGDBServer } from '../src/gdb/arm-gdb-server';
 import { USBCDC } from '../src/usb/cdc';
 import { ConsoleLogger, LogLevel } from '../src/utils/logging';
 import { bootromB1 } from './bootrom';
@@ -44,7 +45,7 @@ if (fs.existsSync('littlefs.img') && !args.circuitpython) {
 }
 
 if (args.gdb) {
-  const gdbServer = new GDBTCPServer(simulator, 3333);
+  const gdbServer = new GDBTCPServer(new ArmGDBServer(simulator), 3333);
   console.log(`RP2040 GDB Server ready! Listening on port ${gdbServer.port}`);
 }
 

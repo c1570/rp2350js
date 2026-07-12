@@ -443,20 +443,17 @@ export class RP2350 implements IRPChip {
   stepCores() {
     this.core0.stopped = false;
     this.core1.stopped = false;
-    let core0StartCycles = this.core0.cycles;
-    //if(this.core0.cycles>(1<<0)) console.log(`core0: ${this.core0.cycles}, waiting: ${this.core0.waiting}`);
     this.isCore0Running = true;
-    this.core0.executeInstruction();
+    const elapsed = this.core0.executeInstruction();
     this.isCore0Running = false;
-    while(this.core1.cycles < this.core0.cycles) {
-      //if(this.core0.cycles>(1<<0)) console.log(`core1: ${this.core1.cycles}, waiting: ${this.core1.waiting}`);
+    while (this.core1.cycles < this.core0.cycles) {
       this.core1.executeInstruction();
     }
-    return this.core0.cycles - core0StartCycles;
+    return elapsed;
   }
 
   stepThings(cycles: number) {
-    for(let cycle = 0; cycle < cycles; cycle++) {
+    for (let cycle = 0; cycle < cycles; cycle++) {
       this.pio[0].step();
       this.pio[1].step();
       this.pio[2].step();
