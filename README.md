@@ -14,6 +14,7 @@ For generic/original rp2040js docs, [see below](#rp2040js).
 - runs [Connomore64](https://github.com/c1570/Connomore64) main and video mcu (dual core, PIO, DMA)
 - _almost_ runs MicroPython (flash access needs some more work)
 - GDB interface ("monitor" outputting PIO/GPIO info; memory watch not supported)
+- MCP for interfacing with coding agents (features similar to GDB); register with, e.g., `opencode mcp add` and `npx ts-node demo/mcp-server.ts`
 
 #### Implemented
 

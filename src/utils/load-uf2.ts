@@ -1,0 +1,25 @@
+import { readFileSync } from 'fs';
+import { decodeBlock } from 'uf2';
+
+const FLASH_START_ADDRESS = 0x10000000;
+const RAM_START_ADDRESS = 0x20000000;
+
+/**
+ * Load a UF2 firmware file into memory. Each 512-byte UF2 block contains a
+ * payload and a target address. Blocks targeting 0x10000000+ go into flash;
+ * blocks targeting 0x20000000+ go into SRAM.
+ */
+export function loadUF2(filename: string, chip: { flash: Uint8Array; sram: Uint8Array }) {
+  const data = readFileSync(filename);
+  const buffer = new Uint8Array(512);
+  for (let offset = 0; offset + 512 <= data.length; offset += 512) {
+    buffer.set(data.subarray(offset, offset + 512));
+    const block = decodeBlock(buffer);
+    const { flashAddress, payload } = block;
+    if (flashAddress >= RAM_START_ADDRESS) {
+      chip.sram.set(payload, flashAddress - RAM_START_ADDRESS);
+    } else {
+      chip.flash.set(payload, flashAddress - FLASH_START_ADDRESS);
+    }
+  }
+}
