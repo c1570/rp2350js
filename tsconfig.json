@@ -3,6 +3,16 @@
     "rootDir": "src",
     "target": "es2015" /* Specify ECMAScript target version: 'ES3' (default), 'ES5', 'ES2015', 'ES2016', 'ES2017', 'ES2018', 'ES2019', 'ES2020', or 'ESNEXT'. */,
     "module": "commonjs" /* Specify module code generation: 'none', 'commonjs', 'amd', 'system', 'umd', 'es2015', 'es2020', or 'ESNext'. */,
+    "moduleResolution": "node" /* Classic Node resolution; exports-map packages are aliased via 'paths' below. */,
+    "baseUrl": ".",
+    "paths": {
+      /* These packages expose their entry points only through an "exports" map, which
+         classic Node resolution cannot read. Point TS directly at the emitted files.
+         Emit is unaffected (paths only guides type resolution); Node resolves the
+         real specifier via "exports" at runtime. */
+      "@modelcontextprotocol/sdk/*": ["node_modules/@modelcontextprotocol/sdk/dist/cjs/*"],
+      "uf2": ["node_modules/uf2/dist/cjs/uf2"]
+    },
     "outDir": "./dist/cjs" /* Redirect output structure to the directory. */,
     "strict": true /* Enable all strict type-checking options. */,
     "noFallthroughCasesInSwitch": false,
