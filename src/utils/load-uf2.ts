@@ -1,5 +1,6 @@
 import { readFileSync } from 'fs';
 import { decodeBlock } from 'uf2';
+import { IRPChip } from '../rpchip';
 
 const FLASH_START_ADDRESS = 0x10000000;
 const RAM_START_ADDRESS = 0x20000000;
@@ -9,7 +10,7 @@ const RAM_START_ADDRESS = 0x20000000;
  * payload and a target address. Blocks targeting 0x10000000+ go into flash;
  * blocks targeting 0x20000000+ go into SRAM.
  */
-export function loadUF2(filename: string, chip: { flash: Uint8Array; sram: Uint8Array }) {
+export function loadUF2(filename: string, chip: IRPChip) {
   const data = readFileSync(filename);
   const buffer = new Uint8Array(512);
   for (let offset = 0; offset + 512 <= data.length; offset += 512) {

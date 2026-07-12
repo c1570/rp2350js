@@ -21,6 +21,9 @@ export interface IRPChip {
 
   readonly pio: Array<RPPIO>;
 
+  readonly flash: Uint8Array;
+  readonly sram: Uint8Array;
+
   readonly usbDPRAM: Uint8Array;
   readonly usbDPRAMView: DataView;
 
