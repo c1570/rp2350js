@@ -10,11 +10,11 @@ For generic/original rp2040js docs, [see below](#rp2040js).
 
 - 95% RISC-V/Hazard3 machine mode support (no ARM support, no user mode support)
 - runs both no_flash/RAM binaries and flash binaries
-- runs pico-examples/blink_simple.c, hello_timer.c, hello_usb.c
-- runs [Connomore64](https://github.com/c1570/Connomore64) main and video mcu (dual core, PIO, DMA)
-- _almost_ runs MicroPython (flash access needs some more work)
-- GDB interface ("monitor" outputting PIO/GPIO info; memory watch not supported)
-- MCP for interfacing with coding agents (features similar to GDB); register with, e.g., `opencode mcp add` and `npx ts-node demo/mcp-server.ts`
+- runs **pico-examples/blink_simple.c, hello_timer.c, hello_usb.c**
+- runs **[Connomore64](https://github.com/c1570/Connomore64)** main and video mcu (dual core, PIO, DMA)
+- runs **MicroPython**
+- **GDB interface** ("monitor" outputting PIO/GPIO info; memory watch not supported)
+- **MCP server** for interfacing with coding agents (features similar to GDB); register with, e.g., `opencode mcp add` and `npx ts-node demo/mcp-server.ts`
 
 #### Implemented
 
