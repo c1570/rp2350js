@@ -14,6 +14,10 @@ import { RP2350McpServer } from '../rp2350-mcp-server';
 
 const SCRATCH = 0x20000000;
 
+function hex(n: number): string {
+  return '0x' + (n >>> 0).toString(16).padStart(8, '0');
+}
+
 describe('RP2350 MCP Server', () => {
   let chip: RP2350;
   let server: RP2350McpServer;
@@ -40,9 +44,9 @@ describe('RP2350 MCP Server', () => {
     test('returns core PCs, emulation_running=false, and empty breakpoints', () => {
       const data = json(server.handleToolCall('get_status', {}));
       expect(data.emulation_running).toBe(false);
-      expect(data.core0.pc).toBe(chip.core0.pc);
+      expect(data.core0.pc).toBe(hex(chip.core0.pc));
       expect(data.core0.wfi).toBeDefined();
-      expect(data.core1.pc).toBe(chip.core1.pc);
+      expect(data.core1.pc).toBe(hex(chip.core1.pc));
       expect(data.core1.wfi).toBeDefined();
       expect(data.breakpoints).toEqual([]);
     });
@@ -51,8 +55,8 @@ describe('RP2350 MCP Server', () => {
       server.handleToolCall('set_breakpoint', { address: 0x20000100 });
       server.handleToolCall('set_breakpoint', { address: 0x20000200 });
       const data = json(server.handleToolCall('get_status', {}));
-      expect(data.breakpoints).toContain(0x20000100);
-      expect(data.breakpoints).toContain(0x20000200);
+      expect(data.breakpoints).toContain(hex(0x20000100));
+      expect(data.breakpoints).toContain(hex(0x20000200));
     });
   });
 
@@ -65,9 +69,9 @@ describe('RP2350 MCP Server', () => {
       chip.core0.registerSet.setRegisterU(1, 0xdeadbeef);
       chip.core0.pc = 0x20000100;
       const data = json(server.handleToolCall('read_registers', { core: 0 }));
-      expect(data.ra).toBe(0xdeadbeef);
-      expect(data.pc).toBe(0x20000100);
-      expect(data.zero).toBe(0);
+      expect(data.ra).toBe(hex(0xdeadbeef));
+      expect(data.pc).toBe(hex(0x20000100));
+      expect(data.zero).toBe(hex(0));
       expect(data.mstatus).toBeDefined();
       expect(data.mhartid).toBeDefined();
     });
@@ -75,7 +79,7 @@ describe('RP2350 MCP Server', () => {
     test('read registers for core 1', () => {
       chip.core1.registerSet.setRegisterU(5, 0x42);
       const data = json(server.handleToolCall('read_registers', { core: 1 }));
-      expect(data.t0).toBe(0x42);
+      expect(data.t0).toBe(hex(0x42));
     });
 
     test('write register by ABI name', () => {
@@ -150,7 +154,7 @@ describe('RP2350 MCP Server', () => {
       chip.core0.pc = SCRATCH;
       const data = json(server.handleToolCall('single_step', { core: 0 }));
       expect(data.core).toBe(0);
-      expect(data.pc).toBe(SCRATCH + 4);
+      expect(data.pc).toBe(hex(SCRATCH + 4));
       expect(data.traces).toEqual([]);
     });
 
@@ -195,7 +199,7 @@ describe('RP2350 MCP Server', () => {
 
       expect(data.halted).toBe(true);
       expect(data.reason).toBe('breakpoint');
-      expect(data.core0_pc).toBe(SCRATCH + 4);
+      expect(data.core0_pc).toBe(hex(SCRATCH + 4));
     });
 
     test('stops at max_instructions', () => {
@@ -219,15 +223,15 @@ describe('RP2350 MCP Server', () => {
       server.handleToolCall('set_breakpoint', { address: 0x100 });
       server.handleToolCall('set_breakpoint', { address: 0x200 });
       const data = json(server.handleToolCall('list_breakpoints', {}));
-      expect(data.addresses).toContain(0x100);
-      expect(data.addresses).toContain(0x200);
+      expect(data.addresses).toContain(hex(0x100));
+      expect(data.addresses).toContain(hex(0x200));
     });
 
     test('clear', () => {
       server.handleToolCall('set_breakpoint', { address: 0x100 });
       server.handleToolCall('clear_breakpoint', { address: 0x100 });
       const data = json(server.handleToolCall('list_breakpoints', {}));
-      expect(data.addresses).not.toContain(0x100);
+      expect(data.addresses).not.toContain(hex(0x100));
     });
   });
 
@@ -240,8 +244,8 @@ describe('RP2350 MCP Server', () => {
       server.handleToolCall('set_tracepoint', { label: 'entry', address: 0x20000100 });
       server.handleToolCall('set_tracepoint', { label: 'loop', address: 0x20000200 });
       const data = json(server.handleToolCall('list_tracepoints', {}));
-      expect(data.tracepoints).toContainEqual({ label: 'entry', address: 0x20000100 });
-      expect(data.tracepoints).toContainEqual({ label: 'loop', address: 0x20000200 });
+      expect(data.tracepoints).toContainEqual({ label: 'entry', address: hex(0x20000100) });
+      expect(data.tracepoints).toContainEqual({ label: 'loop', address: hex(0x20000200) });
     });
 
     test('clear by label', () => {
@@ -254,7 +258,7 @@ describe('RP2350 MCP Server', () => {
     test('get_status includes tracepoint info', () => {
       server.handleToolCall('set_tracepoint', { label: 'x', address: 0x100 });
       const data = json(server.handleToolCall('get_status', {}));
-      expect(data.tracepoints).toContainEqual({ label: 'x', address: 0x100 });
+      expect(data.tracepoints).toContainEqual({ label: 'x', address: hex(0x100) });
     });
 
     test('run reports traces from hardwired trace markers', () => {
@@ -278,7 +282,7 @@ describe('RP2350 MCP Server', () => {
       const data = json(server.handleToolCall('run', { max_instructions: 20 }));
       expect(data.traces.length).toBeGreaterThanOrEqual(1);
       expect(data.traces[0].tag).toBe('hi');
-      expect(data.traces[0].pc).toBe(SCRATCH >>> 0);
+      expect(data.traces[0].pc).toBe(hex(SCRATCH >>> 0));
     });
 
     test('run does NOT halt on tracepoints', () => {
@@ -300,7 +304,7 @@ describe('RP2350 MCP Server', () => {
     test('list_tracepoints shows only definitions, not traces', () => {
       server.handleToolCall('set_tracepoint', { label: 'foo', address: 0x200 });
       const data = json(server.handleToolCall('list_tracepoints', {}));
-      expect(data.tracepoints).toContainEqual({ label: 'foo', address: 0x200 });
+      expect(data.tracepoints).toContainEqual({ label: 'foo', address: hex(0x200) });
       expect(data.traces).toBeUndefined();
     });
   });
@@ -399,7 +403,7 @@ describe('RP2350 MCP Server', () => {
       const data = json(server.handleToolCall('load_firmware', { path: hexPath }));
       expect(data.ok).toBe(true);
       expect(data.use_sram).toBe(true);
-      expect(data.entry_pc).toBe(0x20000220);
+      expect(data.entry_pc).toBe(hex(0x20000220));
       fs.unlinkSync(hexPath);
     });
 
@@ -408,7 +412,7 @@ describe('RP2350 MCP Server', () => {
       const data = json(server.handleToolCall('load_firmware', { path: hexPath }));
       expect(data.ok).toBe(true);
       expect(data.use_sram).toBe(false);
-      expect(data.entry_pc).toBe(0x10000036);
+      expect(data.entry_pc).toBe(hex(0x10000036));
       fs.unlinkSync(hexPath);
     });
 
@@ -434,7 +438,7 @@ describe('RP2350 MCP Server', () => {
       expect(data.firmware_loaded).toBe(true);
       // PC should be back at entry
       const status = json(server.handleToolCall('get_status', {}));
-      expect(status.core0.pc).toBe(0x20000000);
+      expect(status.core0.pc).toBe(hex(0x20000000));
       // Breakpoints cleared
       const bps = json(server.handleToolCall('list_breakpoints', {}));
       expect(bps.addresses).toEqual([]);
@@ -449,7 +453,7 @@ describe('RP2350 MCP Server', () => {
       expect(data.format).toBe('uf2');
       // This UF2 targets SRAM (0x20000000)
       expect(data.use_sram).toBe(true);
-      expect(data.entry_pc).toBe(0x20000220);
+      expect(data.entry_pc).toBe(hex(0x20000220));
     });
 
     test('reset without firmware clears state', () => {
@@ -510,6 +514,302 @@ describe('RP2350 MCP Server', () => {
       const after = json(server.handleToolCall('get_status', {}));
       expect(after.disassembly_loaded).toBe(true);
       expect(after.disassembly_path).toContain('blink_simple.dis');
+    });
+  });
+
+  // =====================================================================
+  // convert_number
+  // =====================================================================
+
+  describe('convert_number', () => {
+    test('hex → decimal', () => {
+      const data = json(server.handleToolCall('convert_number', { value: '0x12345678' }));
+      expect(data.decimal).toBe(0x12345678);
+      expect(data.hex).toBe(hex(0x12345678));
+    });
+
+    test('decimal → hex', () => {
+      const data = json(server.handleToolCall('convert_number', { value: '305419896' }));
+      expect(data.decimal).toBe(305419896);
+      expect(data.hex).toBe(hex(305419896));
+      expect(data.hex).toBe('0x12345678');
+    });
+
+    test('uppercase 0X prefix', () => {
+      const data = json(server.handleToolCall('convert_number', { value: '0XDEADBEEF' }));
+      expect(data.decimal).toBe(0xdeadbeef);
+      expect(data.hex).toBe(hex(0xdeadbeef));
+    });
+
+    test('accepts numeric JSON input', () => {
+      const data = json(server.handleToolCall('convert_number', { value: 0x20000100 }));
+      expect(data.decimal).toBe(0x20000100);
+      expect(data.hex).toBe(hex(0x20000100));
+    });
+
+    test('round-trips through both directions', () => {
+      const dec2hex = json(server.handleToolCall('convert_number', { value: '0xdeadbeef' }));
+      const hex2dec = json(
+        server.handleToolCall('convert_number', { value: dec2hex.decimal.toString() })
+      );
+      expect(hex2dec.hex).toBe(hex(0xdeadbeef));
+      expect(hex2dec.decimal).toBe(0xdeadbeef);
+    });
+
+    test('rejects malformed input', () => {
+      const result = server.handleToolCall('convert_number', { value: 'not a number' }) as any;
+      expect(result.isError).toBe(true);
+    });
+
+    test('rejects empty string', () => {
+      const result = server.handleToolCall('convert_number', { value: '' }) as any;
+      expect(result.isError).toBe(true);
+    });
+  });
+
+  // =====================================================================
+  // dump_memory
+  // =====================================================================
+
+  describe('dump_memory', () => {
+    test('dumps SRAM as Intel HEX with correct addresses', () => {
+      chip.writeUint32(SCRATCH, 0xdeadbeef);
+      chip.writeUint32(SCRATCH + 4, 0x12345678);
+      const data = json(
+        server.handleToolCall('dump_memory', {
+          region: 'sram',
+          address: 0,
+          length: 8,
+        })
+      );
+      expect(data.ok).toBe(true);
+      expect(data.region).toBe('sram');
+      expect(data.address).toBe(hex(0x20000000));
+      expect(data.format).toBe('ihex');
+      expect(data.path).toMatch(/\.hex$/);
+      const fileContent = fs.readFileSync(data.path, 'utf-8');
+      // Extended linear address record for 0x2000_0000 (upper = 0x2000)
+      expect(fileContent).toContain(':020000042000');
+      // Data bytes little-endian: ef be ad de 78 56 34 12
+      expect(fileContent).toContain('EFBEADDE78563412');
+      // EOF record
+      expect(fileContent).toContain(':00000001FF');
+      fs.unlinkSync(data.path);
+    });
+
+    test('dumps flash region', () => {
+      // Flash is loaded from the bootrom/firmware; just verify the call works
+      // and emits the correct extended address record (0x1000_0000 → upper=0x1000)
+      const data = json(
+        server.handleToolCall('dump_memory', {
+          region: 'flash',
+          address: 0,
+          length: 4,
+        })
+      );
+      expect(data.ok).toBe(true);
+      expect(data.region).toBe('flash');
+      expect(data.address).toBe(hex(0x10000000));
+      const fileContent = fs.readFileSync(data.path, 'utf-8');
+      expect(fileContent).toContain(':020000041000');
+      fs.unlinkSync(data.path);
+    });
+
+    test('text format emits address-prefixed hex rows', () => {
+      chip.writeUint32(SCRATCH, 0xaabbccdd);
+      const data = json(
+        server.handleToolCall('dump_memory', {
+          region: 'sram',
+          address: 0,
+          length: 4,
+          format: 'text',
+        })
+      );
+      expect(data.format).toBe('text');
+      expect(data.path).toMatch(/\.txt$/);
+      const fileContent = fs.readFileSync(data.path, 'utf-8').trim();
+      expect(fileContent).toContain(hex(0x20000000));
+      // writeUint32 is little-endian: dd cc bb aa
+      expect(fileContent).toContain('ddccbbaa');
+      fs.unlinkSync(data.path);
+    });
+
+    test('ihex output is reloadable via load_firmware', () => {
+      // Write known bytes, dump, reload into a fresh region, verify round-trip
+      chip.writeUint32(SCRATCH, 0xcafebabe);
+      const dump = json(
+        server.handleToolCall('dump_memory', {
+          region: 'sram',
+          address: 0,
+          length: 4,
+          format: 'ihex',
+        })
+      );
+      // Reload the dump; load_firmware auto-detects SRAM from the 0x2000 upper addr
+      const reload = json(server.handleToolCall('load_firmware', { path: dump.path }));
+      expect(reload.ok).toBe(true);
+      expect(reload.use_sram).toBe(true);
+      // After reload, the byte at SCRATCH should match what we wrote
+      expect(chip.readUint32(SCRATCH)).toBe(0xcafebabe);
+      fs.unlinkSync(dump.path);
+    });
+
+    test('length 0 returns error', () => {
+      const result = server.handleToolCall('dump_memory', {
+        region: 'sram',
+        address: 0,
+        length: 0,
+      }) as any;
+      expect(result.isError).toBe(true);
+    });
+  });
+
+  // =====================================================================
+  // hex/decimal input parsing (accepts "0x..." strings everywhere)
+  // =====================================================================
+
+  describe('hex input parsing', () => {
+    test('write_register accepts hex string value', () => {
+      server.handleToolCall('write_register', {
+        core: 0,
+        register: 'ra',
+        value: '0xdeadbeef',
+      });
+      expect(chip.core0.registerSet.getRegisterU(1)).toBe(0xdeadbeef);
+    });
+
+    test('write_register accepts hex string core', () => {
+      server.handleToolCall('write_register', {
+        core: '0x1',
+        register: 't0',
+        value: '0x42',
+      });
+      expect(chip.core1.registerSet.getRegisterU(5)).toBe(0x42);
+    });
+
+    test('write_register still accepts numeric JSON value', () => {
+      server.handleToolCall('write_register', {
+        core: 0,
+        register: 'sp',
+        value: 0x20010000,
+      });
+      expect(chip.core0.registerSet.getRegisterU(2)).toBe(0x20010000);
+    });
+
+    test('read_memory accepts hex string address and length', () => {
+      chip.writeUint32(SCRATCH, 0x11223344);
+      const dump = text(
+        server.handleToolCall('read_memory', {
+          address: '0x20000000',
+          length: '0x4',
+        })
+      );
+      expect(dump).toContain('44 33 22 11');
+    });
+
+    test('write_memory accepts hex string address', () => {
+      server.handleToolCall('write_memory', { address: '0x20000000', hex: 'efbeadde' });
+      expect(chip.readUint32(SCRATCH)).toBe(0xdeadbeef);
+    });
+
+    test('set_breakpoint / clear_breakpoint accept hex string address', () => {
+      server.handleToolCall('set_breakpoint', { address: '0x20000100' });
+      const data = json(server.handleToolCall('list_breakpoints', {}));
+      expect(data.addresses).toContain(hex(0x20000100));
+      server.handleToolCall('clear_breakpoint', { address: '0x20000100' });
+      const after = json(server.handleToolCall('list_breakpoints', {}));
+      expect(after.addresses).not.toContain(hex(0x20000100));
+    });
+
+    test('set_tracepoint accepts hex string address', () => {
+      server.handleToolCall('set_tracepoint', { label: 'lbl', address: '0x20000200' });
+      const data = json(server.handleToolCall('list_tracepoints', {}));
+      expect(data.tracepoints).toContainEqual({ label: 'lbl', address: hex(0x20000200) });
+    });
+
+    test('run accepts hex string max_instructions', () => {
+      chip.writeUint32(SCRATCH, 0x00000013); // nop
+      chip.writeUint32(SCRATCH + 4, 0xffdff06f); // j -4
+      chip.core0.pc = SCRATCH;
+      const data = json(server.handleToolCall('run', { max_instructions: '0xa' }));
+      expect(data.instructions_executed).toBe(10);
+    });
+
+    test('dump_pio accepts hex string instance', () => {
+      const dump = text(server.handleToolCall('dump_pio', { instance: '0x1' }));
+      expect(dump).toContain('PIO1');
+    });
+
+    test('dump_memory accepts hex string address and length', () => {
+      chip.writeUint32(SCRATCH, 0xfeedface);
+      const data = json(
+        server.handleToolCall('dump_memory', {
+          region: 'sram',
+          address: '0x0',
+          length: '0x4',
+          format: 'text',
+        })
+      );
+      expect(data.address).toBe(hex(0x20000000));
+      const fileContent = fs.readFileSync(data.path, 'utf-8');
+      // little-endian
+      expect(fileContent).toContain('cefaedfe');
+      fs.unlinkSync(data.path);
+    });
+
+    test('load_firmware accepts hex string entry_pc', () => {
+      // Minimal Intel HEX: extended address 0x2000, data record with one nop at
+      // offset 0, EOF record.
+      const hexContent = ':020000042000DA\n:0400000013000000E9\n:00000001FF\n';
+      const tmp = path.join(os.tmpdir(), `mcp-hex-pc-${Date.now()}.hex`);
+      fs.writeFileSync(tmp, hexContent);
+      const data = json(
+        server.handleToolCall('load_firmware', { path: tmp, entry_pc: '0x20000000' })
+      );
+      expect(data.entry_pc).toBe(hex(0x20000000));
+      // load_firmware re-creates the chip; read PC via get_status
+      const status = json(server.handleToolCall('get_status', {}));
+      expect(status.core0.pc).toBe(hex(0x20000000));
+      fs.unlinkSync(tmp);
+    });
+
+    test('mixed decimal and hex args in one call', () => {
+      server.handleToolCall('write_register', {
+        core: 0,
+        register: 'ra',
+        value: '0xcafef00d',
+      });
+      server.handleToolCall('write_register', {
+        core: '0x0',
+        register: 'sp',
+        value: 0x20000000,
+      });
+      expect(chip.core0.registerSet.getRegisterU(1)).toBe(0xcafef00d);
+      expect(chip.core0.registerSet.getRegisterU(2)).toBe(0x20000000);
+    });
+
+    test('uppercase 0X prefix works', () => {
+      server.handleToolCall('write_register', {
+        core: 0,
+        register: 'ra',
+        value: '0XDEADBEEF',
+      });
+      expect(chip.core0.registerSet.getRegisterU(1)).toBe(0xdeadbeef);
+    });
+
+    test('malformed value throws error', () => {
+      const result = server.handleToolCall('write_register', {
+        core: 0,
+        register: 'ra',
+        value: 'not hex',
+      }) as any;
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toMatch(/Could not parse integer/);
+    });
+
+    test('missing required address throws', () => {
+      const result = server.handleToolCall('set_breakpoint', {}) as any;
+      expect(result.isError).toBe(true);
     });
   });
 });
