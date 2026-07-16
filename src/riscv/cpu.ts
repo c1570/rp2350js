@@ -39,7 +39,7 @@ export class CPU implements ICpuCore {
   public eventRegistered = false;
 
   registerSet: RegisterSet = new RegisterSet(32);
-  csrs = new Array<number>(0x1000);
+  csrs = new Uint32Array(0x1000);
   pc = 0;
   next_pc = 0;
   stopped = false; //TODO
@@ -122,22 +122,40 @@ export class CPU implements ICpuCore {
   inst_length = 0;
 
   private fetchInstruction(): number {
-    const inst = this.chip.readUint16(this.pc);
-    if ((inst & 3) != 3) {
-      if (inst == 0) {
-        throw Error(`Illegal 16 bit instruction 0 at 0x${this.pc.toString(16)}`);
+    const pc = this.pc;
+    if (pc & 3) {
+      // 2-byte aligned: read the halfword first to detect compressed encodings.
+      const inst = this.chip.readUint16(pc);
+      if ((inst & 3) != 3) {
+        if (inst == 0) {
+          throw Error(`Illegal 16 bit instruction 0 at 0x${pc.toString(16)}`);
+        }
+        // RV32C: execute the decompressed instruction inline and return a
+        // sentinel; step() will skip dispatch and only run the PC-update logic.
+        executeRv32c(this, inst);
+        this.inst_length = 2;
+        return 0;
       }
-      // RV32C: execute the decompressed instruction inline and return a
-      // sentinel; step() will skip dispatch and only run the PC-update logic.
+      // 32-bit instruction straddling the word boundary: fetch the upper half.
+      const full = (inst | (this.chip.readUint16(pc + 2) << 16)) >>> 0;
+      if (this.did_just_jump) this.cycles++; // jumped to non 32 bit aligned instr
+      this.inst_length = 4;
+      return full;
+    }
+    // 4-byte aligned: a single readUint32 covers both a compressed instruction
+    // (low half) and a full 32-bit instruction, halving the fetch reads.
+    const word = this.chip.readUint32(pc) >>> 0;
+    if ((word & 3) != 3) {
+      const inst = word & 0xffff;
+      if (inst == 0) {
+        throw Error(`Illegal 16 bit instruction 0 at 0x${pc.toString(16)}`);
+      }
       executeRv32c(this, inst);
       this.inst_length = 2;
       return 0;
     }
-    // 32-bit instruction: fetch the remaining two bytes
-    const full = (inst | (this.chip.readUint16(this.pc + 2) << 16)) >>> 0;
-    if (this.did_just_jump && this.pc & 3) this.cycles++; // jumped to non 32 bit aligned instr
     this.inst_length = 4;
-    return full;
+    return word;
   }
 
   printDisassembly() {
@@ -650,11 +668,11 @@ export class RegisterSet {
   }
 
   getRegister(index: number): number {
-    return index === 0 ? 0 : this.regs[index];
+    return this.regs[index];
   }
 
   getRegisterU(index: number): number {
-    return index === 0 ? 0 : this.regs[index] >>> 0;
+    return this.regs[index] >>> 0;
   }
 
   setRegister(index: number, value: number): void {
