@@ -652,6 +652,21 @@ export class CPU implements ICpuCore {
   }
 }
 
+// High 32 bits of the product of two UNSIGNED 32-bit values, computed via
+// 16-bit partial products so no intermediate exceeds 2^53 (float-exact).
+function umulh(a: number, b: number): number {
+  const aL = a & 0xffff,
+    aH = a >>> 16,
+    bL = b & 0xffff,
+    bH = b >>> 16;
+  const ll = aL * bL;
+  const lh = aL * bH;
+  const hl = aH * bL;
+  const hh = aH * bH;
+  const cross = (ll >>> 16) + (lh & 0xffff) + (hl & 0xffff);
+  return (hh + (lh >>> 16) + (hl >>> 16) + (cross >>> 16)) >>> 0;
+}
+
 function signExtend8(value: number) {
   return (value << 24) >> 24;
 }
@@ -970,8 +985,16 @@ function executeOp(inst: number, cpu: CPU) {
         b = rs.getRegisterU(s2),
         f7 = func7(inst);
       if (f7 === 0x00) rs.setRegister(r, a << b); // sll
-      else if (f7 === 0x01)
-        rs.setRegisterU(r, ((a * rs.getRegister(s2)) / 0x100000000) >>> 0); // mulh
+      else if (f7 === 0x01) {
+        // mulh (RV32M): signed*signed, high 32 bits. Compute the unsigned high
+        // product then apply the two's-complement sign corrections, avoiding
+        // the float precision loss when the 64-bit product exceeds 2^53.
+        const bs = rs.getRegister(s2);
+        let hi = umulh(a >>> 0, bs >>> 0);
+        if (a < 0) hi = (hi - (bs >>> 0)) | 0;
+        if (bs < 0) hi = (hi - (a >>> 0)) | 0;
+        rs.setRegister(r, hi);
+      }
       else if (f7 === 0x14) rs.setRegister(r, a | (1 << (b & 31))); // bset (Zbs)
       else if (f7 === 0x24) rs.setRegister(r, a & ~(1 << (b & 31))); // bclr (Zbs)
       else if (f7 === 0x30) {
@@ -1003,13 +1026,13 @@ function executeOp(inst: number, cpu: CPU) {
         }
         rs.setRegister(r, rs.getRegister(s1) < rs.getRegister(s2) ? 1 : 0);
       } else if (f7 === 0x01) {
-        // mulhsu (RV32M): signed * unsigned, return high 32 bits
+        // mulhsu (RV32M): signed * unsigned, high 32 bits. Unsigned high product
+        // plus the single sign correction for rs1; umulh keeps it float-exact.
         const a = rs.getRegister(s1); // signed
         const b = rs.getRegisterU(s2); // unsigned
-        const negate = a < 0;
-        let hi = Math.floor(((a >>> 0) * b) / 0x100000000);
-        if (negate) hi = (hi - b) >>> 0;
-        rs.setRegisterU(r, hi);
+        let hi = umulh(a >>> 0, b);
+        if (a < 0) hi = (hi - b) | 0;
+        rs.setRegister(r, hi);
       } else if (f7 === 0x10) {
         // sh1add (Zbb)
         rs.setRegister(r, ((rs.getRegister(s1) << 1) + rs.getRegister(s2)) & 0xffffffff);
@@ -1021,7 +1044,7 @@ function executeOp(inst: number, cpu: CPU) {
         b = rs.getRegisterU(s2),
         f7 = func7(inst);
       if (f7 === 0x00) rs.setRegister(r, a < b ? 1 : 0); // sltu
-      else if (f7 === 0x01) rs.setRegister(r, ((a * b) / 0x100000000) >>> 0); // mulhu
+      else if (f7 === 0x01) rs.setRegisterU(r, umulh(a, b)); // mulhu (RV32M), float-exact
       else throw Error(`Unknown OP func3=3, func7: 0x${f7.toString(16)}`);
       break;
     }
