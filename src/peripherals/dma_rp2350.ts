@@ -158,11 +158,7 @@ export class RPDMAChannel {
   private transferFn: () => void = () => 0;
   private transferAlarm;
 
-  constructor(
-    readonly dma: RPDMA,
-    readonly rp2040: IRPChip,
-    readonly index: number,
-  ) {
+  constructor(readonly dma: RPDMA, readonly rp2040: IRPChip, readonly index: number) {
     this.transferAlarm = rp2040.clock.createAlarm(this.transfer);
     this.reset();
   }
@@ -236,7 +232,7 @@ export class RPDMAChannel {
         this.writeAddr += dataSize;
       }
     }
-    if(this.transMode != 0xf) {
+    if (this.transMode != 0xf) {
       this.transCount--;
     }
     if (this.transCount > 0) {
@@ -394,7 +390,9 @@ export class RPDMAChannel {
 }
 
 export class RPDMA extends BasePeripheral implements Peripheral {
-  readonly channels: Array<RPDMAChannel> = Array(CHANNEL_COUNT).fill(0).map((v,i) => new RPDMAChannel(this, this.rp2040, i));
+  readonly channels: Array<RPDMAChannel> = Array(CHANNEL_COUNT)
+    .fill(0)
+    .map((v, i) => new RPDMAChannel(this, this.rp2040, i));
 
   intRaw = 0;
   private intEnable = [0, 0, 0, 0];
@@ -419,10 +417,12 @@ export class RPDMA extends BasePeripheral implements Peripheral {
   }
 
   readUint32(offset: number) {
-    if ((offset % DEBUG_REGISTER_START) < (CHANNEL_COUNT * REGISTERS_SIZE_PER_CHANNEL)) {
+    if (offset % DEBUG_REGISTER_START < CHANNEL_COUNT * REGISTERS_SIZE_PER_CHANNEL) {
       // this handles both the normal CHn registers (starting at 0x0) as well as the CHn_DBG registers (starting at DEBUG_REGISTER_START)
       const channelIndex = ((offset % DEBUG_REGISTER_START) / REGISTERS_SIZE_PER_CHANNEL) >>> 0;
-      return this.channels[channelIndex].readUint32(offset & (DEBUG_REGISTER_START | (REGISTERS_SIZE_PER_CHANNEL - 1)));
+      return this.channels[channelIndex].readUint32(
+        offset & (DEBUG_REGISTER_START | (REGISTERS_SIZE_PER_CHANNEL - 1))
+      );
     }
     switch (offset) {
       case TIMER0:
@@ -459,10 +459,13 @@ export class RPDMA extends BasePeripheral implements Peripheral {
   }
 
   writeUint32(offset: number, value: number) {
-    if ((offset % DEBUG_REGISTER_START) < (CHANNEL_COUNT * REGISTERS_SIZE_PER_CHANNEL)) {
+    if (offset % DEBUG_REGISTER_START < CHANNEL_COUNT * REGISTERS_SIZE_PER_CHANNEL) {
       // this handles both the normal CHn registers (starting at 0x0) as well as the CHn_DBG registers (starting at DEBUG_REGISTER_START)
       const channelIndex = ((offset % DEBUG_REGISTER_START) / REGISTERS_SIZE_PER_CHANNEL) >>> 0;
-      this.channels[channelIndex].writeUint32(offset & (DEBUG_REGISTER_START | (REGISTERS_SIZE_PER_CHANNEL - 1)), value);
+      this.channels[channelIndex].writeUint32(
+        offset & (DEBUG_REGISTER_START | (REGISTERS_SIZE_PER_CHANNEL - 1)),
+        value
+      );
       return;
     }
     switch (offset) {

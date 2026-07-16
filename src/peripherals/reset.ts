@@ -14,7 +14,7 @@ export class RPReset extends BasePeripheral implements Peripheral {
 
   constructor(protected rp2040: IRPChip, readonly name: string) {
     super(rp2040, name);
-    if(rp2040 instanceof RP2350) {
+    if (rp2040 instanceof RP2350) {
       this.reset_done = this.reset_mask = 0x1fffffff;
     }
   }

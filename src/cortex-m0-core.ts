@@ -716,11 +716,11 @@ export class CortexM0Core {
     // B
     else if (opcode >> 11 === 0b11100) {
       // test for profiler trace magic
-      if((this.readUint16(opcodePC + 2) === 0xabcd) && (this.readUint16(opcodePC + 4) === 0xffff)) {
-        let profTag = "";
-        for(let i = opcodePC + 6; 1; i++) {
+      if (this.readUint16(opcodePC + 2) === 0xabcd && this.readUint16(opcodePC + 4) === 0xffff) {
+        let profTag = '';
+        for (let i = opcodePC + 6; 1; i++) {
           let ch = this.readUint8(i);
-          if(ch == 0) break;
+          if (ch == 0) break;
           profTag = profTag + String.fromCharCode(ch);
         }
         this.rp2040.onTrace(this.coreNumber, this.PC, profTag);
@@ -1338,7 +1338,10 @@ export class CortexM0Core {
         this.coreLabel,
         `Warning: Instruction at ${opcodePC.toString(16)} is not implemented yet!`
       );
-      this.logger.warn(this.coreLabel, `Opcode: 0x${opcode.toString(16)} (0x${opcode2.toString(16)})`);
+      this.logger.warn(
+        this.coreLabel,
+        `Opcode: 0x${opcode.toString(16)} (0x${opcode2.toString(16)})`
+      );
     }
 
     this.cycles += deltaCycles;

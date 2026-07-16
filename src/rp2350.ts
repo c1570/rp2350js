@@ -2,7 +2,14 @@ import { IRPChip } from './rpchip';
 import { IClock } from './clock/clock';
 import { SimulationClock } from './clock/simulation-clock';
 import { CPU } from './riscv/cpu';
-import { GPIOPin, FUNCTION_PWM, FUNCTION_SIO, FUNCTION_PIO0, FUNCTION_PIO1, FUNCTION_PIO2 } from './gpio-pin';
+import {
+  GPIOPin,
+  FUNCTION_PWM,
+  FUNCTION_SIO,
+  FUNCTION_PIO0,
+  FUNCTION_PIO1,
+  FUNCTION_PIO2,
+} from './gpio-pin';
 import { IRQ } from './irq_rp2350';
 import { RPADC } from './peripherals/adc';
 import { RPBUSCTRL } from './peripherals/busctrl';
@@ -58,7 +65,7 @@ export class RP2350 implements IRPChip {
   readonly usbDPRAM = new Uint8Array(4 * KB);
   readonly usbDPRAMView = new DataView(this.usbDPRAM.buffer);
 
-  readonly identifier = "rp2350";
+  readonly identifier = 'rp2350';
 
   readonly core0: CPU = new CPU(this, 'RISCVCore0', 0);
   readonly core1: CPU = new CPU(this, 'RISCVCore1', 1);
@@ -83,7 +90,9 @@ export class RP2350 implements IRPChip {
   readonly pwm = new RPPWM(this, 'PWM_BASE', IRQ.PWM_IRQ_WRAP_0, DREQChannel.DREQ_PWM_WRAP0);
   readonly adc = new RPADC(this, 'ADC', IRQ.ADC_IRQ_FIFO, DREQChannel.DREQ_ADC);
 
-  readonly gpio: Array<GPIOPin> = Array(48).fill(0).map((v,i) => new GPIOPin(this, i));
+  readonly gpio: Array<GPIOPin> = Array(48)
+    .fill(0)
+    .map((v, i) => new GPIOPin(this, i));
 
   readonly qspi: Array<GPIOPin> = [
     new GPIOPin(this, 0, 'SCLK'),
@@ -96,9 +105,30 @@ export class RP2350 implements IRPChip {
 
   readonly dma = new RPDMA(this, 'DMA', IRQ.DMA_IRQ_0);
   readonly pio: Array<RPPIO> = [
-    new RPPIO(this, 'PIO0', IRQ.PIO0_IRQ_0, 0, DREQChannel.DREQ_PIO0_RX0, DREQChannel.DREQ_PIO0_TX0),
-    new RPPIO(this, 'PIO1', IRQ.PIO1_IRQ_0, 1, DREQChannel.DREQ_PIO1_RX0, DREQChannel.DREQ_PIO1_TX0),
-    new RPPIO(this, 'PIO2', IRQ.PIO2_IRQ_0, 2, DREQChannel.DREQ_PIO2_RX0, DREQChannel.DREQ_PIO2_TX0),
+    new RPPIO(
+      this,
+      'PIO0',
+      IRQ.PIO0_IRQ_0,
+      0,
+      DREQChannel.DREQ_PIO0_RX0,
+      DREQChannel.DREQ_PIO0_TX0
+    ),
+    new RPPIO(
+      this,
+      'PIO1',
+      IRQ.PIO1_IRQ_0,
+      1,
+      DREQChannel.DREQ_PIO1_RX0,
+      DREQChannel.DREQ_PIO1_TX0
+    ),
+    new RPPIO(
+      this,
+      'PIO2',
+      IRQ.PIO2_IRQ_0,
+      2,
+      DREQChannel.DREQ_PIO2_RX0,
+      DREQChannel.DREQ_PIO2_TX0
+    ),
   ];
   readonly usbCtrl = new RPUSBController(this, 'USB', IRQ.USBCTRL_IRQ);
   readonly spi = [
@@ -172,7 +202,7 @@ export class RP2350 implements IRPChip {
     this.reset();
   }
 
-  disassembly = "";
+  disassembly = '';
   loadDisassembly(dis: string) {
     this.disassembly = dis;
   }
@@ -184,7 +214,7 @@ export class RP2350 implements IRPChip {
     this.flash.fill(0xff);
   }
 
-  readUint32(address: number) : number {
+  readUint32(address: number): number {
     address = address >>> 0; // round to 32-bits, unsigned
     if (address & 0x3) {
       this.logger.error(
@@ -398,7 +428,7 @@ export class RP2350 implements IRPChip {
   }
 
   gpioInputValueHasBeenSet(index: number) {
-    if(this.gpio[index].functionSelect === FUNCTION_PWM) {
+    if (this.gpio[index].functionSelect === FUNCTION_PWM) {
       this.pwm.gpioOnInput(index);
     }
     for (const pio of this.pio) {

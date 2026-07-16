@@ -132,11 +132,7 @@ export class RPDMAChannel {
   private transferFn: () => void = () => 0;
   private transferAlarm;
 
-  constructor(
-    readonly dma: RPDMA,
-    readonly rp2040: IRPChip,
-    readonly index: number,
-  ) {
+  constructor(readonly dma: RPDMA, readonly rp2040: IRPChip, readonly index: number) {
     this.transferAlarm = rp2040.clock.createAlarm(this.transfer);
     this.reset();
   }

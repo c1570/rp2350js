@@ -13,10 +13,15 @@ export class RPClocks extends BasePeripheral implements Peripheral {
 
   constructor(rp2040: IRPChip, name: string) {
     super(rp2040, name);
-    switch(rp2040.identifier) {
-      case "rp2040": this.clk_fc0_status = 0x98; break;
-      case "rp2350": this.clk_fc0_status = 0xa4; break;
-      default: throw new Error("Unknown chip id");
+    switch (rp2040.identifier) {
+      case 'rp2040':
+        this.clk_fc0_status = 0x98;
+        break;
+      case 'rp2350':
+        this.clk_fc0_status = 0xa4;
+        break;
+      default:
+        throw new Error('Unknown chip id');
     }
   }
 

@@ -7,10 +7,7 @@ export class ClockAlarm implements IAlarm {
   nanos: number = 0;
   scheduled = false;
 
-  constructor(
-    private readonly clock: SimulationClock,
-    readonly callback: AlarmCallback,
-  ) {}
+  constructor(private readonly clock: SimulationClock, readonly callback: AlarmCallback) {}
 
   schedule(deltaNanos: number): void {
     if (this.scheduled) {

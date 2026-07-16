@@ -62,7 +62,11 @@ class PWMChannel {
   readonly alarmB = new Timer32PeriodicAlarm(`PWM_Ch${this.index}_alarmB`, this.timer, () => {
     this.setB(false);
   });
-  readonly alarmBottom = new Timer32PeriodicAlarm(`PWM_Ch${this.index}_alarmBottom`, this.timer, () => this.wrap());
+  readonly alarmBottom = new Timer32PeriodicAlarm(
+    `PWM_Ch${this.index}_alarmBottom`,
+    this.timer,
+    () => this.wrap()
+  );
 
   csr: number = 0;
   div: number = 0;
@@ -278,7 +282,12 @@ export class RPPWM extends BasePeripheral implements Peripheral {
   gpioValue = 0;
   gpioDirection = 0;
 
-  constructor(readonly rp2040: IRPChip, name: string, readonly pwm_wrap_irq: number, readonly pwm_dreq_base: number) {
+  constructor(
+    readonly rp2040: IRPChip,
+    name: string,
+    readonly pwm_wrap_irq: number,
+    readonly pwm_dreq_base: number
+  ) {
     super(rp2040, name);
   }
 

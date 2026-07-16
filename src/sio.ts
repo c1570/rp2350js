@@ -40,13 +40,17 @@ export class RPSIO {
   readonly core0;
   readonly core1;
 
-  constructor(private readonly rp2040: RP2040, readonly sio_proc0_irq: number, readonly sio_proc1_irq: number) {
+  constructor(
+    private readonly rp2040: RP2040,
+    readonly sio_proc0_irq: number,
+    readonly sio_proc1_irq: number
+  ) {
     const cores = RPSIOCore.create2Cores(rp2040, sio_proc0_irq, sio_proc1_irq);
     this.core0 = cores[0];
     this.core1 = cores[1];
   }
 
-  readUint32(offset: number, core: Core) : number {
+  readUint32(offset: number, core: Core): number {
     if (offset >= SPINLOCK0 && offset <= SPINLOCK31) {
       const bitIndexMask = 1 << ((offset - SPINLOCK0) / 4);
       if (this.spinLock & bitIndexMask) {

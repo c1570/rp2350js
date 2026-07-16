@@ -141,11 +141,7 @@ export class Timer32PeriodicAlarm {
   private enabled = false;
   private clockAlarm;
 
-  constructor(
-    readonly label: string,
-    readonly timer: Timer32,
-    readonly callback: () => void,
-  ) {
+  constructor(readonly label: string, readonly timer: Timer32, readonly callback: () => void) {
     this.clockAlarm = this.timer.clock.createAlarm(this.handleAlarm);
     timer.listeners.push(this.update);
   }

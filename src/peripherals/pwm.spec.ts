@@ -15,11 +15,13 @@ describe('PWM', () => {
   });
 
   it('should not hang', async () => {
-    await cpu.writeUint32(0x4005008c,0);
-    await cpu.writeUint32(0x40050094,0);
-    await cpu.writeUint32(0x40050098,0);
-    await cpu.writeUint32(0x4005009c,9);
-    await cpu.writeUint32(0x40050090,16);
-    for(let i=0; i < 1000; i++) { cpu.singleStep(); }
+    await cpu.writeUint32(0x4005008c, 0);
+    await cpu.writeUint32(0x40050094, 0);
+    await cpu.writeUint32(0x40050098, 0);
+    await cpu.writeUint32(0x4005009c, 9);
+    await cpu.writeUint32(0x40050090, 16);
+    for (let i = 0; i < 1000; i++) {
+      cpu.singleStep();
+    }
   });
 });

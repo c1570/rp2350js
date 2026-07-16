@@ -516,7 +516,19 @@ export class RISCVGDBServer extends GDBServer {
   private dumpGpio(): string {
     const pins = this.chip.gpio;
     const n = pins.length;
-    const funcNames = ['SPI', 'UART', 'I2C', 'XIP', 'PWM', 'SIO', 'PIO0', 'PIO1', 'PIO2', 'CLK', 'USB'];
+    const funcNames = [
+      'SPI',
+      'UART',
+      'I2C',
+      'XIP',
+      'PWM',
+      'SIO',
+      'PIO0',
+      'PIO1',
+      'PIO2',
+      'CLK',
+      'USB',
+    ];
     const funcName = (f: number) => funcNames[f] ?? `FUNC${f}`;
 
     const lines: string[] = [`=== GPIO (${n} pins) ===`];

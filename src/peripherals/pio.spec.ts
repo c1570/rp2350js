@@ -122,7 +122,7 @@ describe('PIO', () => {
   }
 
   function executePioSteps(count: number) {
-    for(let i = 0; i < count; i++) {
+    for (let i = 0; i < count; i++) {
       (cpu as RP2040TestDriver).rp2040.pio[0].machines[0].step();
     }
   }
@@ -785,8 +785,8 @@ describe('RP2350 PIO1 with gpio_base=16 reads high GPIOs correctly', () => {
     // GPIO34 (pin 18 within PIO1) should be bit 18
     expect(result & (1 << 17)).toBeTruthy(); // GPIO33 at bit 17
     expect(result & (1 << 18)).toBeTruthy(); // GPIO34 at bit 18
-    expect(result & (1 << 1)).toBeFalsy();  // GPIO33 should NOT appear at bit 1
-    expect(result & (1 << 2)).toBeFalsy();  // GPIO34 should NOT appear at bit 2
+    expect(result & (1 << 1)).toBeFalsy(); // GPIO33 should NOT appear at bit 1
+    expect(result & (1 << 2)).toBeFalsy(); // GPIO34 should NOT appear at bit 2
   });
 
   it('should not alias GPIO32 onto bit 0 when reading via PIO1', () => {

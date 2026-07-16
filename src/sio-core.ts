@@ -73,8 +73,24 @@ export class RPSIOCore {
   static create2Cores(rp2040: IRPChip, sio_proc0_irq: number, sio_proc1_irq: number) {
     const rxFIFO = new FIFO(8);
     const txFIFO = new FIFO(8);
-    const core0 = new RPSIOCore(rp2040, rxFIFO, txFIFO, sio_proc0_irq, sio_proc1_irq, Core.Core0, Core.Core1);
-    const core1 = new RPSIOCore(rp2040, txFIFO, rxFIFO, sio_proc1_irq, sio_proc0_irq, Core.Core1, Core.Core0);
+    const core0 = new RPSIOCore(
+      rp2040,
+      rxFIFO,
+      txFIFO,
+      sio_proc0_irq,
+      sio_proc1_irq,
+      Core.Core0,
+      Core.Core1
+    );
+    const core1 = new RPSIOCore(
+      rp2040,
+      txFIFO,
+      rxFIFO,
+      sio_proc1_irq,
+      sio_proc0_irq,
+      Core.Core1,
+      Core.Core0
+    );
     return [core0, core1];
   }
 

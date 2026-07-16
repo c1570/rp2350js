@@ -53,7 +53,7 @@ export class RP2040 implements IRPChip {
   readonly usbDPRAM = new Uint8Array(4 * KB);
   readonly usbDPRAMView = new DataView(this.usbDPRAM.buffer);
 
-  readonly identifier = "rp2040";
+  readonly identifier = 'rp2040';
 
   readonly core0 = new CortexM0Core(this, 'CortexM0Core0', 0);
   readonly core1 = new CortexM0Core(this, 'CortexM0Core1', 1);
@@ -79,7 +79,9 @@ export class RP2040 implements IRPChip {
   readonly pwm = new RPPWM(this, 'PWM_BASE', IRQ.PWM_WRAP, DREQChannel.DREQ_PWM_WRAP0);
   readonly adc = new RPADC(this, 'ADC', IRQ.ADC_FIFO, DREQChannel.DREQ_ADC);
 
-  readonly gpio: Array<GPIOPin> = Array(30).fill(0).map((v,i) => new GPIOPin(this, i));
+  readonly gpio: Array<GPIOPin> = Array(30)
+    .fill(0)
+    .map((v, i) => new GPIOPin(this, i));
 
   readonly qspi: Array<GPIOPin> = [
     new GPIOPin(this, 0, 'SCLK'),
@@ -178,7 +180,7 @@ export class RP2040 implements IRPChip {
     this.reset();
   }
 
-  disassembly = "";
+  disassembly = '';
   loadDisassembly(dis: string) {
     this.disassembly = dis;
   }
@@ -190,7 +192,7 @@ export class RP2040 implements IRPChip {
     this.flash.fill(0xff);
   }
 
-  readUint32(address: number) : number {
+  readUint32(address: number): number {
     address = address >>> 0; // round to 32-bits, unsigned
     if (address & 0x3) {
       this.logger.error(
@@ -412,7 +414,7 @@ export class RP2040 implements IRPChip {
   }
 
   gpioInputValueHasBeenSet(index: number) {
-    if(this.gpio[index].functionSelect === FUNCTION_PWM) {
+    if (this.gpio[index].functionSelect === FUNCTION_PWM) {
       this.pwm.gpioOnInput(index);
     }
     for (const pio of this.pio) {
@@ -463,7 +465,7 @@ export class RP2040 implements IRPChip {
     this.isCore0Running = true;
     this.core0.executeInstruction();
     this.isCore0Running = false;
-    while(this.core1.cycles < this.core0.cycles) {
+    while (this.core1.cycles < this.core0.cycles) {
       //if(this.core0.cycles>(1<<0)) console.log(`core1: ${this.core1.cycles}, waiting: ${this.core1.waiting}`);
       this.core1.executeInstruction();
     }
@@ -471,7 +473,7 @@ export class RP2040 implements IRPChip {
   }
 
   stepThings(cycles: number) {
-    for(let cycle = 0; cycle < cycles; cycle++) {
+    for (let cycle = 0; cycle < cycles; cycle++) {
       this.pio[0].step();
       this.pio[1].step();
     }

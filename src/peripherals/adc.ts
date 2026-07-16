@@ -148,10 +148,15 @@ export class RPADC extends BasePeripheral implements Peripheral {
     this.cs |= (channel & CS_AINSEL_SHIFT) << CS_AINSEL_SHIFT;
   }
 
-  constructor(rp2040: IRPChip, name: string, readonly adc_interrupt: number, readonly adc_dreq: number) {
+  constructor(
+    rp2040: IRPChip,
+    name: string,
+    readonly adc_interrupt: number,
+    readonly adc_dreq: number
+  ) {
     super(rp2040, name);
     this.sampleAlarm = this.rp2040.clock.createAlarm(() =>
-      this.completeADCRead(this.channelValues[this.currentChannel], false),
+      this.completeADCRead(this.channelValues[this.currentChannel], false)
     );
     this.multiShotAlarm = this.rp2040.clock.createAlarm(() => {
       if (this.cs & CS_START_MANY) {

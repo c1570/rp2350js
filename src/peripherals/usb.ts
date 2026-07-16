@@ -139,8 +139,8 @@ export class RPUSBController extends BasePeripheral {
             if (buffer) {
               this.finishRead(i, buffer);
             }
-          }),
-        ),
+          })
+        )
       );
       this.endpointWriteAlarms.push(
         new USBEndpointAlarm(
@@ -149,8 +149,8 @@ export class RPUSBController extends BasePeripheral {
               this.onEndpointWrite?.(i, buffer);
             }
             this.endpointWriteAlarms[i].buffers = [];
-          }),
-        ),
+          })
+        )
       );
     }
     this.resetAlarm = clock.createAlarm(() => {
@@ -256,7 +256,7 @@ export class RPUSBController extends BasePeripheral {
         this.debug(
           `Start USB transfer, endPoint=${endpoint}, direction=${
             bufferOut ? 'out' : 'in'
-          } buffer=${bufferOffset.toString(16)} length=${bufferLength}`,
+          } buffer=${bufferOffset.toString(16)} length=${bufferLength}`
         );
         value &= ~(USB_BUF_CTRL_AVAILABLE << USB_BUF1_SHIFT);
         this.rp2040.usbDPRAMView.setUint32(offset, value, true);

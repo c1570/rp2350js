@@ -22,10 +22,7 @@ class RPTimerAlarm {
   armed = false;
   targetMicros = 0;
 
-  constructor(
-    readonly bitValue: number,
-    readonly clockAlarm: IAlarm,
-  ) {}
+  constructor(readonly bitValue: number, readonly clockAlarm: IAlarm) {}
 }
 
 export class RPTimer extends BasePeripheral implements Peripheral {
@@ -44,38 +41,38 @@ export class RPTimer extends BasePeripheral implements Peripheral {
   constructor(rp2040: IRPChip, name: string, readonly timer_irq_base: number) {
     super(rp2040, name);
     this.clock = rp2040.clock;
-    switch(rp2040.identifier) {
-      case "rp2040":
+    switch (rp2040.identifier) {
+      case 'rp2040':
         this.INTR = 0x34;
         this.INTE = 0x38;
         this.INTF = 0x3c;
         this.INTS = 0x40;
         break;
-      case "rp2350":
+      case 'rp2350':
         this.INTR = 0x3c;
         this.INTE = 0x40;
         this.INTF = 0x44;
         this.INTS = 0x48;
         break;
       default:
-        throw Error("Unknown rpchip identifier");
+        throw Error('Unknown rpchip identifier');
     }
     this.alarms = [
       new RPTimerAlarm(
         ALARM_0,
-        this.clock.createAlarm(() => this.fireAlarm(0)),
+        this.clock.createAlarm(() => this.fireAlarm(0))
       ),
       new RPTimerAlarm(
         ALARM_1,
-        this.clock.createAlarm(() => this.fireAlarm(1)),
+        this.clock.createAlarm(() => this.fireAlarm(1))
       ),
       new RPTimerAlarm(
         ALARM_2,
-        this.clock.createAlarm(() => this.fireAlarm(2)),
+        this.clock.createAlarm(() => this.fireAlarm(2))
       ),
       new RPTimerAlarm(
         ALARM_3,
-        this.clock.createAlarm(() => this.fireAlarm(3)),
+        this.clock.createAlarm(() => this.fireAlarm(3))
       ),
     ];
   }
