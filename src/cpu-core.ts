@@ -1,0 +1,33 @@
+/**
+ * Shared execution/scheduling surface for the two CPU cores modelled in this
+ * project: the RP2040's Cortex-M0 core (CortexM0Core) and the RP2350's
+ * Hazard3 RISC-V core (CPU).
+ *
+ * This interface intentionally captures ONLY the execution/scheduling
+ * boundary -- not the register model. The ARM r0-15/xPSR/M-system registers
+ * and the RISC-V x0-31/CSR sets are genuinely irreconcilable and remain
+ * per-architecture (each architecture needs its own target.xml). Consumers
+ * that need the register model should be typed to the concrete core class.
+ */
+export interface ICpuCore {
+  /** Core index (0/1); unifies coreNumber (ARM) and mhartid (RISC-V). */
+  readonly coreIndex: number;
+  /** Cycle counter; written by peripherals (e.g. sio-core divider penalty). */
+  cycles: number;
+  /** Program counter -- readable AND writable. */
+  PC: number;
+  /** True while parked in a WFI/WFE-style wait. */
+  waiting: boolean;
+  /** True when a WFE event has been latched but not yet consumed. */
+  eventRegistered: boolean;
+  /** True when the core is halted (e.g. on a breakpoint trap). */
+  stopped: boolean;
+  /** Sibling core, used for SEV (send-event) inter-core wakeup. */
+  otherCore: ICpuCore;
+  /** Advance the core by one instruction; returns the elapsed cycle count. */
+  executeInstruction(): number;
+  /** Reset the core to its post-boot state. */
+  reset(): void;
+  /** Send-event: wake the sibling if it's sleeping, else latch a pending event. */
+  fireSEV(): void;
+}

@@ -1,5 +1,4 @@
 import { IRPChip } from '../rpchip';
-import { Core } from '../core';
 
 const ATOMIC_NORMAL = 0;
 const ATOMIC_XOR = 1;
@@ -22,9 +21,9 @@ export function atomicUpdate(currentValue: number, atomicType: number, newValue:
 
 export interface Peripheral {
   readUint32(offset: number): number;
-  readUint32ViaCore(offset: number, core: Core): number;
+  readUint32ViaCore(offset: number, core: number): number;
   writeUint32(offset: number, value: number): void;
-  writeUint32ViaCore(offset: number, value: number, core: Core): void;
+  writeUint32ViaCore(offset: number, value: number, core: number): void;
   writeUint32Atomic(offset: number, value: number, atomicType: number): void;
 }
 
@@ -41,7 +40,7 @@ export class BasePeripheral implements Peripheral {
     return 0xffffffff;
   }
 
-  readUint32ViaCore(offset: number, core: Core) {
+  readUint32ViaCore(offset: number, core: number) {
     this.warn(`Unimplemented peripheral readvia ${core} from 0x${offset.toString(16)}`);
     return 0xffffffff;
   }
@@ -50,7 +49,7 @@ export class BasePeripheral implements Peripheral {
     this.warn(`Unimplemented peripheral write to 0x${offset.toString(16)}: ${value}`);
   }
 
-  writeUint32ViaCore(offset: number, value: number, core: Core) {
+  writeUint32ViaCore(offset: number, value: number, core: number) {
     this.warn(`Unimplemented peripheral write via ${core} to 0x${offset.toString(16)}: ${value}`);
   }
 

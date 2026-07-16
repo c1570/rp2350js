@@ -1,3 +1,4 @@
+import { ICpuCore } from './cpu-core';
 import { MAX_HARDWARE_IRQ } from './irq';
 import { RP2040, APB_START_ADDRESS, SIO_START_ADDRESS } from './rp2040';
 
@@ -47,7 +48,7 @@ enum StackPointerBank {
   SPprocess,
 }
 
-export class CortexM0Core {
+export class CortexM0Core implements ICpuCore {
   readonly registers = new Uint32Array(16);
   bankedSP: number = 0;
   cycles: number = 0;
@@ -86,8 +87,10 @@ export class CortexM0Core {
   SHPR2 = 0;
   SHPR3 = 0;
 
-  public onSEV?: () => void;
   public onBreak?: (code: number) => void;
+
+  // Sibling core for SEV (send-event) inter-core wakeup. Set by the chip.
+  otherCore!: CortexM0Core;
 
   stopped = true;
 
@@ -104,6 +107,20 @@ export class CortexM0Core {
 
   get logger() {
     return this.rp2040.logger;
+  }
+
+  get coreIndex() {
+    return this.coreNumber;
+  }
+
+  // SEV (send-event): wake the sibling core if it's sleeping, otherwise latch
+  // a pending event so its next WFE returns immediately.
+  fireSEV() {
+    if (this.otherCore.waiting) {
+      this.otherCore.waiting = false;
+    } else {
+      this.otherCore.eventRegistered = true;
+    }
   }
 
   reset() {
@@ -1156,7 +1173,7 @@ export class CortexM0Core {
     // SEV
     else if (opcode === 0b1011111101000000) {
       //this.logger.info(this.coreLabel, 'SEV');
-      this.onSEV?.();
+      this.fireSEV();
     }
     // STMIA
     else if (opcode >> 11 === 0b11000) {

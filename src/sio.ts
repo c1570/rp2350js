@@ -1,6 +1,6 @@
 import { RP2040 } from './rp2040';
-import { Core } from './core';
 import { RPSIOCore } from './sio-core';
+import { FIFO } from './utils/fifo';
 
 const CPUID = 0x000;
 
@@ -37,20 +37,22 @@ export class RPSIO {
   qspiGpioValue = 0;
   qspiGpioOutputEnable = 0;
   spinLock = 0;
-  readonly core0;
-  readonly core1;
+  readonly sioCore: [RPSIOCore, RPSIOCore];
 
   constructor(
     private readonly rp2040: RP2040,
     readonly sio_proc0_irq: number,
     readonly sio_proc1_irq: number
   ) {
-    const cores = RPSIOCore.create2Cores(rp2040, sio_proc0_irq, sio_proc1_irq);
-    this.core0 = cores[0];
-    this.core1 = cores[1];
+    const rxFIFO = new FIFO(8);
+    const txFIFO = new FIFO(8);
+    this.sioCore = [
+      new RPSIOCore(rp2040, rxFIFO, txFIFO, sio_proc0_irq, sio_proc1_irq, 0, 1),
+      new RPSIOCore(rp2040, txFIFO, rxFIFO, sio_proc1_irq, sio_proc0_irq, 1, 0),
+    ];
   }
 
-  readUint32(offset: number, core: Core): number {
+  readUint32(offset: number, cpuCore: number): number {
     if (offset >= SPINLOCK0 && offset <= SPINLOCK31) {
       const bitIndexMask = 1 << ((offset - SPINLOCK0) / 4);
       if (this.spinLock & bitIndexMask) {
@@ -95,26 +97,15 @@ export class RPSIO {
       case GPIO_HI_OE_XOR:
         return 0; // TODO verify with silicone
       case CPUID:
-        switch (core) {
-          case Core.Core0:
-            return 0;
-          case Core.Core1:
-            return 1;
-        }
-        break;
+        return cpuCore;
       case SPINLOCK_ST:
         return this.spinLock;
     }
     // Divider, Interpolator, FIFO get handled per core in sio-core
-    switch (core) {
-      case Core.Core0:
-        return this.core0.readUint32(offset);
-      case Core.Core1:
-        return this.core1.readUint32(offset);
-    }
+    return this.sioCore[cpuCore].readUint32(offset);
   }
 
-  writeUint32(offset: number, value: number, core: Core) {
+  writeUint32(offset: number, value: number, cpuCore: number) {
     if (offset >= SPINLOCK0 && offset <= SPINLOCK31) {
       const bitIndexMask = ~(1 << ((offset - SPINLOCK0) / 4));
       this.spinLock &= bitIndexMask;
@@ -173,14 +164,7 @@ export class RPSIO {
         break;
       default:
         // Divider, Interpolator, FIFO get handled per core in sio-core
-        switch (core) {
-          case Core.Core0:
-            this.core0.writeUint32(offset, value);
-            break;
-          case Core.Core1:
-            this.core1.writeUint32(offset, value);
-            break;
-        }
+        this.sioCore[cpuCore].writeUint32(offset, value);
     }
     const pinsToUpdate =
       (this.gpioValue ^ prevGpioValue) | (this.gpioOutputEnable ^ prevGpioOutputEnable);

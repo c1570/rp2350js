@@ -79,15 +79,8 @@ const targetXML = `<?xml version="1.0"?>
 </target>`;
 
 export class ArmGDBServer extends GDBServer {
-  private executeTimer: ReturnType<typeof setTimeout> | null = null;
-  private stopped = true;
-  private currentThread = 1;
-  private haltedCore = 0;
-  private breakpoints = new Set<number>();
-
   constructor(readonly target: IGDBTarget) {
-    super();
-    this.onInterrupt = () => this.stop();
+    super(target.rp2040, () => target.stop());
   }
 
   private get rp2040() {
@@ -95,85 +88,10 @@ export class ArmGDBServer extends GDBServer {
   }
 
   private get core(): CortexM0Core {
-    return this.currentThread === 1 ? this.rp2040.core0 : this.rp2040.core1;
+    return this.rp2040.core[this.currentThread - 1];
   }
 
-  executing = false;
-
-  // When set, only this core (0 or 1) is stepped during execute(). When -1,
-  // both cores are stepped (via rp2040.step()).
-  private singleCore: number = -1;
-
-  execute() {
-    this.stopped = false;
-    this.executing = true;
-    const run = () => {
-      if (this.stopped) return;
-      for (let i = 0; i < 100000 && !this.stopped; i++) {
-        if (this.singleCore >= 0) {
-          const core = this.singleCore === 0 ? this.rp2040.core0 : this.rp2040.core1;
-          this.rp2040.isCore0Running = this.singleCore === 0;
-          const elapsed = core.executeInstruction();
-          if (this.singleCore === 0) this.rp2040.stepThings(elapsed);
-          if (this.checkBreakpoints()) return;
-        } else {
-          if (this.stepLowestCycleCore()) return;
-        }
-      }
-      if (!this.stopped) {
-        this.executeTimer = setTimeout(run, 0);
-      }
-    };
-    run();
-  }
-
-  stop() {
-    this.stopped = true;
-    this.executing = false;
-    this.target.stop();
-    if (this.executeTimer != null) {
-      clearTimeout(this.executeTimer);
-      this.executeTimer = null;
-    }
-  }
-
-  // Step whichever core has fewer cycles, then advance peripherals by the
-  // core0 cycle delta only (core1 is catching up, not advancing wall-clock).
-  private stepLowestCycleCore(): boolean {
-    const step0 = this.rp2040.core0.cycles <= this.rp2040.core1.cycles;
-    const core = step0 ? this.rp2040.core0 : this.rp2040.core1;
-    this.rp2040.isCore0Running = step0;
-    const elapsed = core.executeInstruction();
-    if (step0) this.rp2040.stepThings(elapsed);
-    return this.hitBreakpoint(core) ? this.halt(step0 ? 0 : 1) : false;
-  }
-
-  // A parked (WFI) core isn't executing, so its PC sitting on a breakpoint
-  // address must not count as a hit (it would spuriously halt the session).
-  private hitBreakpoint(core: CortexM0Core): boolean {
-    return !core.waiting && this.breakpoints.has(core.PC);
-  }
-
-  private halt(core: number): boolean {
-    this.haltedCore = core;
-    this.stopped = true;
-    this.executing = false;
-    this.singleCore = -1;
-    this.notifyBreakpoint(core + 1);
-    return true;
-  }
-
-  // Breakpoint check for the single-core continue path (vCont;c:N). The
-  // both-cores path checks breakpoints itself, per instruction, in stepBothCores.
-  private checkBreakpoints(): boolean {
-    const core = this.singleCore === 0 ? this.rp2040.core0 : this.rp2040.core1;
-    if (this.hitBreakpoint(core)) {
-      return this.halt(this.singleCore);
-    }
-    return false;
-  }
-
-  private readRegister(index: number): number {
+  protected readRegister(index: number): number {
     const core = this.core;
     if (index >= 0 && index <= 15) return core.registers[index];
     switch (index) {
@@ -195,7 +113,7 @@ export class ArmGDBServer extends GDBServer {
     return 0;
   }
 
-  private writeRegister(index: number, value: number) {
+  protected writeRegister(index: number, value: number) {
     const core = this.core;
     if (index >= 0 && index <= 15) {
       core.registers[index] = value;
@@ -299,8 +217,8 @@ export class ArmGDBServer extends GDBServer {
 
           // Step takes priority (returns a synchronous stop reply)
           if (stepTid > 0) {
-            const stepCore = stepTid === 1 ? rp2040.core0 : rp2040.core1;
-            rp2040.isCore0Running = stepTid === 1;
+            const stepCore = rp2040.core[stepTid - 1];
+            rp2040.currentCore = stepTid - 1;
             stepCore.executeInstruction();
             this.haltedCore = stepTid - 1;
             const regStatus = [];
@@ -318,12 +236,12 @@ export class ArmGDBServer extends GDBServer {
             const hasCore1 = allThreads || continueTids.includes(2);
             if (hasCore0 && hasCore1) {
               // If one core is in WFI, step only the other
-              if (rp2040.core0.waiting && !rp2040.core1.waiting) this.singleCore = 1;
-              else if (rp2040.core1.waiting && !rp2040.core0.waiting) this.singleCore = 0;
+              if (rp2040.core[0].waiting && !rp2040.core[1].waiting) this.singleCore = 1;
+              else if (rp2040.core[1].waiting && !rp2040.core[0].waiting) this.singleCore = 0;
               else this.singleCore = -1;
             } else if (hasCore0) {
               this.currentThread = 1;
-              if (rp2040.core0.waiting) {
+              if (rp2040.core[0].waiting) {
                 this.haltedCore = 0;
                 setTimeout(() => this.notifyBreakpoint(1), 0);
                 return;
@@ -331,7 +249,7 @@ export class ArmGDBServer extends GDBServer {
               this.singleCore = 0;
             } else {
               this.currentThread = 2;
-              if (rp2040.core1.waiting) {
+              if (rp2040.core[1].waiting) {
                 this.haltedCore = 1;
                 setTimeout(() => this.notifyBreakpoint(2), 0);
                 return;
@@ -459,14 +377,14 @@ export class ArmGDBServer extends GDBServer {
       core.onBreak = () => {
         this.stopped = true;
         this.executing = false;
-        this.target.stop();
+        this.stopTarget?.();
         core.PC -= core.breakRewind;
         this.haltedCore = coreId;
         this.notifyBreakpoint(coreId + 1);
       };
     };
-    setupBreak(this.rp2040.core0, 0);
-    setupBreak(this.rp2040.core1, 1);
+    setupBreak(this.rp2040.core[0], 0);
+    setupBreak(this.rp2040.core[1], 1);
   }
 
   private handleMonitor(hexCmd: string): string {

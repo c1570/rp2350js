@@ -1,3 +1,4 @@
+import { ICpuCore } from '../cpu-core';
 import { IRPChip } from '../rpchip';
 import { executeRv32c } from './rv32c';
 
@@ -33,7 +34,7 @@ class EICAND {
   constructor(readonly irq_number: number, readonly priority: number) {}
 }
 
-export class CPU {
+export class CPU implements ICpuCore {
   public waiting = false;
   public eventRegistered = false;
 
@@ -58,7 +59,10 @@ export class CPU {
   // granule-aligned reservation address. lr.w sets it; sc.w checks it;
   // lr.w or AMO on the other hart to the same granule invalidates it.
   lr_addr = -1;
-  otherCpu!: CPU;
+  // Sibling core (typed ICpuCore via the interface); the concrete CPU type
+  // is kept so otherCore.invalidateLrReservation(...) stays callable, since
+  // LR/SC reservation invalidation is a RISC-V-specific concern.
+  otherCore!: CPU;
 
   invalidateLrReservation(addr: number) {
     if (this.lr_addr === (addr & ~0xf)) this.lr_addr = -1;
@@ -66,10 +70,10 @@ export class CPU {
 
   // h3.unblock (SEV): wake the other hart if it's sleeping, otherwise flag a pending event.
   fireSEV() {
-    if (this.otherCpu.waiting) {
-      this.otherCpu.waiting = false;
+    if (this.otherCore.waiting) {
+      this.otherCore.waiting = false;
     } else {
-      this.otherCpu.eventRegistered = true;
+      this.otherCore.eventRegistered = true;
     }
   }
 
@@ -79,6 +83,14 @@ export class CPU {
 
   get PC() {
     return this.pc;
+  }
+
+  set PC(value: number) {
+    this.pc = value;
+  }
+
+  get coreIndex() {
+    return this.mhartid;
   }
 
   get logger() {
@@ -852,7 +864,7 @@ function executeAmo(inst: number, cpu: CPU) {
   if (funct5 === 0x02) {
     rs.setRegisterU(r, chip.readUint32(addr));
     cpu.lr_addr = addr & ~0xf;
-    cpu.otherCpu.invalidateLrReservation(addr);
+    cpu.otherCore.invalidateLrReservation(addr);
     cpu.cycles += 3;
     return;
   }
@@ -876,7 +888,7 @@ function executeAmo(inst: number, cpu: CPU) {
   // AMO store + invalidate other hart's reservation
   const store = (val: number) => {
     chip.writeUint32(addr, val);
-    cpu.otherCpu.invalidateLrReservation(addr);
+    cpu.otherCore.invalidateLrReservation(addr);
   };
   switch (funct5) {
     case 0x00:

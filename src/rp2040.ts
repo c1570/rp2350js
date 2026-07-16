@@ -27,7 +27,6 @@ import { RPUART } from './peripherals/uart';
 import { RPUSBController } from './peripherals/usb';
 import { RPSIO } from './sio';
 import { RPWatchdog } from './peripherals/watchdog';
-import { Core } from './core';
 import { ConsoleLogger, Logger, LogLevel } from './utils/logging';
 
 export const FLASH_START_ADDRESS = 0x10000000;
@@ -55,8 +54,16 @@ export class RP2040 implements IRPChip {
 
   readonly identifier = 'rp2040';
 
-  readonly core0 = new CortexM0Core(this, 'CortexM0Core0', 0);
-  readonly core1 = new CortexM0Core(this, 'CortexM0Core1', 1);
+  readonly core: [CortexM0Core, CortexM0Core] = [
+    new CortexM0Core(this, 'CortexM0Core0', 0),
+    new CortexM0Core(this, 'CortexM0Core1', 1),
+  ];
+  get core0() {
+    return this.core[0];
+  }
+  get core1() {
+    return this.core[1];
+  }
 
   /* Clocks */
   clkSys = 125 * MHz;
@@ -158,23 +165,11 @@ export class RP2040 implements IRPChip {
 
   constructor(readonly clock: IClock = new SimulationClock()) {
     this.reset();
-    this.core0.onSEV = () => {
-      if (this.core1.waiting) {
-        this.core1.waiting = false;
-      } else {
-        this.core1.eventRegistered = true;
-      }
-    };
-    this.core1.onSEV = () => {
-      if (this.core0.waiting) {
-        this.core0.waiting = false;
-      } else {
-        this.core0.eventRegistered = true;
-      }
-    };
+    this.core[0].otherCore = this.core[1];
+    this.core[1].otherCore = this.core[0];
   }
 
-  isCore0Running = true;
+  currentCore = 0;
   loadBootrom(bootromData: Uint32Array) {
     this.bootrom.set(bootromData);
     this.reset();
@@ -186,8 +181,7 @@ export class RP2040 implements IRPChip {
   }
 
   reset() {
-    this.core0.reset();
-    this.core1.reset();
+    for (const c of this.core) c.reset();
     this.pwm.reset();
     this.flash.fill(0xff);
   }
@@ -202,7 +196,6 @@ export class RP2040 implements IRPChip {
     }
 
     const { bootrom } = this;
-    const core = this.isCore0Running ? Core.Core0 : Core.Core1;
     if (address < bootrom.length * 4) {
       return bootrom[address / 4];
     } else if (address >= FLASH_START_ADDRESS && address < FLASH_END_ADDRESS) {
@@ -221,9 +214,9 @@ export class RP2040 implements IRPChip {
     ) {
       return this.usbDPRAMView.getUint32(address - DPRAM_START_ADDRESS, true);
     } else if (address >>> 12 === 0xe000e) {
-      return this.ppb.readUint32ViaCore(address & 0xfff, core);
+      return this.ppb.readUint32ViaCore(address & 0xfff, this.currentCore);
     } else if (address >= SIO_START_ADDRESS && address < SIO_START_ADDRESS + 0x10000000) {
-      return this.sio.readUint32(address - SIO_START_ADDRESS, core);
+      return this.sio.readUint32(address - SIO_START_ADDRESS, this.currentCore);
     }
 
     const peripheral = this.findPeripheral(address);
@@ -265,7 +258,6 @@ export class RP2040 implements IRPChip {
   writeUint32(address: number, value: number) {
     address = address >>> 0;
     const { bootrom } = this;
-    const core = this.isCore0Running ? Core.Core0 : Core.Core1;
     const peripheral = this.findPeripheral(address);
     if (peripheral) {
       const atomicType = (address & 0x3000) >> 12;
@@ -288,9 +280,9 @@ export class RP2040 implements IRPChip {
       this.usbDPRAMView.setUint32(offset, value, true);
       this.usbCtrl.DPRAMUpdated(offset, value);
     } else if (address >= SIO_START_ADDRESS && address < SIO_START_ADDRESS + 0x10000000) {
-      this.sio.writeUint32(address - SIO_START_ADDRESS, value, core);
+      this.sio.writeUint32(address - SIO_START_ADDRESS, value, this.currentCore);
     } else if (address >>> 12 === 0xe000e) {
-      this.ppb.writeUint32ViaCore(address & 0xfff, value, core);
+      this.ppb.writeUint32ViaCore(address & 0xfff, value, this.currentCore);
     } else {
       this.logger.warn(LOG_NAME, `Write to undefined address: ${address.toString(16)}`);
     }
@@ -365,7 +357,7 @@ export class RP2040 implements IRPChip {
   }
 
   get cycles(): number {
-    return this.core0.cycles;
+    return this.core[0].cycles;
   }
 
   gpioValues(start_index: number) {
@@ -436,15 +428,8 @@ export class RP2040 implements IRPChip {
     this.core1.setInterrupt(irq, value);
   }
 
-  setInterruptCore(irq: number, value: boolean, core: Core) {
-    switch (core) {
-      case Core.Core0:
-        this.core0.setInterrupt(irq, value);
-        break;
-      case Core.Core1:
-        this.core1.setInterrupt(irq, value);
-        break;
-    }
+  setInterruptCore(irq: number, value: boolean, core: number) {
+    this.core[core].setInterrupt(irq, value);
   }
 
   updateIOInterrupt() {
@@ -458,18 +443,16 @@ export class RP2040 implements IRPChip {
   }
 
   stepCores() {
-    this.core0.stopped = false;
-    this.core1.stopped = false;
-    let core0StartCycles = this.core0.cycles;
-    //if(this.core0.cycles>(1<<0)) console.log(`core0: ${this.core0.cycles}, waiting: ${this.core0.waiting}`);
-    this.isCore0Running = true;
-    this.core0.executeInstruction();
-    this.isCore0Running = false;
-    while (this.core1.cycles < this.core0.cycles) {
-      //if(this.core0.cycles>(1<<0)) console.log(`core1: ${this.core1.cycles}, waiting: ${this.core1.waiting}`);
-      this.core1.executeInstruction();
+    this.core[0].stopped = false;
+    this.core[1].stopped = false;
+    const core0StartCycles = this.core[0].cycles;
+    this.currentCore = 0;
+    this.core[0].executeInstruction();
+    this.currentCore = 1;
+    while (this.core[1].cycles < this.core[0].cycles) {
+      this.core[1].executeInstruction();
     }
-    return this.core0.cycles - core0StartCycles;
+    return this.core[0].cycles - core0StartCycles;
   }
 
   stepThings(cycles: number) {
@@ -488,12 +471,7 @@ export class RP2040 implements IRPChip {
   stop() {}
   execute() {}
 
-  executing(core: Core): boolean {
-    switch (core) {
-      case Core.Core0:
-        return this.core0.stopped;
-      case Core.Core1:
-        return this.core1.stopped;
-    }
+  executing(core: number): boolean {
+    return this.core[core].stopped;
   }
 }

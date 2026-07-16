@@ -585,7 +585,7 @@ export class RP2350McpServer {
   }
 
   private cpu(core: number): CPU {
-    return core === 0 ? this.chip.core0 : this.chip.core1;
+    return this.chip.core[core];
   }
 
   private json(data: unknown) {
@@ -687,7 +687,7 @@ export class RP2350McpServer {
 
   private singleStep(core: number) {
     const cpu = this.cpu(core);
-    this.chip.isCore0Running = core === 0;
+    this.chip.currentCore = core;
     const traceStart = this.traces.length;
     const elapsed = cpu.executeInstruction();
     if (core === 0) this.chip.stepThings(elapsed);
@@ -706,7 +706,7 @@ export class RP2350McpServer {
     this.chip.core1.waiting = true; // park core1 by default
     const traceStart = this.traces.length;
     const hitBp = (core: number): boolean => {
-      const cpu = core === 0 ? this.chip.core0 : this.chip.core1;
+      const cpu = this.chip.core[core];
       return !cpu.waiting && this.breakpoints.has(cpu.pc >>> 0);
     };
     let instructions = 0;
@@ -722,8 +722,7 @@ export class RP2350McpServer {
         traces: this.traces.slice(traceStart).map((t) => this.formatTrace(t)),
       };
       // Show disassembly context for the halted core
-      const haltPc =
-        core === 0 || core === undefined ? this.chip.core0.pc >>> 0 : this.chip.core1.pc >>> 0;
+      const haltPc = this.chip.core[core ?? 0].pc >>> 0;
       const ctx = this.disasmContext(haltPc);
       if (ctx) r.disassembly = ctx;
       return this.json(r);
@@ -737,19 +736,18 @@ export class RP2350McpServer {
 
       // Step whichever core has fewer cycles. Only core0 advances wall-clock
       // time for peripherals; core1 is catching up.
-      const step0 = this.chip.core0.cycles <= this.chip.core1.cycles;
-      const cpu = step0 ? this.chip.core0 : this.chip.core1;
+      this.chip.currentCore = this.chip.core[0].cycles <= this.chip.core[1].cycles ? 0 : 1;
+      const cpu = this.chip.core[this.chip.currentCore];
       const wasWaiting = cpu.waiting;
-      this.chip.isCore0Running = step0;
       const elapsed = cpu.executeInstruction();
-      if (step0) this.chip.stepThings(elapsed);
+      if (this.chip.currentCore === 0) this.chip.stepThings(elapsed);
 
       // Only count non-WFI instructions toward the limit
       if (!wasWaiting) instructions++;
 
       // Check breakpoints on the core that just ran
-      if (hitBp(step0 ? 0 : 1)) {
-        return result(true, 'breakpoint', step0 ? 0 : 1);
+      if (hitBp(this.chip.currentCore)) {
+        return result(true, 'breakpoint', this.chip.currentCore);
       }
     }
     return result(false, 'max_reached');

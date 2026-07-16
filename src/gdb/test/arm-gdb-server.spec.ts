@@ -414,7 +414,7 @@ describe('ARM GDB Server', () => {
       sim.rp2040.core1.waiting = true;
 
       // Execute one instruction — BKPT should trigger onBreak
-      sim.rp2040.isCore0Running = true;
+      sim.rp2040.currentCore = 0;
       sim.rp2040.core0.executeInstruction();
 
       // The onBreak callback in ArmGDBServer sets haltedCore and stops

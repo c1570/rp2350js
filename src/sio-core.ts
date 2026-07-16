@@ -1,6 +1,4 @@
 import { IRPChip } from './rpchip';
-import { RP2040 } from './rp2040';
-import { Core } from './core';
 import { Interpolator } from './interpolator';
 import { FIFO } from './utils/fifo';
 
@@ -70,38 +68,14 @@ export class RPSIOCore {
   ROE = false;
   WOF = false;
 
-  static create2Cores(rp2040: IRPChip, sio_proc0_irq: number, sio_proc1_irq: number) {
-    const rxFIFO = new FIFO(8);
-    const txFIFO = new FIFO(8);
-    const core0 = new RPSIOCore(
-      rp2040,
-      rxFIFO,
-      txFIFO,
-      sio_proc0_irq,
-      sio_proc1_irq,
-      Core.Core0,
-      Core.Core1
-    );
-    const core1 = new RPSIOCore(
-      rp2040,
-      txFIFO,
-      rxFIFO,
-      sio_proc1_irq,
-      sio_proc0_irq,
-      Core.Core1,
-      Core.Core0
-    );
-    return [core0, core1];
-  }
-
-  private constructor(
+  constructor(
     private readonly rp2040: IRPChip,
     private readonly rxFIFO: FIFO,
     private readonly txFIFO: FIFO,
     private readonly sio_interrupt: number,
     private readonly sio_interrupt_other_core: number,
-    private readonly core: Core,
-    private readonly core_other: Core
+    private readonly cpuCore: number,
+    private readonly cpuCoreOther: number
   ) {}
 
   readUint32(offset: number) {
@@ -218,12 +192,12 @@ export class RPSIOCore {
       case FIFO_RD:
         if (this.rxFIFO.empty) {
           this.ROE = true;
-          this.rp2040.setInterruptCore(this.sio_interrupt, true, this.core);
+          this.rp2040.setInterruptCore(this.sio_interrupt, true, this.cpuCore);
           return 0;
         }
         return this.rxFIFO.pull();
       default:
-        console.warn(`Read from invalid SIO address: ${offset.toString(16)} (${this.core})`);
+        console.warn(`Read from invalid SIO address: ${offset.toString(16)} (${this.cpuCore})`);
         return 0xffffffff;
     }
   }
@@ -340,22 +314,22 @@ export class RPSIOCore {
           this.ROE = false;
         }
         if (!this.WOF && !this.ROE && this.rxFIFO.empty) {
-          this.rp2040.setInterruptCore(this.sio_interrupt, false, this.core);
+          this.rp2040.setInterruptCore(this.sio_interrupt, false, this.cpuCore);
         }
         break;
       case FIFO_WR:
         if (this.txFIFO.full) {
           this.WOF = true;
-          this.rp2040.setInterruptCore(this.sio_interrupt, true, this.core);
+          this.rp2040.setInterruptCore(this.sio_interrupt, true, this.cpuCore);
         } else {
           this.txFIFO.push(value);
-          this.rp2040.setInterruptCore(this.sio_interrupt_other_core, true, this.core_other);
+          this.rp2040.setInterruptCore(this.sio_interrupt_other_core, true, this.cpuCoreOther);
         }
         break;
       default:
         console.warn(
           `Write to invalid SIO address: ${offset.toString(16)}, value=${value.toString(16)} (${
-            this.core
+            this.cpuCore
           })`
         );
         break;
@@ -376,13 +350,6 @@ export class RPSIOCore {
       }
     }
     this.divCSR = 0b11;
-    switch (this.core) {
-      case Core.Core0:
-        (this.rp2040 as RP2040).core0.cycles += 8;
-        break;
-      case Core.Core1:
-        (this.rp2040 as RP2040).core1.cycles += 8;
-        break;
-    }
+    this.rp2040.core[this.cpuCore].cycles += 8;
   }
 }

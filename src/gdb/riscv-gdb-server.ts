@@ -89,101 +89,15 @@ const targetXML = `<?xml version="1.0"?>
 </target>`;
 
 export class RISCVGDBServer extends GDBServer {
-  private executeTimer: ReturnType<typeof setTimeout> | null = null;
-  private stopped = true;
-  private currentThread = 1; // 1 = core0, 2 = core1
-  private haltedCore = 0;
-
-  // Breakpoint addresses, shared across both cores
-  private breakpoints = new Set<number>();
-
   constructor(readonly chip: RP2350) {
-    super();
-    this.onInterrupt = () => this.stop();
+    super(chip);
   }
 
   private get cpu(): CPU {
-    return this.currentThread === 1 ? this.chip.core0 : this.chip.core1;
+    return this.chip.core[this.currentThread - 1];
   }
 
-  executing = false;
-
-  // When set, only this core (0 or 1) is stepped during execute(). When -1,
-  // both cores are stepped (via chip.step()). This supports vCont;c:N which
-  // continues only the specified thread.
-  private singleCore: number = -1;
-
-  execute() {
-    this.stopped = false;
-    this.executing = true;
-    const run = () => {
-      if (this.stopped) return;
-      for (let i = 0; i < 100000 && !this.stopped; i++) {
-        if (this.singleCore >= 0) {
-          // Step only the specified core. Only core0 advances wall-clock
-          // time for peripherals.
-          const cpu = this.singleCore === 0 ? this.chip.core0 : this.chip.core1;
-          this.chip.isCore0Running = this.singleCore === 0;
-          const elapsed = cpu.executeInstruction();
-          if (this.singleCore === 0) this.chip.stepThings(elapsed);
-          if (this.checkBreakpoints()) return;
-        } else {
-          if (this.stepLowestCycleCore()) return;
-        }
-      }
-      if (!this.stopped) {
-        this.executeTimer = setTimeout(run, 0);
-      }
-    };
-    run();
-  }
-
-  stop() {
-    this.stopped = true;
-    this.executing = false;
-    if (this.executeTimer != null) {
-      clearTimeout(this.executeTimer);
-      this.executeTimer = null;
-    }
-  }
-
-  // Step whichever core has fewer cycles, then advance peripherals by the
-  // core0 cycle delta only (core1 is catching up, not advancing wall-clock).
-  private stepLowestCycleCore(): boolean {
-    const step0 = this.chip.core0.cycles <= this.chip.core1.cycles;
-    const cpu = step0 ? this.chip.core0 : this.chip.core1;
-    this.chip.isCore0Running = step0;
-    const elapsed = cpu.executeInstruction();
-    if (step0) this.chip.stepThings(elapsed);
-    return this.hitBreakpoint(cpu) ? this.halt(step0 ? 0 : 1) : false;
-  }
-
-  // A parked (WFI) core isn't executing, so its PC sitting on a breakpoint
-  // address must not count as a hit (it would spuriously halt the session).
-  private hitBreakpoint(cpu: CPU): boolean {
-    return !cpu.waiting && this.breakpoints.has(cpu.pc);
-  }
-
-  private halt(core: number): boolean {
-    this.haltedCore = core;
-    this.stopped = true;
-    this.executing = false;
-    this.singleCore = -1;
-    this.notifyBreakpoint(core + 1);
-    return true;
-  }
-
-  // Breakpoint check for the single-core continue path (vCont;c:N). The
-  // both-cores path checks breakpoints itself, per instruction, in stepBothCores.
-  private checkBreakpoints(): boolean {
-    const cpu = this.singleCore === 0 ? this.chip.core0 : this.chip.core1;
-    if (this.hitBreakpoint(cpu)) {
-      return this.halt(this.singleCore);
-    }
-    return false;
-  }
-
-  private readRegister(index: number): number {
+  protected readRegister(index: number): number {
     if (index < NUM_GPRS) return this.cpu.registerSet.getRegisterU(index);
     if (index === REG_PC) return this.cpu.pc;
     const csrIdx = index - REG_CSR_BASE;
@@ -193,7 +107,7 @@ export class RISCVGDBServer extends GDBServer {
     return 0;
   }
 
-  private writeRegister(index: number, value: number) {
+  protected writeRegister(index: number, value: number) {
     if (index < NUM_GPRS) {
       this.cpu.registerSet.setRegisterU(index, value);
     } else if (index === REG_PC) {
@@ -288,8 +202,8 @@ export class RISCVGDBServer extends GDBServer {
 
           // Step takes priority (returns a synchronous stop reply)
           if (stepTid > 0) {
-            const stepCpu = stepTid === 1 ? this.chip.core0 : this.chip.core1;
-            this.chip.isCore0Running = stepTid === 1;
+            const stepCpu = this.chip.core[stepTid - 1];
+            this.chip.currentCore = stepTid - 1;
             stepCpu.executeInstruction();
             this.haltedCore = stepTid - 1;
             return gdbMessage(`T05thread:${stepTid};`);
@@ -305,7 +219,7 @@ export class RISCVGDBServer extends GDBServer {
               this.singleCore = -1;
             } else if (hasCore0) {
               this.currentThread = 1;
-              if (this.chip.core0.waiting) {
+              if (this.chip.core[0].waiting) {
                 this.haltedCore = 0;
                 setTimeout(() => this.notifyBreakpoint(1), 0);
                 return;
@@ -313,7 +227,7 @@ export class RISCVGDBServer extends GDBServer {
               this.singleCore = 0;
             } else {
               this.currentThread = 2;
-              if (this.chip.core1.waiting) {
+              if (this.chip.core[1].waiting) {
                 this.haltedCore = 1;
                 setTimeout(() => this.notifyBreakpoint(2), 0);
                 return;

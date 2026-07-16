@@ -36,7 +36,6 @@ import { RPUSBController } from './peripherals/usb';
 import { RPXIPQMI } from './peripherals/xip_rp2350';
 import { RPSIO } from './sio_rp2350';
 import { RPWatchdog } from './peripherals/watchdog';
-import { Core } from './core';
 import { ConsoleLogger, Logger, LogLevel } from './utils/logging';
 
 export const FLASH_START_ADDRESS = 0x10000000;
@@ -67,8 +66,13 @@ export class RP2350 implements IRPChip {
 
   readonly identifier = 'rp2350';
 
-  readonly core0: CPU = new CPU(this, 'RISCVCore0', 0);
-  readonly core1: CPU = new CPU(this, 'RISCVCore1', 1);
+  readonly core: [CPU, CPU] = [new CPU(this, 'RISCVCore0', 0), new CPU(this, 'RISCVCore1', 1)];
+  get core0() {
+    return this.core[0];
+  }
+  get core1() {
+    return this.core[1];
+  }
 
   /* Clocks */
   clkSys = 125 * MHz;
@@ -192,11 +196,11 @@ export class RP2350 implements IRPChip {
 
   constructor(readonly debug: boolean = false, readonly clock: IClock = new SimulationClock()) {
     this.reset();
-    this.core0.otherCpu = this.core1;
-    this.core1.otherCpu = this.core0;
+    this.core[0].otherCore = this.core[1];
+    this.core[1].otherCore = this.core[0];
   }
 
-  isCore0Running = true;
+  currentCore = 0;
   loadBootrom(bootromData: Uint32Array) {
     this.bootrom.set(bootromData);
     this.reset();
@@ -208,8 +212,7 @@ export class RP2350 implements IRPChip {
   }
 
   reset() {
-    this.core0.reset();
-    this.core1.reset();
+    for (const c of this.core) c.reset();
     this.pwm.reset();
     this.flash.fill(0xff);
   }
@@ -225,8 +228,7 @@ export class RP2350 implements IRPChip {
     if (address >= RAM_START_ADDRESS && address < RAM_START_ADDRESS + this.sram.length) {
       return this.sram32[(address - RAM_START_ADDRESS) >>> 2];
     } else if (address >= SIO_START_ADDRESS && address < SIO_START_ADDRESS + 0x10000000) {
-      const core = this.isCore0Running ? Core.Core0 : Core.Core1;
-      return this.sio.readUint32(address - SIO_START_ADDRESS, core);
+      return this.sio.readUint32(address - SIO_START_ADDRESS, this.currentCore);
     }
 
     const peripheral = this.findPeripheral(address);
@@ -283,8 +285,7 @@ export class RP2350 implements IRPChip {
     if (address >= RAM_START_ADDRESS && address < RAM_START_ADDRESS + this.sram.length) {
       this.sram32[(address - RAM_START_ADDRESS) >>> 2] = value;
     } else if (address >= SIO_START_ADDRESS && address < SIO_START_ADDRESS + 0x10000000) {
-      const core = this.isCore0Running ? Core.Core0 : Core.Core1;
-      this.sio.writeUint32(address - SIO_START_ADDRESS, value, core);
+      this.sio.writeUint32(address - SIO_START_ADDRESS, value, this.currentCore);
     } else {
       const peripheral = this.findPeripheral(address);
       if (peripheral) {
@@ -374,7 +375,7 @@ export class RP2350 implements IRPChip {
   }
 
   get cycles(): number {
-    return this.core0.cycles;
+    return this.core[0].cycles;
   }
 
   gpioValues(start_index: number) {
@@ -450,15 +451,8 @@ export class RP2350 implements IRPChip {
     this.core1.setInterrupt(irq, value);
   }
 
-  setInterruptCore(irq: number, value: boolean, core: Core) {
-    switch (core) {
-      case Core.Core0:
-        this.core0.setInterrupt(irq, value);
-        break;
-      case Core.Core1:
-        this.core1.setInterrupt(irq, value);
-        break;
-    }
+  setInterruptCore(irq: number, value: boolean, core: number) {
+    this.core[core].setInterrupt(irq, value);
   }
 
   updateIOInterrupt() {
@@ -472,13 +466,13 @@ export class RP2350 implements IRPChip {
   }
 
   stepCores() {
-    this.core0.stopped = false;
-    this.core1.stopped = false;
-    this.isCore0Running = true;
-    const elapsed = this.core0.executeInstruction();
-    this.isCore0Running = false;
-    while (this.core1.cycles < this.core0.cycles) {
-      this.core1.executeInstruction();
+    this.core[0].stopped = false;
+    this.core[1].stopped = false;
+    this.currentCore = 0;
+    const elapsed = this.core[0].executeInstruction();
+    this.currentCore = 1;
+    while (this.core[1].cycles < this.core[0].cycles) {
+      this.core[1].executeInstruction();
     }
     return elapsed;
   }
@@ -500,12 +494,7 @@ export class RP2350 implements IRPChip {
   stop() {}
   execute() {}
 
-  executing(core: Core): boolean {
-    switch (core) {
-      case Core.Core0:
-        return this.core0.stopped;
-      case Core.Core1:
-        return this.core1.stopped;
-    }
+  executing(core: number): boolean {
+    return this.core[core].stopped;
   }
 }

@@ -2,7 +2,6 @@ import { MAX_HARDWARE_IRQ } from '../irq';
 import { RP2040 } from '../rp2040';
 import { Timer32, Timer32PeriodicAlarm, TimerMode } from '../utils/timer32';
 import { BasePeripheral, Peripheral } from './peripheral';
-import { Core } from '../core';
 
 export const CPUID = 0xd00;
 export const ICSR = 0xd04;
@@ -74,14 +73,14 @@ export class RPPPB extends BasePeripheral implements Peripheral {
   }
 
   reset() {
-    this.writeUint32ViaCore(SYST_CSR, 0, Core.Core0);
-    this.writeUint32ViaCore(SYST_RVR, 0xffffff, Core.Core0);
+    this.writeUint32ViaCore(SYST_CSR, 0, 0);
+    this.writeUint32ViaCore(SYST_RVR, 0xffffff, 0);
     this.systickTimer.set(0xffffff);
   }
 
-  readUint32ViaCore(offset: number, _core: Core) {
+  readUint32ViaCore(offset: number, _core: number) {
     const rp2040 = this.rp2040 as RP2040;
-    const core = _core == Core.Core0 ? rp2040.core0 : rp2040.core1;
+    const core = rp2040.core[_core];
 
     switch (offset) {
       case CPUID:
@@ -159,9 +158,9 @@ export class RPPPB extends BasePeripheral implements Peripheral {
     return super.readUint32ViaCore(offset, _core);
   }
 
-  writeUint32ViaCore(offset: number, value: number, _core: Core) {
+  writeUint32ViaCore(offset: number, value: number, _core: number) {
     const rp2040 = this.rp2040 as RP2040;
-    const core = _core == Core.Core0 ? rp2040.core0 : rp2040.core1;
+    const core = rp2040.core[_core];
 
     const hardwareInterruptMask = (1 << MAX_HARDWARE_IRQ) - 1;
 

@@ -1,5 +1,6 @@
 import { GPIOPin } from './gpio-pin';
 import { IClock } from './clock/clock';
+import { ICpuCore } from './cpu-core';
 import { Logger } from './utils/logging';
 import { RPPIO } from './peripherals/pio';
 
@@ -11,6 +12,11 @@ export interface IRPChip {
   readonly disassembly: string;
   loadDisassembly(dis: string): void;
   onTrace(coreNumber: number, pc: number, tag: string): void;
+
+  /** CPU cores; core[0] == core0, core[1] == core1. */
+  readonly core: ICpuCore[];
+  /** Index (0/1) of the core currently executing — selects SIO/PPB core view. */
+  currentCore: number;
 
   readonly qspi: Array<GPIOPin>;
   readonly gpio: Array<GPIOPin>;
