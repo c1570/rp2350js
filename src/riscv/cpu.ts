@@ -1221,13 +1221,12 @@ function executeAuipc(inst: number, cpu: CPU) {
   cpu.registerSet.setRegister(rd(inst), imm_u(inst) + cpu.pc);
 }
 
-// JAL (0x6f) - J-type. Link register gets pc+inst_length, then jump.
-function executeJal(inst: number, cpu: CPU) {
-  cpu.registerSet.setRegister(rd(inst), cpu.pc + cpu.inst_length);
-
-  // Profiler trace magic: a 0xabcd/0xffff marker at the return-address slot
-  // signals that a NUL-terminated trace-tag string follows; onTrace consumes it.
-  const magicStart = cpu.pc + cpu.inst_length;
+// Profiler trace magic: a 0xabcd/0xffff marker at magicStart signals that a
+// NUL-terminated trace-tag string follows; onTrace consumes it. Shared by JAL
+// (4-byte, magicStart = pc+4) and C.J / C.JAL (2-byte, magicStart = pc+2) so
+// compressed jumps fire traces too — fetchInstruction() runs executeRv32c
+// before setting inst_length, so callers must pass the literal offset.
+export function checkTraceMagic(cpu: CPU, magicStart: number) {
   if (
     cpu.chip.readUint16(magicStart) === 0xabcd &&
     cpu.chip.readUint16(magicStart + 2) === 0xffff
@@ -1240,7 +1239,12 @@ function executeJal(inst: number, cpu: CPU) {
     }
     cpu.chip.onTrace(cpu.mhartid, cpu.pc, profTag);
   }
+}
 
+// JAL (0x6f) - J-type. Link register gets pc+inst_length, then jump.
+function executeJal(inst: number, cpu: CPU) {
+  cpu.registerSet.setRegister(rd(inst), cpu.pc + cpu.inst_length);
+  checkTraceMagic(cpu, cpu.pc + cpu.inst_length);
   cpu.next_pc = cpu.pc + imm_j(inst);
   cpu.cycles++;
 }

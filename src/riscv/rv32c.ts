@@ -1,4 +1,4 @@
-import { CPU } from './cpu';
+import { CPU, checkTraceMagic } from './cpu';
 
 export function executeRv32c(cpu: CPU, inst: number): void {
   switch (inst & 3) {
@@ -158,9 +158,9 @@ function caddi(cpu: CPU, inst: number): void {
 // C.JAL, funct3 = 001, opcode = 01
 function cjal(cpu: CPU, inst: number): void {
   // jal x1, imm — ra = pc+2, jump to pc+imm
-  const imm = dec_cj_imm(inst);
+  checkTraceMagic(cpu, cpu.pc + 2);
   cpu.registerSet.setRegister(1, cpu.pc + 2);
-  cpu.next_pc = cpu.pc + imm;
+  cpu.next_pc = cpu.pc + dec_cj_imm(inst);
   cpu.cycles++;
 }
 
@@ -268,6 +268,7 @@ function cand(cpu: CPU, inst: number): void {
 // C.J, funct3 = 101, opcode = 01
 function cj(cpu: CPU, inst: number): void {
   // jal x0, imm (jump, no link)
+  checkTraceMagic(cpu, cpu.pc + 2);
   cpu.next_pc = cpu.pc + dec_cj_imm(inst);
   cpu.cycles++;
 }
