@@ -1,25 +1,40 @@
 {
-  "name": "rp2040js/rp2350js",
-  "version": "1.0.1-c1570",
-  "description": "Raspberry Pi Pico (RP2040/RP2350) Emulator",
+  "name": "rp2350js",
+  "version": "1.0.2",
+  "description": "Raspberry Pi Pico (2) emulator. Develop/test/debug RP2040/2350 projects on your PC/in your CI stack. Includes a GDB interface, an MCP server, and the rp2_emu CLI + background daemon for AI-agent-driven firmware debugging.",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/c1570/rp2040js.git"
+    "url": "git+https://github.com/c1570/rp2350js.git"
   },
   "keywords": [
     "rp2040",
     "rp2350",
     "raspberry pi pico",
-    "emulator"
+    "emulator",
+    "risc-v",
+    "hazard3",
+    "cortex-m33",
+    "pio",
+    "gdb",
+    "mcp",
+    "cli",
+    "firmware-debugging"
   ],
   "files": [
     "dist"
   ],
-  "author": "Uri Shaked <uri@wokwi.com>, rp2350js fork and other changes by github.com/c1570",
+  "author": "c1570 <https://github.com/c1570> (rp2350js fork maintainer)",
+  "contributors": [
+    "Uri Shaked <uri@wokwi.com> (original rp2040js project)",
+    "0x4D44 <https://github.com/0x4D44> (picoem — M33 reference)"
+  ],
   "license": "MIT",
   "main": "./dist/cjs/index.js",
   "module": "./dist/esm/index.js",
   "typings": "./dist/cjs/index.d.ts",
+  "bin": {
+    "rp2_emu": "./dist/cjs/rp2-emu-cli/rp2-emu.js"
+  },
   "engines": {
     "node": ">=16.0.0"
   },
@@ -31,6 +46,18 @@
     "./gdb-tcp-server": {
       "import": "./dist/esm/gdb/gdb-tcp-server.js",
       "require": "./dist/cjs/gdb/gdb-tcp-server.js"
+    },
+    "./emulator-controller": {
+      "import": "./dist/esm/utils/emulator-controller.js",
+      "require": "./dist/cjs/utils/emulator-controller.js"
+    },
+    "./mcp-server": {
+      "import": "./dist/esm/mcp/mcp-server.js",
+      "require": "./dist/cjs/mcp/mcp-server.js"
+    },
+    "./bootroms": {
+      "import": "./dist/esm/bootroms/index.js",
+      "require": "./dist/cjs/bootroms/index.js"
     }
   },
   "scripts": {
@@ -47,7 +74,9 @@
     "start:gdbdiff": "ts-node debug/gdbdiff.ts",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:micropython-spi": "ts-node test/micropython-spi-test.ts"
+    "test:micropython-spi": "ts-node test/micropython-spi-test.ts",
+    "bin": "node dist/cjs/rp2-emu-cli/rp2-emu.js",
+    "bin:dev": "ts-node src/rp2-emu-cli/rp2-emu.ts"
   },
   "devDependencies": {
     "@types/minimist": "^1.2.2",
