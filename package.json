@@ -1,7 +1,7 @@
 {
   "name": "rp2350js",
   "version": "1.0.2",
-  "description": "Raspberry Pi Pico (2) emulator. Develop/test/debug RP2040/2350 projects on your PC/in your CI stack. Includes a GDB interface, an MCP server, and the rp2_emu CLI + background daemon for AI-agent-driven firmware debugging.",
+  "description": "Raspberry Pi Pico (2) emulator. Develop/test/debug RP2040/2350 projects on your PC/in your CI stack. Includes a GDB interface, an MCP server, and the rp2_emu CLI + background daemon for agent-driven firmware debugging.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/c1570/rp2350js.git"
@@ -33,7 +33,7 @@
   "module": "./dist/esm/index.js",
   "typings": "./dist/cjs/index.d.ts",
   "bin": {
-    "rp2_emu": "./dist/cjs/rp2-emu-cli/rp2-emu.js"
+    "rp2_emu": "dist/cjs/rp2-emu-cli/rp2-emu.js"
   },
   "engines": {
     "node": ">=16.0.0"

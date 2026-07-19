@@ -16,7 +16,7 @@ This is a much improved fork of Uri Shaked's [rp2040js](https://github.com/wokwi
 - runs **[Connomore64](https://github.com/c1570/Connomore64)** main and video mcu (dual core, PIO, DMA)
 - runs **MicroPython** (both RISC-V and ARM variants)
 - **GDB interface** ("monitor" outputting PIO/GPIO info; memory watch not supported)
-- **MCP server** for interfacing with coding agents (features similar to GDB); register with, e.g., `opencode mcp add` and `npx ts-node demo/mcp-server.ts`
+- **MCP server** and **Agent Skill** for interfacing with coding agents (features similar to GDB); register MCP with, e.g., `opencode mcp add` and `npx ts-node demo/mcp-server.ts`; for skill CLI helper see .opencode/.claude
 - built-in cycle profiler using markers in the code
 
 #### Implemented

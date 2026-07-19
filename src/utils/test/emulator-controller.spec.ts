@@ -1,7 +1,7 @@
 /*
- * RP2350 MCP server unit tests.
+ * EmulatorController unit tests.
  *
- * Tests call handleToolCall() directly (no MCP transport needed), then
+ * Tests call handleToolCall() directly (no transport needed), then
  * assert on the returned content.
  */
 
@@ -11,7 +11,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { RP2350 } from '../../rp2350';
-import { RP2350McpServer } from '../rp2350-mcp-server';
+import { EmulatorController } from '../emulator-controller';
 
 const SCRATCH = 0x20000000;
 
@@ -19,12 +19,12 @@ function hex(n: number): string {
   return '0x' + (n >>> 0).toString(16).padStart(8, '0');
 }
 
-describe('RP2350 MCP Server', () => {
+describe('EmulatorController', () => {
   let chip: RP2350;
-  let server: RP2350McpServer;
+  let server: EmulatorController;
 
   beforeEach(() => {
-    server = new RP2350McpServer();
+    server = new EmulatorController();
     chip = server.chip;
     chip.core1.waiting = true;
   });

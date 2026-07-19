@@ -1,12 +1,15 @@
 /**
- * MCP (Model Context Protocol) server for the RP2350 RISC-V emulator.
+ * EmulatorController — reusable engine that exposes RP2350 emulator state
+ * and control via a `handleToolCall(name, args)` tool-call interface.
  *
- * Exposes emulator state and control as MCP tools, so an AI assistant can
- * read/write registers and memory, set breakpoints and tracepoints,
+ * Tools: read/write registers and memory, set breakpoints and tracepoints,
  * single-step, run, load/reset firmware, inspect PIO/GPIO state, dump
- * memory regions to files, and convert between decimal and hex. Mirrors
- * the GDB server's functionality but uses the MCP tool-call interface
- * instead of the GDB Remote Serial Protocol.
+ * memory regions to files, and convert between decimal and hex.
+ *
+ * This is the engine consumed by both transports:
+ *   - `src/rp2-emu-cli/` — `rp2_emu` CLI + unix-socket daemon.
+ *   - `src/mcp/mcp-server.ts` — thin MCP (Model Context Protocol) shim that
+ *     wraps `EmulatorController.createServer()`.
  *
  * Value conventions:
  *   - All register values, addresses, and offsets in tool *outputs* are
@@ -14,17 +17,14 @@
  *   - All integer *inputs* accept a JSON number, a decimal string, or a
  *     "0x"-prefixed hex string (case-insensitive); see parseUint().
  *
- * Usage as a plugin:
- *   const mcp = new RP2350McpServer(); // optional bootrom Uint32Array arg
- *   const transport = new StdioServerTransport();
- *   await mcp.createServer().connect(transport);
+ * Usage:
+ *   const ctrl = new EmulatorController(); // optional bootrom Uint32Array arg
+ *   const result = ctrl.handleToolCall('read_registers', { core: 0 });
  * Firmware is loaded at runtime via the load_firmware tool, or you can
  * pre-seed chip state via the read/write_register and read/write_memory
- * tools before connecting.
+ * tools before invoking any other tool.
  */
 
-import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { randomBytes } from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -32,9 +32,45 @@ import * as path from 'path';
 import { RP2350 } from '../rp2350';
 import { CPU } from '../riscv/cpu';
 import { CortexM33Core } from '../cortex-m33/core';
-import { loadHex } from '../utils/load-hex';
-import { loadUF2 } from '../utils/load-uf2';
+import { loadHex } from './load-hex';
+import { loadUF2 } from './load-uf2';
 import { decodeBlock } from 'uf2';
+
+/**
+ * Human-readable descriptions for every tool exposed by EmulatorController.
+ * Single source of truth consumed by:
+ *   - src/mcp/mcp-server.ts  (MCP `description` field per tool schema)
+ *   - src/rp2-emu-cli/rp2-emu.ts  (CLI per-subcommand `--help` text)
+ *
+ * Keep these in sync with the tool names handled in dispatch().
+ */
+export const TOOL_DESCRIPTIONS: Record<string, string> = {
+  get_status:
+    'Get emulator status. Emulation is always paused (only runs on single_step/run). emulation_running=false. wfi indicates the RISC-V wait-for-interrupt state (different from emulation pause).',
+  read_registers: 'Read all registers (x0-x31, pc, CSRs) for a core',
+  write_register: 'Write a single register by name (e.g. "x5", "pc", "mstatus")',
+  read_memory: 'Read memory as a hex dump',
+  write_memory: 'Write raw bytes to memory (hex-encoded)',
+  single_step: 'Execute one instruction on the specified core',
+  run: 'Run up to max_instructions, stopping at breakpoints. Returns halt reason, cycle count, and any trace hits recorded during this run.',
+  set_breakpoint: 'Set a software breakpoint at an address',
+  clear_breakpoint: 'Remove a breakpoint',
+  list_breakpoints: 'List all active breakpoints',
+  set_tracepoint:
+    'Set a named tracepoint at an address. Firmware can contain hardwired trace markers (0xabcd/0xffff magic bytes followed by a NUL-terminated tag string placed at a jal return address) which fire automatically. Use list_tracepoints to see all traces including hardwired ones.',
+  clear_tracepoint: 'Remove a tracepoint by label',
+  list_tracepoints: 'List all tracepoints (label → address) and any recorded traces',
+  dump_pio: 'Dump PIO state machine registers (pc, x, y, ISR, OSR, FIFOs)',
+  dump_gpio: 'Dump all GPIO pin states (function, in/out values, pullups)',
+  load_firmware:
+    'Load an Intel HEX (.hex) or UF2 (.uf2) firmware file. Re-instantiates the chip with bootrom + firmware. HEX files auto-detect SRAM vs flash from the address map; UF2 files auto-detect from the first block address. Optionally attach a .dis disassembly file for source context in run/single_step output.',
+  reset:
+    'Reset the chip: re-instantiate RP2350, reload bootrom + last firmware. By default clears all breakpoints and tracepoints; set keep_breakpoints to true to preserve them.',
+  convert_number:
+    'Convert a value between decimal and hex. Direction is auto-detected: input starting with "0x" (case-insensitive) is treated as hex and converted to decimal; otherwise the input is treated as a decimal integer and converted to hex (0x-prefixed). Both signed and unsigned 32-bit inputs are accepted.',
+  dump_memory:
+    'Dump a contiguous range of flash or SRAM to a temporary file. Output format: "ihex" (Intel HEX, reloadable via load_firmware) or "text" (raw hex string, one line per 16 bytes). Returns the temp file path.',
+};
 
 // CSR address map for register read/write by name
 const CSR_MAP: Record<string, number> = {
@@ -204,7 +240,7 @@ const ARM_SPECIAL_REGS = [
   'v',
 ] as const;
 
-export class RP2350McpServer {
+export class EmulatorController {
   private breakpoints = new Set<number>();
   private tracepoints = new Map<string, number>(); // label → address
   private traces: { tag: string; core: number; pc: number; cycles: number }[] = [];
@@ -259,314 +295,6 @@ export class RP2350McpServer {
     const start = Math.max(0, lineIdx - contextLines);
     const end = Math.min(this.disLines.length, lineIdx + contextLines + 1);
     return this.disLines.slice(start, end).join('\n');
-  }
-
-  createServer(): Server {
-    const server = new Server(
-      { name: 'rp2350-mcp-server', version: '1.0.0' },
-      { capabilities: { tools: {} } }
-    );
-
-    server.setRequestHandler(ListToolsRequestSchema, async () => ({
-      tools: [
-        {
-          name: 'get_status',
-          description:
-            'Get emulator status. Emulation is always paused (only runs on single_step/run). emulation_running=false. wfi indicates the RISC-V wait-for-interrupt state (different from emulation pause).',
-          inputSchema: { type: 'object', properties: {} },
-        },
-        {
-          name: 'read_registers',
-          description: 'Read all registers (x0-x31, pc, CSRs) for a core',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              core: {
-                type: ['number', 'string'],
-                enum: [0, 1],
-                default: 0,
-                description: 'Core index (0 or 1; accepts decimal or "0x...")',
-              },
-            },
-          },
-        },
-        {
-          name: 'write_register',
-          description: 'Write a single register by name (e.g. "x5", "pc", "mstatus")',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              core: {
-                type: ['number', 'string'],
-                enum: [0, 1],
-                default: 0,
-                description: 'Core index (0 or 1; accepts decimal or "0x...")',
-              },
-              register: {
-                type: 'string',
-                description: 'Register name (x0-x31, ra, sp, pc, mstatus, etc.)',
-              },
-              value: {
-                type: ['number', 'string'],
-                description: '32-bit unsigned value (decimal or "0x..." hex)',
-              },
-            },
-            required: ['register', 'value'],
-          },
-        },
-        {
-          name: 'read_memory',
-          description: 'Read memory as a hex dump',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              address: {
-                type: ['number', 'string'],
-                description: 'Memory address (decimal or "0x..." hex)',
-              },
-              length: {
-                type: ['number', 'string'],
-                description: 'Number of bytes to read (decimal or "0x..." hex)',
-                default: 32,
-              },
-            },
-            required: ['address'],
-          },
-        },
-        {
-          name: 'write_memory',
-          description: 'Write raw bytes to memory (hex-encoded)',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              address: {
-                type: ['number', 'string'],
-                description: 'Memory address (decimal or "0x..." hex)',
-              },
-              hex: { type: 'string', description: 'Hex-encoded bytes, e.g. "efbeadde"' },
-            },
-            required: ['address', 'hex'],
-          },
-        },
-        {
-          name: 'single_step',
-          description: 'Execute one instruction on the specified core',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              core: {
-                type: ['number', 'string'],
-                enum: [0, 1],
-                default: 0,
-                description: 'Core index (0 or 1; accepts decimal or "0x...")',
-              },
-            },
-          },
-        },
-        {
-          name: 'run',
-          description:
-            'Run up to max_instructions, stopping at breakpoints. Returns halt reason, cycle count, and any trace hits recorded during this run.',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              max_instructions: {
-                type: ['number', 'string'],
-                default: 10000,
-                description: 'Instruction budget (decimal or "0x..." hex)',
-              },
-            },
-          },
-        },
-        {
-          name: 'set_breakpoint',
-          description: 'Set a software breakpoint at an address',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              address: {
-                type: ['number', 'string'],
-                description: 'Breakpoint address (decimal or "0x..." hex)',
-              },
-            },
-            required: ['address'],
-          },
-        },
-        {
-          name: 'clear_breakpoint',
-          description: 'Remove a breakpoint',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              address: {
-                type: ['number', 'string'],
-                description: 'Breakpoint address (decimal or "0x..." hex)',
-              },
-            },
-            required: ['address'],
-          },
-        },
-        {
-          name: 'list_breakpoints',
-          description: 'List all active breakpoints',
-          inputSchema: { type: 'object', properties: {} },
-        },
-        {
-          name: 'set_tracepoint',
-          description:
-            'Set a named tracepoint at an address. Firmware can contain hardwired trace markers (0xabcd/0xffff magic bytes followed by a NUL-terminated tag string placed at a jal return address) which fire automatically. Use list_tracepoints to see all traces including hardwired ones.',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              label: { type: 'string', description: 'Unique name for this tracepoint' },
-              address: {
-                type: ['number', 'string'],
-                description: 'Address of the jal instruction (decimal or "0x..." hex)',
-              },
-            },
-            required: ['label', 'address'],
-          },
-        },
-        {
-          name: 'clear_tracepoint',
-          description: 'Remove a tracepoint by label',
-          inputSchema: {
-            type: 'object',
-            properties: { label: { type: 'string' } },
-            required: ['label'],
-          },
-        },
-        {
-          name: 'list_tracepoints',
-          description: 'List all tracepoints (label → address) and any recorded traces',
-          inputSchema: { type: 'object', properties: {} },
-        },
-        {
-          name: 'dump_pio',
-          description: 'Dump PIO state machine registers (pc, x, y, ISR, OSR, FIFOs)',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              instance: {
-                type: ['number', 'string'],
-                enum: [0, 1, 2],
-                description: 'PIO instance index (accepts decimal or "0x...")',
-              },
-            },
-          },
-        },
-        {
-          name: 'dump_gpio',
-          description: 'Dump all GPIO pin states (function, in/out values, pullups)',
-          inputSchema: { type: 'object', properties: {} },
-        },
-        {
-          name: 'load_firmware',
-          description:
-            'Load an Intel HEX (.hex) or UF2 (.uf2) firmware file. Re-instantiates the chip with bootrom + firmware. HEX files auto-detect SRAM vs flash from the address map; UF2 files auto-detect from the first block address. Optionally attach a .dis disassembly file for source context in run/single_step output.',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              path: { type: 'string', description: 'Path to the .hex or .uf2 file' },
-              entry_pc: {
-                type: ['number', 'string'],
-                description: 'Optional entry PC (decimal or "0x..." hex; auto-detected if omitted)',
-              },
-              use_sram: {
-                type: 'boolean',
-                description: 'Force SRAM loading (auto-detected if omitted)',
-              },
-              disassembly_path: {
-                type: 'string',
-                description: 'Path to a .dis disassembly file for source context',
-              },
-              arch: {
-                type: 'string',
-                enum: ['riscv', 'arm'],
-                description: "CPU architecture: 'riscv' (Hazard3, default) or 'arm' (Cortex-M33)",
-              },
-            },
-            required: ['path'],
-          },
-        },
-        {
-          name: 'reset',
-          description:
-            'Reset the chip: re-instantiate RP2350, reload bootrom + last firmware. By default clears all breakpoints and tracepoints; set keep_breakpoints to true to preserve them.',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              keep_breakpoints: {
-                type: 'boolean',
-                description:
-                  'If true, preserve breakpoints and tracepoints across the reset (default: false).',
-              },
-            },
-          },
-        },
-        {
-          name: 'convert_number',
-          description:
-            'Convert a value between decimal and hex. Direction is auto-detected: input starting with "0x" (case-insensitive) is treated as hex and converted to decimal; otherwise the input is treated as a decimal integer and converted to hex (0x-prefixed). Both signed and unsigned 32-bit inputs are accepted.',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              value: {
-                type: 'string',
-                description:
-                  'Value to convert, e.g. "0x12345678" (hex→dec) or "305419896" (dec→hex)',
-              },
-            },
-            required: ['value'],
-          },
-        },
-        {
-          name: 'dump_memory',
-          description:
-            'Dump a contiguous range of flash or SRAM to a temporary file. Output format: "ihex" (Intel HEX, reloadable via load_firmware) or "text" (raw hex string, one line per 16 bytes). Returns the temp file path.',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              region: {
-                type: 'string',
-                enum: ['flash', 'sram'],
-                description: 'Which memory region to dump',
-              },
-              address: {
-                type: ['number', 'string'],
-                description:
-                  'Byte offset within the region (e.g. 0 for start of flash/SRAM; accepts decimal or "0x..." hex)',
-              },
-              length: {
-                type: ['number', 'string'],
-                description: 'Number of bytes to dump (decimal or "0x..." hex)',
-              },
-              format: {
-                type: 'string',
-                enum: ['ihex', 'text'],
-                default: 'ihex',
-                description: 'Output file format',
-              },
-            },
-            required: ['region', 'address', 'length'],
-          },
-        },
-      ],
-    }));
-
-    server.setRequestHandler(CallToolRequestSchema, async (request) => {
-      const { name, arguments: args } = request.params;
-      try {
-        return this.handleToolCall(name, args || {});
-      } catch (e) {
-        return {
-          content: [{ type: 'text', text: `Error: ${(e as Error).message}` }],
-          isError: true,
-        };
-      }
-    });
-
-    return server;
   }
 
   // Expose handler for testing without MCP transport. Wraps the dispatch in a
