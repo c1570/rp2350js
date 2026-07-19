@@ -1,4 +1,4 @@
-import { RP2040 } from '../rp2040';
+import { IRPChip } from '../rpchip';
 import { Timer32, Timer32PeriodicAlarm, TimerMode } from '../utils/timer32';
 import { BasePeripheral, Peripheral } from './peripheral';
 
@@ -60,16 +60,37 @@ export class RPWatchdog extends BasePeripheral implements Peripheral {
   };
 
   // User provided
-  constructor(rp2040: RP2040, name: string) {
+  constructor(rp2040: IRPChip, name: string) {
     super(rp2040, name);
     this.timer = new Timer32('RPWatchdog_timer', rp2040.clock, TICK_FREQUENCY);
     this.timer.mode = TimerMode.Decrement;
     this.timer.enable = false;
+    // 24-bit down-counter, not Timer32's 32-bit default (same as SysTick in
+    // ppb.ts) — needed for the alarm's modulo-wrap math to schedule correctly.
+    this.timer.top = TIME_MASK;
     this.alarm = new Timer32PeriodicAlarm('RPWatchdog_alarm', this.timer, () => {
       this.reason = TIMER;
       this.onWatchdogTrigger?.();
     });
     this.alarm.target = 0;
+    this.alarm.enable = false;
+  }
+
+  /**
+   * Resets CTRL/LOAD/TICK/REASON, but leaves `scratchData` untouched: per the
+   * datasheet (§12.9.5), scratch survives a watchdog-triggered reset — only a
+   * POWMAN chip-level reset or `rst_n_run` clears it — since the bootrom's
+   * vectored-boot info must survive exactly the reset the watchdog caused.
+   */
+  reset() {
+    this.enable = false;
+    this.tickEnable = true;
+    this.reason = 0;
+    this.pauseDbg0 = true;
+    this.pauseDbg1 = true;
+    this.pauseJtag = true;
+    this.timer.enable = false;
+    this.timer.set(0);
     this.alarm.enable = false;
   }
 

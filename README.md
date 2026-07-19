@@ -8,13 +8,16 @@ For generic/original rp2040js docs, [see below](#rp2040js).
 
 ### Status of rp2350js
 
-- 95% RISC-V/Hazard3 machine mode support (no ARM support, no user mode support)
+- RISC-V/Hazard3 machine mode support (no user mode support)
+- basic ARM/Cortex M33 core support (no secure/insecure mode)
+- runs from bootrom
 - runs both no_flash/RAM binaries and flash binaries
 - runs **pico-examples/blink_simple.c, hello_timer.c, hello_usb.c**
 - runs **[Connomore64](https://github.com/c1570/Connomore64)** main and video mcu (dual core, PIO, DMA)
-- runs **MicroPython**
+- runs **MicroPython** (both RISC-V and ARM variants)
 - **GDB interface** ("monitor" outputting PIO/GPIO info; memory watch not supported)
 - **MCP server** for interfacing with coding agents (features similar to GDB); register with, e.g., `opencode mcp add` and `npx ts-node demo/mcp-server.ts`
+- built-in cycle profiler using markers in the code
 
 #### Implemented
 
@@ -32,148 +35,15 @@ PIO SHIFTCTRL FJOIN_RX/FJOIN_TX
 SYSINFO_BASE
 SYSCFG_BASE *
 TIMER1_BASE
+RISC-V Platform Timer
 PLL_SYS_BASE *
 External interrupts *
 updated IRQ constants
 Xh3irq (MEIEA, MEIPA, MEIFA, MEIPRA, MEINEXT, MEICONTEXT)
 Xh3power (h3.block and h3.unblock)
 Xh3bextm (h3.bextmi and h3.bextm)
-RV32C
-RV32Zcb (lbu, lhu, lh, sb, sh, mul, not, zext.b, zext.h, sext.b, sext.h)
+all Hazard3 opcodes (including RV32C, RV32Zcb, etc.; simplified reservation for lr.w/sc.w)
 somewhat correct instruction cycle counts *
-add
-addi
-and
-andi
-andn
-auipc
-amoadd.w
-amoand.w
-amomax.w
-amomaxu.w
-amomin.w
-amominu.w
-amoor.w
-amoswap.w
-amoxor.w
-beq
-beqz
-bclr
-bclri
-bext
-bexti
-bge
-bgeu
-bgez
-bgt
-bgtu
-bgtz
-binvi
-ble
-bleu
-blez
-blt
-bltu
-bltz
-bne
-bnez
-bset
-bseti
-clz
-cm.pop
-cm.popret
-cm.popretz
-cm.push
-cm.mva01s
-cm.mvsa01
-cpop
-csrc
-csrci
-csrr
-csrrc
-csrrci
-csrrs
-csrrsi
-csrrw
-csrrwi
-csrs
-csrsi
-csrw
-csrwi
-ctz
-div
-divu
-ebreak
-ecall
-fence
-fence.i
-j
-jal
-jalr
-jr
-lb
-lbu
-lh
-lhu
-lr.w (reservation simplified)
-lui
-lw
-max
-min
-minu
-maxu
-mulhsu
-mret
-mul
-mulh
-mulhu
-mv
-nop
-not
-or
-ori
-orc.b
-orn
-pack
-packh
-rem
-remu
-ret
-rev8
-rol
-ror
-rori
-sb
-sc.w (reservation simplified)
-seqz
-sext.b
-sext.h
-sh1add
-sh2add
-sh3add
-sh
-sll
-slli
-slt
-slti
-sltiu
-sltu
-sltz
-snez
-sra
-srai
-srl
-srli
-sub
-sw
-wfi
-xnor
-xor
-xori
-zip
-unzip
-zext.b
-zext.h
 ```
 
 #### Missing
@@ -191,7 +61,6 @@ Correct timers when changing sys_clk/PLL
 QMI address translation
 SIO: secure vs. insecure, SIO_NONSEC_BASE
 Doorbells
-RISC-V Platform Timer
 TMDS Encoder
 RTC
 XIP_MAINTENANCE_BASE
@@ -227,24 +96,10 @@ Notes
 
 ## License
 
-Released under the MIT licence.
-Copyright (c) 2021-2025, Uri Shaked.
-Copyright (c) 2023-2026, github.com/c1570
-
-## This is a project specific fork of rp2040js.
-
-## It is used for developing the [Connomore64](https://github.com/c1570/Connomore64).
-
-https://github.com/c1570/rp2040js
-
-Features:
-
-- somewhat accurate PIO timings (also, MUCH slower emulation)
-- built-in cycle profiler using markers in the code
-- Dual Core support (by mingpepe)
-- a WIP demo wiring up several RP2040s using an 8 bit bus and gathering debug info, simulating GPIO latency
-  - this is the runner used for developing the [Connomore64](https://github.com/c1570/Connomore64)
-- a lot of dirty hacks and tests not suitable for pushing upstream
+- Released under the MIT licence.
+- Copyright (c) 2021-2025, Uri Shaked (original rp2040js project)
+- Copyright (c) 2023-2026, github.com/c1570
+- thanks go to https://github.com/0x4D44/picoem (M33 reference), https://github.com/GhostRoboticsLab/rp2350js_emulator (misc), mingpepe (initial dual core support)
 
 # Upstream documentation
 

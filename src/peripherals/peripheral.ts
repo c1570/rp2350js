@@ -25,6 +25,15 @@ export interface Peripheral {
   writeUint32(offset: number, value: number): void;
   writeUint32ViaCore(offset: number, value: number, core: number): void;
   writeUint32Atomic(offset: number, value: number, atomicType: number): void;
+  /**
+   * True for peripherals that are plain byte-addressable memory (e.g.
+   * BOOTRAM scratch RAM), as opposed to normal APB registers. Byte/halfword
+   * writes to such peripherals must be a read-modify-write of the aligned
+   * word rather than the usual replicate-across-the-word + atomic-write
+   * behavior real APB peripheral registers get (which would clobber
+   * neighboring bytes).
+   */
+  readonly byteAddressable?: boolean;
 }
 
 export class BasePeripheral implements Peripheral {

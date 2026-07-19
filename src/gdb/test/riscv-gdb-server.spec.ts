@@ -194,11 +194,8 @@ describe('RISC-V GDB Server', () => {
     });
 
     test('binary write with escape sequences (X)', () => {
-      // GDB escapes } $ # * in binary data as } followed by (char ^ 0x20)
-      // Write bytes: 0x7d ('}') → escaped as } 0x5d, 0x23 ('#') → } 0x03
-      // 0x7d = '}', 0x7d ^ 0x20 = 0x5d, so escape is } 0x5d
-      // 0x23 = '#', 0x23 ^ 0x20 = 0x03, so escape is } 0x03
-      // We want to write bytes: 0x41 0x7d 0x23 0x42
+      // GDB escapes } $ # * in binary data as } followed by (char ^ 0x20).
+      // Wire bytes 0x41 0x7d 0x23 0x42: 0x7d escapes to } 0x5d, 0x23 to } 0x03.
       server.processGDBMessage('X20000000,4:\x41\x7d\x5d\x7d\x03\x42');
       expect(chip.readUint8(SCRATCH)).toBe(0x41);
       expect(chip.readUint8(SCRATCH + 1)).toBe(0x7d); // unescaped '}'

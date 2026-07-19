@@ -22,6 +22,13 @@ export interface ICpuCore {
   eventRegistered: boolean;
   /** True when the core is halted (e.g. on a breakpoint trap). */
   stopped: boolean;
+  /**
+   * Set by interrupt sources (NVIC, SysTick, peripheral IRQs) when pending
+   * state changes; consumed and cleared by the core's exception-arbitration
+   * path on the next instruction. Both the RISC-V CPU and the ARM cores
+   * (CortexM0Core, CortexM33Core) own this field.
+   */
+  interruptsUpdated: boolean;
   /** Sibling core, used for SEV (send-event) inter-core wakeup. */
   otherCore: ICpuCore;
   /** Advance the core by one instruction; returns the elapsed cycle count. */
@@ -30,4 +37,11 @@ export interface ICpuCore {
   reset(): void;
   /** Send-event: wake the sibling if it's sleeping, else latch a pending event. */
   fireSEV(): void;
+  /**
+   * Assert or deassert a hardware interrupt on this core. Architecture-neutral:
+   * ARM cores route into NVIC pending bits; RISC-V cores route into meifa/meipa.
+   * Already implemented by CortexM0Core and the RISC-V CPU; formalized on the
+   * interface so chip-level code (RP2350.setInterrupt) can call it uniformly.
+   */
+  setInterrupt(irq: number, value: boolean): void;
 }

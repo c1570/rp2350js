@@ -1,25 +1,23 @@
-import { RP2350 } from '../src';
-//import { GDBTCPServer } from '../src/gdb/gdb-tcp-server';
+import { RP2350, CoreArch } from '../src';
 import { USBCDC } from '../src/usb/cdc';
 import { ConsoleLogger, LogLevel } from '../src/utils/logging';
 import { bootrom_rp2350_A2 } from './bootrom_rp2350';
-import { loadUF2, loadMicropythonFlashImage, loadCircuitpythonFlashImage } from './load-flash';
+import { loadUF2, loadMicropythonFlashImage } from './load-flash';
 import fs from 'fs';
 import minimist from 'minimist';
 
 const args = minimist(process.argv.slice(2), {
-  string: [
-    'image', // UF2 image to load; defaults to "RPI_PICO-20230426-v1.20.0.uf2"
-    'expect-text', // Text to expect on the serial console, process will exit with code 0 if found
-  ],
-  boolean: [
-    'gdb', // start GDB server on 3333
-    'circuitpython', // use CircuitPython instead of MicroPython
-  ],
+  string: ['image', 'expect-text'],
+  boolean: ['gdb'],
 });
 const expectText = args['expect-text'];
 
-const mcu = new RP2350();
+const coreArch = (process.env['RP2350_CORE_ARCH'] || 'riscv') as CoreArch;
+if (coreArch !== 'arm' && coreArch !== 'riscv') {
+  throw new Error(`RP2350_CORE_ARCH=${coreArch} must be "arm" or "riscv"`);
+}
+
+const mcu = new RP2350(false, undefined, { coreArch });
 mcu.loadBootrom(bootrom_rp2350_A2);
 mcu.logger = new ConsoleLogger(LogLevel.Info);
 
@@ -27,41 +25,23 @@ mcu.uart[0].onByte = (value: number) => {
   process.stdout.write(new Uint8Array([value]));
 };
 
-let imageName: string;
-if (!args.circuitpython) {
-  imageName = args.image ?? 'RPI_PICO2-RISCV.uf2';
-  const disassembly =
-    fs.readFileSync('./demo/bootrom_rp2350.dis', 'utf-8') + fs.readFileSync('RPI_PICO2-RISCV.dis');
-  mcu.loadDisassembly(disassembly);
-} else {
-  imageName = args.image ?? 'adafruit-circuitpython-raspberry_pi_pico-en_US-8.0.2.uf2'; // FIXME
-}
+const imageName =
+  args.image ??
+  (coreArch === 'arm'
+    ? './demo/RPI_PICO2-20260406-v1.28.0.uf2'
+    : './demo/RPI_PICO2-RISCV-20260406-v1.28.0.uf2');
 console.log(`Loading uf2 image ${imageName}`);
 loadUF2(imageName, mcu);
 
-if (fs.existsSync('littlefs.img') && !args.circuitpython) {
-  console.log(`Loading uf2 image littlefs.img`);
+if (fs.existsSync('littlefs.img')) {
+  console.log(`Loading littlefs image littlefs.img`);
   loadMicropythonFlashImage('littlefs.img', mcu);
-} else if (fs.existsSync('fat12.img') && args.circuitpython) {
-  loadCircuitpythonFlashImage('fat12.img', mcu);
-  // Instead of reading from file, it would also be possible to generate the LittleFS image on-the-fly here, e.g. using
-  // https://github.com/wokwi/littlefs-wasm or https://github.com/littlefs-project/littlefs-js
 }
-
-/* if (args.gdb) {
-  const gdbServer = new GDBTCPServer(simulator, 3333);
-  console.log(`RP2040 GDB Server ready! Listening on port ${gdbServer.port}`);
-} */
 
 const cdc = new USBCDC(mcu.usbCtrl);
 cdc.onDeviceConnected = () => {
-  if (!args.circuitpython) {
-    // We send a newline so the user sees the MicroPython prompt
-    cdc.sendSerialByte('\r'.charCodeAt(0));
-    cdc.sendSerialByte('\n'.charCodeAt(0));
-  } else {
-    cdc.sendSerialByte(3);
-  }
+  cdc.sendSerialByte('\r'.charCodeAt(0));
+  cdc.sendSerialByte('\n'.charCodeAt(0));
 };
 
 let currentLine = '';
@@ -96,9 +76,26 @@ process.stdin.on('data', (chunk) => {
   }
 });
 
-mcu.core0.pc = 0x10000036;
-mcu.core1.pc = 0x10000036;
-while (1) {
-  //mcu.core0.printDisassembly();
-  mcu.step();
+// Boot through the real bootrom rather than jumping to the firmware reset
+// vector directly. reset() already performs the vectored hardware reset for
+// either architecture (ARMv8-M: MSP/PC from VTOR=0's bootrom table; RISC-V:
+// Hazard3's fixed reset vector 0x7dfc), so both cores start at the bootrom
+// entry; it scans/verifies the flash IMAGE_DEF and hands off to firmware.
+// RISC-V cores default to `stopped = false` and are already free-running;
+// ARM cores default to `stopped = true` and need un-parking. (ARM core1
+// parks itself in the bootrom via WFE, waiting for the SIO mailbox handshake,
+// rather than being flagged "stopped" — matches real hardware.)
+if (coreArch === 'arm') {
+  mcu.armCore0.stopped = false;
+  mcu.armCore1.stopped = false;
 }
+
+// Bounded batches yield to the event loop (cf. Simulator.execute()); a plain
+// `while (1) { mcu.step(); }` would starve stdout flushing and stdin input.
+function runBatch() {
+  for (let i = 0; i < 1_000_000; i++) {
+    mcu.step();
+  }
+  setImmediate(runBatch);
+}
+runBatch();

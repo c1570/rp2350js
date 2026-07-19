@@ -1,6 +1,7 @@
 import { IRPChip } from './rpchip';
 import { IClock } from './clock/clock';
 import { SimulationClock } from './clock/simulation-clock';
+import { ICpuCore } from './cpu-core';
 import { CPU } from './riscv/cpu';
 import {
   GPIOPin,
@@ -14,7 +15,11 @@ import { IRQ } from './irq_rp2350';
 import { RPADC } from './peripherals/adc';
 import { RPBUSCTRL } from './peripherals/busctrl';
 import { RPBootRAM } from './peripherals/bootram';
-import { RPPOWMAN } from './peripherals/powman';
+import { RP2350POWMAN } from './peripherals/powman_rp2350';
+import { RP2350PSM } from './peripherals/psm_rp2350';
+import { RP2350SHA256 } from './peripherals/sha256_rp2350';
+import { RP2350TRNG } from './peripherals/trng_rp2350';
+import { RP2350OTP, RP2350OTPData } from './peripherals/otp_data_rp2350';
 import { RPClocks } from './peripherals/clocks';
 import { DREQChannel, RPDMA } from './peripherals/dma_rp2350';
 import { RPI2C } from './peripherals/i2c';
@@ -37,12 +42,18 @@ import { RPXIPQMI } from './peripherals/xip_rp2350';
 import { RPSIO } from './sio_rp2350';
 import { RPWatchdog } from './peripherals/watchdog';
 import { ConsoleLogger, Logger, LogLevel } from './utils/logging';
+import { CortexM33Core } from './cortex-m33/core';
+import { RPPPB2350 } from './peripherals/ppb_rp2350';
 
 export const FLASH_START_ADDRESS = 0x10000000;
 export const RAM_START_ADDRESS = 0x20000000;
 export const APB_START_ADDRESS = 0x40000000;
 export const DPRAM_START_ADDRESS = 0x50100000;
 export const SIO_START_ADDRESS = 0xd0000000;
+/** Private Peripheral Bus base (ARMv8-M PPB, per-core). */
+export const PPB_START_ADDRESS = 0xe0000000;
+/** End of internal PPB region (exclusive). */
+export const PPB_END_ADDRESS = 0xe1000000;
 
 const LOG_NAME = 'RP2350';
 
@@ -51,6 +62,23 @@ const MB = 1024 * KB;
 const MHz = 1_000_000;
 
 const FLASH_SIZE = 16 * MB;
+
+/** Architecture selection for the two processor sockets on RP2350. */
+export type CoreArch = 'riscv' | 'arm';
+
+/** Constructor options for {@link RP2350}. */
+export interface RP2350Options {
+  /**
+   * Architecture for both processor sockets. The RP2350 has two sockets each
+   * of which may be a Cortex-M33 or a Hazard3 RISC-V; v1 of this emulator
+   * requires homogeneous combos (both sockets the same arch).
+   *
+   * Defaults to `'riscv'` so existing rp2350js code keeps working unchanged.
+   * Real silicon's factory default is `'arm'` (per datasheet §3.9 critical
+   * OTP flags) but emulator consumers have historically expected RISC-V.
+   */
+  coreArch?: CoreArch;
+}
 
 export class RP2350 implements IRPChip {
   readonly bootrom = new Uint32Array((32 >>> 2) * KB);
@@ -66,19 +94,59 @@ export class RP2350 implements IRPChip {
 
   readonly identifier = 'rp2350';
 
-  readonly core: [CPU, CPU] = [new CPU(this, 'RISCVCore0', 0), new CPU(this, 'RISCVCore1', 1)];
-  get core0() {
-    return this.core[0];
+  /** Architecture of both cores (homogeneous in v1). */
+  readonly coreArch: CoreArch;
+
+  /**
+   * CPU cores. The concrete element type depends on {@link coreArch}:
+   * `CPU` (Hazard3 RISC-V) when 'riscv', `CortexM33Core` when 'arm'. Consumers
+   * that need the concrete type should narrow via {@link riscvCore0}/
+   * {@link riscvCore1} or {@link armCore0}/{@link armCore1}.
+   */
+  readonly core: ICpuCore[];
+
+  /** RISC-V core 0 (only valid when coreArch === 'riscv'). */
+  get riscvCore0(): CPU {
+    return this.core[0] as CPU;
   }
-  get core1() {
-    return this.core[1];
+  /** RISC-V core 1 (only valid when coreArch === 'riscv'). */
+  get riscvCore1(): CPU {
+    return this.core[1] as CPU;
+  }
+  /** ARM Cortex-M33 core 0 (only valid when coreArch === 'arm'). */
+  get armCore0(): CortexM33Core {
+    return this.core[0] as CortexM33Core;
+  }
+  /** ARM Cortex-M33 core 1 (only valid when coreArch === 'arm'). */
+  get armCore1(): CortexM33Core {
+    return this.core[1] as CortexM33Core;
+  }
+
+  /**
+   * Per-core Private Peripheral Bus (NVIC, SCB, SysTick, MPU, SAU, FP).
+   * Present only when {@link coreArch} === 'arm'; undefined for RISC-V
+   * (RISC-V uses its own CSR-based interrupt controller via SIO).
+   */
+  readonly ppb?: RPPPB2350;
+
+  // Back-compat accessors (only valid when coreArch === 'riscv') ----------------
+  get core0(): CPU {
+    return this.core[0] as CPU;
+  }
+  get core1(): CPU {
+    return this.core[1] as CPU;
   }
 
   /* Clocks */
   clkSys = 125 * MHz;
   clkPeri = 125 * MHz;
 
-  readonly sio = new RPSIO(this, IRQ.SIO_IRQ_FIFO, IRQ.SIO_IRQ_FIFO);
+  readonly sio = new RPSIO(this, IRQ.SIO_IRQ_FIFO, IRQ.SIO_IRQ_FIFO, IRQ.SIO_IRQ_MTIMECMP);
+
+  /** RP2350 OTP fuse array and control interface. */
+  readonly otp = new RP2350OTP(this, 'OTP_BASE');
+
+  readonly watchdog = new RPWatchdog(this, 'WATCHDOG_BASE');
 
   readonly uart = [
     new RPUART(this, 'UART0', IRQ.UART0_IRQ, {
@@ -152,7 +220,7 @@ export class RP2350 implements IRPChip {
     0x40000: new RP2350SysInfo(this, 'SYSINFO_BASE'),
     0x40008: new RP2350SysCfg(this, 'SYSCFG'),
     0x40010: new RPClocks(this, 'CLOCKS_BASE'),
-    0x40018: new UnimplementedPeripheral(this, 'PSM_BASE'),
+    0x40018: new RP2350PSM(this, 'PSM_BASE'),
     0x40020: new RPReset(this, 'RESETS_BASE'),
     0x40028: new RPIO(this, 'IO_BANK0_BASE'),
     0x40030: new UnimplementedPeripheral(this, 'IO_QSPI_BASE'),
@@ -174,14 +242,24 @@ export class RP2350 implements IRPChip {
     0x400b0: new RPTimer(this, 'TIMER0_BASE', IRQ.TIMER0_IRQ_0),
     0x400b8: new RPTimer(this, 'TIMER1_BASE', IRQ.TIMER1_IRQ_0),
     0x400c0: new UnimplementedPeripheral(this, 'HSTX_CTRL_BASE'),
+    0x400c8: new UnimplementedPeripheral(this, 'XIP_CTRL_BASE'),
     0x400d0: new RPXIPQMI(this, 'XIP_QMI_BASE'),
+    0x400d8: this.watchdog,
+    0x400dc: this.watchdog,
 
-    0x400d8: new UnimplementedPeripheral(this, 'WATCHDOG_BASE'), //TODO new RPWatchdog(this, 'WATCHDOG_BASE'),
     //0x400xx: new RP2040RTC(this, 'RTC_BASE'),
     0x400e0: new RPBootRAM(this, 'BOOTRAM_BASE'),
     0x400e8: new UnimplementedPeripheral(this, 'ROSC_BASE'),
-    0x40100: new RPPOWMAN(this, 'POWMAN_BASE'),
+    0x400f0: new RP2350TRNG(this, 'TRNG_BASE'),
+    0x400f8: new RP2350SHA256(this, 'SHA256_BASE'),
+    0x40100: new RP2350POWMAN(this, 'POWMAN_BASE'),
     0x40108: new UnimplementedPeripheral(this, 'TICKS_BASE'),
+    0x40120: this.otp,
+    // OTP_DATA window (16KB at 0x40130000). Spans 4 x 16KB APB blocks.
+    0x40130: new RP2350OTPData(this, 'OTP_DATA', this.otp),
+    0x40134: new RP2350OTPData(this, 'OTP_DATA', this.otp),
+    0x40138: new RP2350OTPData(this, 'OTP_DATA', this.otp),
+    0x4013c: new RP2350OTPData(this, 'OTP_DATA', this.otp),
     0x40160: new RPTBMAN(this, 'TBMAN_BASE'),
 
     0x50000: this.dma,
@@ -191,13 +269,52 @@ export class RP2350 implements IRPChip {
     0x50400: this.pio[2],
   };
 
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars, @typescript-eslint/no-empty-function
   public onTrace = (coreNumber: number, pc: number, tag: string) => {};
 
-  constructor(readonly debug: boolean = false, readonly clock: IClock = new SimulationClock()) {
+  constructor(
+    readonly debug: boolean = false,
+    readonly clock: IClock = new SimulationClock(),
+    options?: RP2350Options
+  ) {
+    this.coreArch = options?.coreArch ?? 'riscv';
+    if (this.coreArch === 'arm') {
+      this.core = [new CortexM33Core(this, 'ARMCore0', 0), new CortexM33Core(this, 'ARMCore1', 1)];
+      this.ppb = new RPPPB2350(this, 'PPB');
+    } else {
+      this.core = [new CPU(this, 'RISCVCore0', 0), new CPU(this, 'RISCVCore1', 1)];
+    }
+
+    // OTP ARCHSEL/ARCHSEL_STATUS (0x158/0x15c, bit0=core0, bit1=core1): the
+    // bootrom reads ARCHSEL_STATUS to detect a CPU/image architecture
+    // mismatch and reboot into the other arch. Since this emulator fixes one
+    // architecture for the chip's lifetime, both registers must match
+    // `coreArch` up front, or the bootrom loops forever requesting a switch.
+    const archsel = this.coreArch === 'riscv' ? 0b11 : 0b00;
+    this.otp.writeUint32(0x158, archsel);
+    this.otp.writeUint32(0x15c, archsel);
+
     this.reset();
     this.core[0].otherCore = this.core[1];
     this.core[1].otherCore = this.core[0];
+
+    // Set QSPI CSn pull-up (BOOTSEL not pressed). On real hardware, the flash
+    // chip's CSn line has a pull-up resistor. Without this, the bootrom thinks
+    // BOOTSEL is pressed and enters USB bootloader instead of flash boot.
+    // Need IE=1 (bit 6) in padValue for the SIO GPIO_HI_IN read to see the pin.
+    this.qspi[1].padValue = 0x56; // IE=1, PUE=1, ISO=1
+    this.qspi[1].setInputValue(true);
+
+    // A watchdog fire is a real chip reset on hardware; the bootrom relies on
+    // this to hand off from its own `wfi` into loaded firmware. `resetCores()`
+    // (not `reset()`) — flash must survive a watchdog reset, like on silicon.
+    // The watchdog's own CTRL/LOAD also resets (in the PSM reset scope,
+    // unlike scratch, which is excluded so vectored-boot info survives).
+    this.watchdog.onWatchdogTrigger = () => {
+      this.logger.warn('WATCHDOG', 'Watchdog fired — resetting cores');
+      this.resetCores();
+      this.watchdog.reset();
+    };
   }
 
   currentCore = 0;
@@ -211,24 +328,67 @@ export class RP2350 implements IRPChip {
     this.disassembly = dis;
   }
 
-  reset() {
-    for (const c of this.core) c.reset();
+  /**
+   * @param enableCoprocessors ARM only: when true, sets CPACR to enable full
+   * access to all 8 coprocessor slots (CP0-CP11) directly, matching what the
+   * real bootrom does during its own boot sequence. Defaults to false (real
+   * ARMv8-M reset state: all coprocessors disabled) so that booting *through*
+   * the emulated bootrom — which sets CPACR itself — isn't short-circuited.
+   * Callers that skip the bootrom (e.g. jumping straight to a firmware reset
+   * vector) can pass true to get FPU/DSP access without replicating the
+   * bootrom's own CPACR setup.
+   */
+  reset(enableCoprocessors = false) {
+    this.resetCores(enableCoprocessors);
     this.pwm.reset();
     this.flash.fill(0xff);
+  }
+
+  /**
+   * Re-vectors both cores to their hardware reset state (MSP/PC from VTOR on
+   * ARM, the fixed Hazard3 reset vector on RISC-V) without touching flash or
+   * other peripheral state — what a real *watchdog-triggered* reset does on
+   * silicon, as opposed to `reset()`'s full power-on reset. Exposed
+   * separately so flash contents (e.g. loaded via `loadUF2`) survive a
+   * watchdog reset, matching real hardware.
+   */
+  resetCores(enableCoprocessors = false) {
+    if (this.coreArch === 'arm') {
+      for (const c of this.core as CortexM33Core[]) c.reset(enableCoprocessors);
+    } else {
+      for (const c of this.core) c.reset();
+    }
   }
 
   readUint32(address: number): number {
     address = address >>> 0; // round to 32-bits, unsigned
     if (address & 0x3) {
-      this.logger.error(
-        LOG_NAME,
-        `read from address ${address.toString(16)}, which is not 32 bit aligned`
+      // Only LDR/STR singles, LDRH/STRH, and TBH may access unaligned
+      // addresses (handled separately in execute-thumb16.ts/execute-
+      // thumb32.ts via byte-composed reads that never reach this method).
+      // Anything that still calls readUint32 with an unaligned address is
+      // LDM/LDRD or an exclusive/acquire-release access, which the M33
+      // requires to be word-aligned and faults on otherwise (RP2350
+      // datasheet / ARMv8-M ARM §B8.3).
+      const pc = this.core[this.currentCore]?.PC;
+      throw Error(
+        `${LOG_NAME} unaligned word read from address ${address.toString(16)} at PC=${pc !== undefined ? pc.toString(16) : 'unknown'} (core${this.currentCore})`
       );
     }
     if (address >= RAM_START_ADDRESS && address < RAM_START_ADDRESS + this.sram.length) {
       return this.sram32[(address - RAM_START_ADDRESS) >>> 2];
     } else if (address >= SIO_START_ADDRESS && address < SIO_START_ADDRESS + 0x10000000) {
       return this.sio.readUint32(address - SIO_START_ADDRESS, this.currentCore);
+    } else if (this.coreArch === 'arm' && address >= 0xe0020000 && address < 0xe0030000) {
+      // NS PPB alias (TrustZone). Strip bit 17 to map to secure PPB offset.
+      return this.ppb!.readUint32ViaCore(address & 0xfffdffff & 0xffffff, this.currentCore);
+    } else if (
+      this.coreArch === 'arm' &&
+      address >= PPB_START_ADDRESS &&
+      address < PPB_END_ADDRESS
+    ) {
+      // ARMv8-M PPB (per-core NVIC/SCB/SysTick/MPU/SAU/FP).
+      return this.ppb!.readUint32ViaCore(address & 0xffffff, this.currentCore);
     }
 
     const peripheral = this.findPeripheral(address);
@@ -249,7 +409,12 @@ export class RP2350 implements IRPChip {
       return this.usbDPRAMView.getUint32(address - DPRAM_START_ADDRESS, true);
     }
 
-    throw Error(`${LOG_NAME} Read from invalid memory address: ${address.toString(16)}`);
+    {
+      const pc = this.core[this.currentCore]?.PC;
+      throw Error(
+        `${LOG_NAME} Read from invalid memory address: ${address.toString(16)} at PC=${pc !== undefined ? pc.toString(16) : 'unknown'} (core${this.currentCore})`
+      );
+    }
     //return 0xffffffff;
   }
 
@@ -282,10 +447,26 @@ export class RP2350 implements IRPChip {
 
   writeUint32(address: number, value: number) {
     address = address >>> 0;
+    if (address & 0x3) {
+      const pc = this.core[this.currentCore]?.PC;
+      throw Error(
+        `${LOG_NAME} unaligned word write to address ${address.toString(16)} at PC=${pc !== undefined ? pc.toString(16) : 'unknown'} (core${this.currentCore})`
+      );
+    }
     if (address >= RAM_START_ADDRESS && address < RAM_START_ADDRESS + this.sram.length) {
       this.sram32[(address - RAM_START_ADDRESS) >>> 2] = value;
     } else if (address >= SIO_START_ADDRESS && address < SIO_START_ADDRESS + 0x10000000) {
       this.sio.writeUint32(address - SIO_START_ADDRESS, value, this.currentCore);
+    } else if (this.coreArch === 'arm' && address >= 0xe0020000 && address < 0xe0030000) {
+      // NS PPB alias (TrustZone). Strip bit 17.
+      this.ppb!.writeUint32ViaCore(address & 0xfffdffff & 0xffffff, value, this.currentCore);
+    } else if (
+      this.coreArch === 'arm' &&
+      address >= PPB_START_ADDRESS &&
+      address < PPB_END_ADDRESS
+    ) {
+      // ARMv8-M PPB (per-core NVIC/SCB/SysTick/MPU/SAU/FP).
+      this.ppb!.writeUint32ViaCore(address & 0xffffff, value, this.currentCore);
     } else {
       const peripheral = this.findPeripheral(address);
       if (peripheral) {
@@ -295,7 +476,7 @@ export class RP2350 implements IRPChip {
       } else if (address >= FLASH_START_ADDRESS && address < RAM_START_ADDRESS) {
         return; // "XIP memory is read-only by default" (writes get downgraded to reads)
       } else if (address < this.bootromBytes) {
-        this.bootrom[address >>> 2] = value;
+        return; // Bootrom is mask ROM — real hardware silently ignores writes to it.
       } else if (
         address >= DPRAM_START_ADDRESS &&
         address < DPRAM_START_ADDRESS + this.usbDPRAM.length
@@ -304,7 +485,10 @@ export class RP2350 implements IRPChip {
         this.usbDPRAMView.setUint32(offset, value, true);
         this.usbCtrl.DPRAMUpdated(offset, value);
       } else {
-        throw Error(`${LOG_NAME} Write to invalid memory address: ${address.toString(16)}`);
+        const pc = this.core[this.currentCore]?.PC;
+        throw Error(
+          `${LOG_NAME} Write to invalid memory address: ${address.toString(16)} at PC=${pc !== undefined ? pc.toString(16) : 'unknown'} (core${this.currentCore})`
+        );
       }
     }
   }
@@ -321,6 +505,13 @@ export class RP2350 implements IRPChip {
     const alignedAddress = (address & 0xfffffffc) >>> 0;
     const peripheral = this.findPeripheral(address);
     if (peripheral) {
+      const shift = (address & 0x3) << 3;
+      if (peripheral.byteAddressable) {
+        const offset = alignedAddress & 0x3fff;
+        const originalValue = peripheral.readUint32(offset);
+        peripheral.writeUint32(offset, (originalValue & ~(0xff << shift)) | ((value & 0xff) << shift));
+        return;
+      }
       const atomicType = (alignedAddress & 0x3000) >> 12;
       const offset = alignedAddress & 0xfff;
       peripheral.writeUint32Atomic(
@@ -353,6 +544,16 @@ export class RP2350 implements IRPChip {
     const alignedAddress = (address & 0xfffffffc) >>> 0;
     const peripheral = this.findPeripheral(address);
     if (peripheral) {
+      const shift = (address & 0x3) << 3;
+      if (peripheral.byteAddressable) {
+        const offset = alignedAddress & 0x3fff;
+        const originalValue = peripheral.readUint32(offset);
+        peripheral.writeUint32(
+          offset,
+          (originalValue & ~(0xffff << shift)) | ((value & 0xffff) << shift)
+        );
+        return;
+      }
       const atomicType = (alignedAddress & 0x3000) >> 12;
       const offset = alignedAddress & 0xfff;
       peripheral.writeUint32Atomic(offset, (value & 0xffff) | ((value & 0xffff) << 16), atomicType);
@@ -491,7 +692,9 @@ export class RP2350 implements IRPChip {
     this.stepThings(this.stepCores());
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-empty-function
   stop() {}
+  // eslint-disable-next-line @typescript-eslint/no-empty-function
   execute() {}
 
   executing(core: number): boolean {

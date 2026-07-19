@@ -630,14 +630,10 @@ describe('Xh3irq interrupt controller', () => {
       expect(cpu.csrs[MEICONTEXT] & 1).toBe(0); // mreteirq cleared by this mret
 
       // --- mret from level 1 ---
-      // mreteirq was cleared by previous mret, so no auto-restore.
-      // Software must have restored meicontext. For this test, manually
-      // set mreteirq=1 and correct ppreempt to simulate proper restoration.
-      // (In real software, the handler saves/restores meicontext.)
-      // Actually — the spec says level-1's mreteirq was set on entry.
-      // But the level-2 mret cleared it. So level-1's mret won't auto-restore.
-      // This is the documented limitation: only 2 levels of hardware nesting.
-      // The test verifies this limitation.
+      // Hardware nesting is tracked only 2 levels deep: level-2's mret
+      // already cleared mreteirq, leaving no CSR state for a further
+      // (level-1) mret to auto-restore from, so preempt stays at its
+      // post-level-2 value.
       expect((cpu.csrs[MEICONTEXT] >>> 16) & 0x1f).toBe(4); // unchanged — no auto-pop
     });
   });

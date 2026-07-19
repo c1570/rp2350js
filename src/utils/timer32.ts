@@ -140,6 +140,7 @@ export class Timer32PeriodicAlarm {
   private targetValue = 0;
   private enabled = false;
   private clockAlarm;
+  private warnedZeroInterval = false;
 
   constructor(readonly label: string, readonly timer: Timer32, readonly callback: () => void) {
     this.clockAlarm = this.timer.clock.createAlarm(this.handleAlarm);
@@ -193,28 +194,43 @@ export class Timer32PeriodicAlarm {
   private schedule() {
     const { timer, targetValue } = this;
     const { top, mode, rawCounter } = timer;
-    let cycleDelta = targetValue - rawCounter;
-    if (mode === TimerMode.ZigZag && cycleDelta < 0) {
-      if (cycleDelta < -top) {
-        cycleDelta += 2 * top;
-      } else {
-        cycleDelta = top * 2 - targetValue - rawCounter;
+    let cycleDelta;
+    if (mode === TimerMode.ZigZag) {
+      // A phase-correct counter crosses the target twice per 2*top period,
+      // once per slope; schedule whichever crossing comes first. A distance
+      // of 0 means "firing right now" and wraps to the next crossing.
+      const period = top * 2 || 1;
+      const distance = (crossing: number) => {
+        const d = (crossing - rawCounter) % period;
+        return d <= 0 ? d + period : d;
+      };
+      cycleDelta = Math.min(distance(targetValue), distance(period - targetValue));
+    } else {
+      // Delta in the counter's own direction of travel. rawCounter is
+      // unwrapped for full-width (top=0xffffffff) timers and biased +period
+      // in Decrement mode, so the raw delta can be off by whole periods in
+      // either direction; normalize with a Euclidean modulo (a `>>> 0` just
+      // reinterprets the sign bit). A delta of 0 (already at target) means a
+      // full period, not a 0ns refire loop.
+      const period = top + 1;
+      cycleDelta = mode === TimerMode.Decrement ? rawCounter - targetValue : targetValue - rawCounter;
+      cycleDelta = ((cycleDelta % period) + period) % period;
+      if (cycleDelta === 0) {
+        cycleDelta = period;
       }
     }
-    if (top != 0xffffffff) {
-      if (cycleDelta <= 0) {
-        cycleDelta += top + 1;
-      }
-      if (targetValue > top) {
-        // Skip alarm
-        return;
-      }
+    if (targetValue > top) {
+      // Skip alarm
+      return;
     }
-    if (mode === TimerMode.Decrement) {
-      cycleDelta = top + 1 - cycleDelta;
-    }
-    const cyclesToAlarm = cycleDelta >>> 0;
+    const cyclesToAlarm = cycleDelta;
     const nanosToAlarm = timer.toNanos(cyclesToAlarm);
+    if (nanosToAlarm <= 0 && !this.warnedZeroInterval) {
+      this.warnedZeroInterval = true;
+      console.warn(
+        `Timer32PeriodicAlarm(${this.label}): scheduling with a ${nanosToAlarm}ns interval (target=${targetValue}, rawCounter=${rawCounter}); this may cause an infinite reschedule loop`,
+      );
+    }
     this.clockAlarm.schedule(nanosToAlarm);
   }
 

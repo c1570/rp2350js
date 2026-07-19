@@ -8,6 +8,7 @@ const WRITE_ONCE0 = 0x800;
 const WRITE_ONCE1 = 0x804;
 
 export class RPBootRAM extends BasePeripheral implements Peripheral {
+  readonly byteAddressable = true;
   private bootram: number[] = Array(256).fill(0);
   write_once = [0, 0];
   spinLock = 0;

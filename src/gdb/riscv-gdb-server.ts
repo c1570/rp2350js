@@ -94,7 +94,7 @@ export class RISCVGDBServer extends GDBServer {
   }
 
   private get cpu(): CPU {
-    return this.chip.core[this.currentThread - 1];
+    return this.chip.core[this.currentThread - 1] as CPU;
   }
 
   protected readRegister(index: number): number {

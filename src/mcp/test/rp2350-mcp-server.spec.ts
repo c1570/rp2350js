@@ -5,6 +5,7 @@
  * assert on the returned content.
  */
 
+import { randomBytes } from 'crypto';
 import { describe, expect, test, beforeEach } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -44,6 +45,7 @@ describe('RP2350 MCP Server', () => {
     test('returns core PCs, emulation_running=false, and empty breakpoints', () => {
       const data = json(server.handleToolCall('get_status', {}));
       expect(data.emulation_running).toBe(false);
+      expect(data.arch).toBe('riscv');
       expect(data.core0.pc).toBe(hex(chip.core0.pc));
       expect(data.core0.wfi).toBeDefined();
       expect(data.core1.pc).toBe(hex(chip.core1.pc));
@@ -57,6 +59,18 @@ describe('RP2350 MCP Server', () => {
       const data = json(server.handleToolCall('get_status', {}));
       expect(data.breakpoints).toContain(hex(0x20000100));
       expect(data.breakpoints).toContain(hex(0x20000200));
+    });
+
+    test('reports ARM architecture after load_firmware with arch=arm', () => {
+      const tmp = path.join(os.tmpdir(), `arm-test-${randomBytes(8).toString('hex')}.hex`);
+      fs.writeFileSync(
+        tmp,
+        ':020000040020DA\n:1000000000BFAAAAAAAABBBBBBBBCCCCCCCCXX\n:00000001FF\n'
+      );
+      server.handleToolCall('load_firmware', { path: tmp, arch: 'arm', entry_pc: 0x20000000 });
+      fs.unlinkSync(tmp);
+      const data = json(server.handleToolCall('get_status', {}));
+      expect(data.arch).toBe('arm');
     });
   });
 
@@ -393,7 +407,7 @@ describe('RP2350 MCP Server', () => {
       );
       // EOF record
       lines.push(':00000001FF');
-      const tmp = path.join(os.tmpdir(), `mcp-test-${Date.now()}.hex`);
+      const tmp = path.join(os.tmpdir(), `mcp-test-${randomBytes(8).toString('hex')}.hex`);
       fs.writeFileSync(tmp, lines.join('\n') + '\n');
       return tmp;
     }
@@ -761,7 +775,7 @@ describe('RP2350 MCP Server', () => {
       // Minimal Intel HEX: extended address 0x2000, data record with one nop at
       // offset 0, EOF record.
       const hexContent = ':020000042000DA\n:0400000013000000E9\n:00000001FF\n';
-      const tmp = path.join(os.tmpdir(), `mcp-hex-pc-${Date.now()}.hex`);
+      const tmp = path.join(os.tmpdir(), `mcp-hex-pc-${randomBytes(8).toString('hex')}.hex`);
       fs.writeFileSync(tmp, hexContent);
       const data = json(
         server.handleToolCall('load_firmware', { path: tmp, entry_pc: '0x20000000' })

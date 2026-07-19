@@ -30,12 +30,19 @@ enum ExecutionMode {
   Mode_User,
 }
 
+/** Hazard3/RP2350 hardware reset vector address (fixed, not VTOR-relative). */
+export const RISCV_RESET_VECTOR = 0x7dfc;
+
 class EICAND {
   constructor(readonly irq_number: number, readonly priority: number) {}
 }
 
 export class CPU implements ICpuCore {
   public waiting = false;
+  /** True when `waiting` is due to h3.block rather than wfi. An unblock
+   * signal ends only a block sleep, never a wfi sleep (hazard3_power_ctrl.v:
+   * sleeping_on_wfi wakes on wfi_wakeup_req alone). */
+  public waitingOnBlock = false;
   public eventRegistered = false;
 
   registerSet: RegisterSet = new RegisterSet(32);
@@ -68,12 +75,18 @@ export class CPU implements ICpuCore {
     if (this.lr_addr === (addr & ~0xf)) this.lr_addr = -1;
   }
 
-  // h3.unblock (SEV): wake the other hart if it's sleeping, otherwise flag a pending event.
+  // h3.unblock (SEV). RP2350 cross-wires each core's unblock output to the
+  // other core AND loops it back to the sender (datasheet section 3.4), and
+  // the signal is sticky: it ends an h3.block sleep, or arms the core's next
+  // h3.block to fall through. It does NOT end a wfi sleep (only interrupts
+  // do), but still latches for the next h3.block.
   fireSEV() {
-    if (this.otherCore.waiting) {
-      this.otherCore.waiting = false;
-    } else {
-      this.otherCore.eventRegistered = true;
+    for (const core of [this, this.otherCore]) {
+      if (core.waiting && core.waitingOnBlock) {
+        core.waiting = false;
+      } else {
+        core.eventRegistered = true;
+      }
     }
   }
 
@@ -98,6 +111,14 @@ export class CPU implements ICpuCore {
   }
 
   reset() {
+    // Hazard3 hardware reset vector: fixed address, unlike ARM's VTOR table.
+    this.pc = RISCV_RESET_VECTOR;
+    // Clear parked wfi/wfe state, or a reset mid-wfi leaves the core frozen:
+    // executeInstruction() checks `waiting` before fetching (matches
+    // CortexM33Core.reset()'s equivalent).
+    this.waiting = false;
+    this.waitingOnBlock = false;
+    this.eventRegistered = false;
     // TODO
     this.meiea.fill(0);
     this.meipa.fill(0);
@@ -359,26 +380,41 @@ export class CPU implements ICpuCore {
     this.csrs[0xbe5] = meicontext;
   }
 
+  /** wfi/h3.block wake condition: an enabled external interrupt at or above
+   * the current preemption level, regardless of MSTATUS.MIE. */
+  wakingInterruptPending(): boolean {
+    if (!(this.csrs[0x304] & 0b100000000000)) return false;
+    // if MIE.MEIE is set... TODO consider software and timer interrupts as well
+    const meinext = this.csrs[0xbe4] >>> 0;
+    const meinext_noirq = meinext >> 31;
+    const meinext_irq_number = (meinext >>> 2) & 511;
+    const meinext_irq_prio = this.meipra[meinext_irq_number];
+    const meicontext_preempt = (this.csrs[0xbe5] >>> 16) & 0b11111;
+    // ...and the interrupt visible in MEINEXT has at least PREEMPT priority.
+    return !meinext_noirq && meinext_irq_prio >= meicontext_preempt;
+  }
+
+  // Called between instructions only (mepc must be the next instruction; a
+  // trap from inside step() would also have its target clobbered by the
+  // post-step PC update). wfi/h3.block instead fall through on a pending
+  // interrupt and leave the trap to the next checkForInterrupts(), which per
+  // the RISC-V priv spec is exactly "the interrupt trap will be taken on the
+  // following instruction".
+  resolveWakingInterrupt(): boolean {
+    if (!this.wakingInterruptPending()) return false;
+    if (this.csrs[0x300] & 0b1000) {
+      // ...and MSTATUS.MIE is set...
+      this.updateMEICONTEXT_priority_save(); // this gets called ONLY on external interrupt trap
+      this.trapEntry(((1 << 31) | 11) >>> 0); //TODO hardwired cause MEIP = external interrupt
+    }
+    this.waiting = false; // "wfi ignores the global interrupt enable, MSTATUS.MIE"
+    return true;
+  }
+
   checkForInterrupts() {
     if (!this.interruptsUpdated) return;
     this.interruptsUpdated = false;
-    if (this.csrs[0x304] & 0b100000000000) {
-      // if MIE.MEIE is set... TODO consider software and timer interrupts as well
-      const meinext = this.csrs[0xbe4] >>> 0;
-      const meinext_noirq = meinext >> 31;
-      const meinext_irq_number = (meinext >>> 2) & 511;
-      const meinext_irq_prio = this.meipra[meinext_irq_number];
-      const meicontext_preempt = (this.csrs[0xbe5] >>> 16) & 0b11111;
-      if (!meinext_noirq && meinext_irq_prio >= meicontext_preempt) {
-        // ...and the interrupt visible in MEINEXT has at least PREEMPT priority...
-        if (this.csrs[0x300] & 0b1000) {
-          // ...and MSTATUS.MIE is set...
-          this.updateMEICONTEXT_priority_save(); // this gets called ONLY on external interrupt trap
-          this.trapEntry(((1 << 31) | 11) >>> 0); //TODO hardwired cause MEIP = external interrupt
-        }
-        this.waiting = false; // "wfi ignores the global interrupt enable, MSTATUS.MIE"
-      }
-    }
+    this.resolveWakingInterrupt();
   }
 
   trapEntry(mcause: number, fromStep: boolean = false) {
@@ -1011,12 +1047,18 @@ function executeOp(inst: number, cpu: CPU) {
         // slt - but special-case h3.block / h3.unblock (Xh3power) for slt x0,x0,x0|1
         if (r === 0 && s1 === 0) {
           if (s2 === 0) {
-            // h3.block
-            if (!cpu.eventRegistered) {
+            // h3.block: falls through on a latched unblock (consuming it), and
+            // also falls through when an enabled interrupt is already asserted
+            // -- the block wake condition is block_wakeup_req OR wfi_wakeup_req
+            // (hazard3_power_ctrl.v), same as the wfi handler.
+            if (cpu.eventRegistered) {
+              cpu.eventRegistered = false;
+            } else if (cpu.wakingInterruptPending()) {
+              cpu.interruptsUpdated = true; // trap on the next instruction boundary
+            } else {
               cpu.waiting = true;
-              return;
+              cpu.waitingOnBlock = true;
             }
-            cpu.eventRegistered = false;
             return;
           } else if (s2 === 1) {
             // h3.unblock
@@ -1231,7 +1273,12 @@ function executeSystem(inst: number, cpu: CPU) {
           cpu.trapEntry(3, true);
           break; // ebreak
         case 0x10500073:
-          cpu.waiting = true;
+          if (cpu.wakingInterruptPending()) {
+            cpu.interruptsUpdated = true; // trap on the next instruction boundary
+          } else {
+            cpu.waiting = true;
+            cpu.waitingOnBlock = false;
+          }
           break; // wfi
         default:
           throw Error(`Unknown SYSTEM instruction 0x${(inst >>> 0).toString(16)}`);

@@ -50,7 +50,10 @@ const gdbAvailable = GDB_BIN !== null;
 // Helper: run a GDB batch script against our server and capture output
 async function runGdbSession(port: number, commands: string[]): Promise<string> {
   const script = GDB_ARCH_PREFIX + commands.join('\n') + '\n';
-  const scriptFile = path.join(os.tmpdir(), `gdb-test-${Date.now()}.gdb`);
+  // Each invocation gets its own unique temp directory so parallel test
+  // files / repeated calls cannot collide. mkdtempSync is atomic.
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gdb-test-'));
+  const scriptFile = path.join(tmpDir, 'script.gdb');
   fs.writeFileSync(scriptFile, script);
   try {
     return await new Promise<string>((resolve, reject) => {
@@ -71,7 +74,11 @@ async function runGdbSession(port: number, commands: string[]): Promise<string> 
       });
     });
   } finally {
-    fs.unlinkSync(scriptFile);
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    } catch {
+      // best-effort cleanup
+    }
   }
 }
 

@@ -160,7 +160,7 @@ export class RP2040 implements IRPChip {
     // console.error('Breakpoint!', code);
   };
 
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars, @typescript-eslint/no-empty-function
   public onTrace = (coreNumber: number, pc: number, tag: string) => {};
 
   constructor(readonly clock: IClock = new SimulationClock()) {
@@ -468,7 +468,9 @@ export class RP2040 implements IRPChip {
     this.stepThings(this.stepCores());
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-empty-function
   stop() {}
+  // eslint-disable-next-line @typescript-eslint/no-empty-function
   execute() {}
 
   executing(core: number): boolean {

@@ -25,11 +25,13 @@
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import { randomBytes } from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { RP2350 } from '../rp2350';
 import { CPU } from '../riscv/cpu';
+import { CortexM33Core } from '../cortex-m33/core';
 import { loadHex } from '../utils/load-hex';
 import { loadUF2 } from '../utils/load-uf2';
 import { decodeBlock } from 'uf2';
@@ -152,6 +154,56 @@ const GPR_NAMES = [
   't6',
 ];
 
+// ARM Cortex-M33 register names (r0-r15 + special registers).
+// r13=sp, r14=lr, r15=pc. Aliases below map friendly names to these.
+const ARM_GPR_ALIASES: Record<string, number> = {
+  r0: 0,
+  r1: 1,
+  r2: 2,
+  r3: 3,
+  r4: 4,
+  r5: 5,
+  r6: 6,
+  r7: 7,
+  r8: 8,
+  r9: 9,
+  r10: 10,
+  r11: 11,
+  r12: 12,
+  r13: 13,
+  sp: 13,
+  r14: 14,
+  lr: 14,
+  r15: 15,
+  pc: 15,
+};
+
+// ARM special registers accessible by name (beyond r0-r15).
+const ARM_SPECIAL_REGS = [
+  'msp',
+  'psp',
+  'msp_ns',
+  'psp_ns',
+  'msplim',
+  'psplim',
+  'msplim_ns',
+  'psplim_ns',
+  'primask',
+  'basepri',
+  'faultmask',
+  'control',
+  'primask_ns',
+  'basepri_ns',
+  'faultmask_ns',
+  'control_ns',
+  'xpsr',
+  'fpscr',
+  'n',
+  'z',
+  'c',
+  'v',
+] as const;
+
 export class RP2350McpServer {
   private breakpoints = new Set<number>();
   private tracepoints = new Map<string, number>(); // label → address
@@ -168,6 +220,7 @@ export class RP2350McpServer {
   private disMap: Map<number, number> = new Map(); // address → line index
 
   chip: RP2350;
+  fwArch: 'riscv' | 'arm' = 'riscv';
 
   constructor(bootrom?: Uint32Array) {
     if (bootrom) this.bootrom = bootrom;
@@ -175,7 +228,7 @@ export class RP2350McpServer {
   }
 
   private createChip(): RP2350 {
-    const chip = new RP2350();
+    const chip = new RP2350(false, undefined, { coreArch: this.fwArch });
     if (this.bootrom) chip.loadBootrom(this.bootrom);
     chip.onTrace = (core, pc, tag) => {
       this.traces.push({
@@ -427,6 +480,11 @@ export class RP2350McpServer {
                 type: 'string',
                 description: 'Path to a .dis disassembly file for source context',
               },
+              arch: {
+                type: 'string',
+                enum: ['riscv', 'arm'],
+                description: "CPU architecture: 'riscv' (Hazard3, default) or 'arm' (Cortex-M33)",
+              },
             },
             required: ['path'],
           },
@@ -562,6 +620,9 @@ export class RP2350McpServer {
       case 'dump_gpio':
         return this.dumpGpio();
       case 'load_firmware':
+        if (args.arch === 'arm' || args.arch === 'riscv') {
+          this.fwArch = args.arch;
+        }
         return this.loadFirmware(
           args.path as string,
           args.entry_pc != null ? parseUint(args.entry_pc) : undefined,
@@ -585,7 +646,11 @@ export class RP2350McpServer {
   }
 
   private cpu(core: number): CPU {
-    return this.chip.core[core];
+    return this.chip.core[core] as CPU;
+  }
+
+  private armCore(core: number): CortexM33Core {
+    return this.chip.core[core] as CortexM33Core;
   }
 
   private json(data: unknown) {
@@ -599,8 +664,9 @@ export class RP2350McpServer {
   private getStatus() {
     return this.json({
       emulation_running: false,
-      core0: { pc: hex(this.chip.core0.pc), wfi: this.chip.core0.waiting },
-      core1: { pc: hex(this.chip.core1.pc), wfi: this.chip.core1.waiting },
+      arch: this.chip.coreArch,
+      core0: { pc: hex(this.chip.core[0].PC), wfi: this.chip.core[0].waiting },
+      core1: { pc: hex(this.chip.core[1].PC), wfi: this.chip.core[1].waiting },
       breakpoints: [...this.breakpoints].map((a) => hex(a)),
       tracepoints: [...this.tracepoints.entries()].map(([label, addr]) => ({
         label,
@@ -612,6 +678,7 @@ export class RP2350McpServer {
   }
 
   private readRegisters(core: number) {
+    if (this.chip.coreArch === 'arm') return this.readArmRegisters(core);
     const cpu = this.cpu(core);
     const regs: Record<string, string> = {};
     for (let i = 0; i < 32; i++) {
@@ -624,7 +691,26 @@ export class RP2350McpServer {
     return this.json(regs);
   }
 
+  private readArmRegisters(core: number) {
+    const r = this.armCore(core).regs;
+    const regs: Record<string, string> = {};
+    for (let i = 0; i < 16; i++) regs[`r${i}`] = hex(r.r[i]);
+    regs.sp = hex(r.sp);
+    regs.lr = hex(r.r[14]);
+    regs.pc = hex(r.pc);
+    for (const name of ARM_SPECIAL_REGS) {
+      // Flags are boolean; report as 0/1.
+      if (name === 'n') regs.n = r.N ? '1' : '0';
+      else if (name === 'z') regs.z = r.Z ? '1' : '0';
+      else if (name === 'c') regs.c = r.C ? '1' : '0';
+      else if (name === 'v') regs.v = r.V ? '1' : '0';
+      else regs[name] = hex((r as unknown as Record<string, number>)[name]);
+    }
+    return this.json(regs);
+  }
+
   private writeRegister(core: number, register: string, value: number) {
+    if (this.chip.coreArch === 'arm') return this.writeArmRegister(core, register, value);
     const cpu = this.cpu(core);
     const v = value >>> 0;
 
@@ -640,6 +726,30 @@ export class RP2350McpServer {
     }
     if (register in CSR_MAP) {
       cpu.setCSR(CSR_MAP[register], v, 0);
+      return this.json({ ok: true });
+    }
+    return { content: [{ type: 'text', text: `Unknown register: ${register}` }], isError: true };
+  }
+
+  private writeArmRegister(core: number, register: string, value: number) {
+    const r = this.armCore(core).regs;
+    const v = value >>> 0;
+    const name = register.toLowerCase();
+
+    // GPRs and aliases (r0-r15, sp, lr, pc).
+    if (name in ARM_GPR_ALIASES) {
+      const idx = ARM_GPR_ALIASES[name];
+      r.r[idx] = v;
+      return this.json({ ok: true });
+    }
+    // Special registers (msp, psp, primask, control, xpsr, fpscr, ...).
+    if (ARM_SPECIAL_REGS.includes(name as (typeof ARM_SPECIAL_REGS)[number])) {
+      const store = r as unknown as Record<string, number>;
+      if (name === 'n') r.N = v !== 0;
+      else if (name === 'z') r.Z = v !== 0;
+      else if (name === 'c') r.C = v !== 0;
+      else if (name === 'v') r.V = v !== 0;
+      else store[name] = v;
       return this.json({ ok: true });
     }
     return { content: [{ type: 'text', text: `Unknown register: ${register}` }], isError: true };
@@ -686,12 +796,13 @@ export class RP2350McpServer {
   }
 
   private singleStep(core: number) {
-    const cpu = this.cpu(core);
+    const cpu = this.chip.core[core];
+    cpu.stopped = false;
     this.chip.currentCore = core;
     const traceStart = this.traces.length;
     const elapsed = cpu.executeInstruction();
     if (core === 0) this.chip.stepThings(elapsed);
-    const pc = cpu.pc >>> 0;
+    const pc = cpu.PC >>> 0;
     const result: Record<string, unknown> = {
       core,
       pc: hex(pc),
@@ -707,7 +818,7 @@ export class RP2350McpServer {
     const traceStart = this.traces.length;
     const hitBp = (core: number): boolean => {
       const cpu = this.chip.core[core];
-      return !cpu.waiting && this.breakpoints.has(cpu.pc >>> 0);
+      return !cpu.waiting && this.breakpoints.has(cpu.PC >>> 0);
     };
     let instructions = 0;
     const result = (halted: boolean, reason: string, core?: number) => {
@@ -715,14 +826,14 @@ export class RP2350McpServer {
         halted,
         reason,
         core,
-        core0_pc: hex(this.chip.core0.pc),
-        core1_pc: hex(this.chip.core1.pc),
+        core0_pc: hex(this.chip.core0.PC),
+        core1_pc: hex(this.chip.core1.PC),
         instructions_executed: instructions,
         cycles: this.chip.core0.cycles,
         traces: this.traces.slice(traceStart).map((t) => this.formatTrace(t)),
       };
       // Show disassembly context for the halted core
-      const haltPc = this.chip.core[core ?? 0].pc >>> 0;
+      const haltPc = this.chip.core[core ?? 0].PC >>> 0;
       const ctx = this.disasmContext(haltPc);
       if (ctx) r.disassembly = ctx;
       return this.json(r);
@@ -900,7 +1011,10 @@ export class RP2350McpServer {
       ext = '.txt';
     }
 
-    const tmpPath = path.join(os.tmpdir(), `rp2350-dump-${Date.now()}${ext}`);
+    // Use randomBytes for an atomic, collision-free temp filename (Date.now()
+    // alone collides under parallel dump_memory calls within the same ms).
+    const rand = randomBytes(8).toString('hex');
+    const tmpPath = path.join(os.tmpdir(), `rp2350-dump-${region}-${hex(absAddr)}-${rand}${ext}`);
     fs.writeFileSync(tmpPath, content);
 
     return this.json({
@@ -980,17 +1094,17 @@ export class RP2350McpServer {
     } else {
       loadHex(hex, this.chip.flash, 0x10000000);
     }
-    this.chip.core0.pc = entryPc;
-    this.chip.core1.pc = entryPc;
-    this.chip.core1.waiting = true;
+    this.chip.core[0].PC = entryPc;
+    this.chip.core[1].PC = entryPc;
+    this.chip.core[1].waiting = true;
   }
 
   private reinitChipUf2(path: string, entryPc: number) {
     this.chip = this.createChip();
     loadUF2(path, this.chip);
-    this.chip.core0.pc = entryPc;
-    this.chip.core1.pc = entryPc;
-    this.chip.core1.waiting = true;
+    this.chip.core[0].PC = entryPc;
+    this.chip.core[1].PC = entryPc;
+    this.chip.core[1].waiting = true;
   }
 
   private dumpPio(instance?: number) {

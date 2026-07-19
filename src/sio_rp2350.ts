@@ -1,8 +1,22 @@
 import { IRPChip } from './rpchip';
 import { RPSIOCore } from './sio-core';
 import { FIFO } from './utils/fifo';
+import { Timer32, Timer32PeriodicAlarm, TimerMode } from './utils/timer32';
 
 const CPUID = 0x000;
+
+// RISC-V platform timer (mtime/mtimecmp), memory-mapped via SIO. mtime is
+// shared between cores; mtimecmp/mtimecmph are core-local (RP2350 datasheet
+// / hardware_regs/sio.h). The interrupt (SIO_IRQ_MTIMECMP) is asserted
+// whenever mtime >= mtimecmp, and is what tud_task()'s scheduling loop (and
+// other periodic bare-metal polling) relies on to wake from `wfi`.
+const MTIME_CTRL = 0x1a4;
+const MTIME = 0x1b0;
+const MTIMEH = 0x1b4;
+const MTIMECMP = 0x1b8;
+const MTIMECMPH = 0x1bc;
+const MTIME_CTRL_EN = 1 << 0;
+const MTIME_FREQUENCY = 1_000_000; // 1 MHz tick rate (functional approximation)
 
 // GPIO
 const GPIO_IN = 0x004; // Input value for GPIO pins
@@ -41,10 +55,19 @@ export class RPSIO {
   spinLock = 0;
   readonly sioCore: [RPSIOCore, RPSIOCore];
 
+  // mtime: shared 32-bit-approximated free-running counter (mtimeh always
+  // reads 0 here — fine for realistic tick intervals within a ~4295s/1MHz
+  // window). mtimecmp/mtimecmph are core-local per the datasheet.
+  readonly mtimeTimer: Timer32;
+  private mtimeCtrl = 0x0000000d; // reset value: DBGPAUSE_CORE1/0=1, FULLSPEED=0, EN=1
+  private readonly mtimecmpAlarm: [Timer32PeriodicAlarm, Timer32PeriodicAlarm];
+  private readonly mtimecmpHigh: [number, number] = [0, 0];
+
   constructor(
     private readonly rp2040: IRPChip,
     readonly sio_proc0_irq: number,
-    readonly sio_proc1_irq: number
+    readonly sio_proc1_irq: number,
+    readonly sio_mtimecmp_irq: number = sio_proc0_irq
   ) {
     const rxFIFO = new FIFO(8);
     const txFIFO = new FIFO(8);
@@ -52,6 +75,17 @@ export class RPSIO {
       new RPSIOCore(rp2040, rxFIFO, txFIFO, sio_proc0_irq, sio_proc1_irq, 0, 1),
       new RPSIOCore(rp2040, txFIFO, rxFIFO, sio_proc1_irq, sio_proc0_irq, 1, 0),
     ];
+
+    this.mtimeTimer = new Timer32('SIO_mtime', rp2040.clock, MTIME_FREQUENCY);
+    this.mtimeTimer.mode = TimerMode.Increment;
+    this.mtimecmpAlarm = [0, 1].map((core) => {
+      const alarm = new Timer32PeriodicAlarm(`SIO_mtimecmp_core${core}`, this.mtimeTimer, () => {
+        this.rp2040.setInterruptCore(sio_mtimecmp_irq, true, core);
+      });
+      alarm.target = 0xffffffff; // matches MTIMECMP reset value
+      alarm.enable = true;
+      return alarm;
+    }) as [Timer32PeriodicAlarm, Timer32PeriodicAlarm];
   }
 
   readUint32(offset: number, cpuCore: number): number {
@@ -68,6 +102,8 @@ export class RPSIO {
       case GPIO_IN:
         return this.rp2040.gpioValues(0);
       case GPIO_HI_IN: {
+        // RP2350: QSPI pins at bits 31:26, GPIO32+ at bits 25:0.
+        // QSPI_SCLK=bit31, QSPI_SS=bit27, QSPI_SD0=bit28, QSPI_SD1=bit29.
         const { qspi } = this.rp2040;
         let result = 0;
         for (let qspiIndex = 0; qspiIndex < qspi.length; qspiIndex++) {
@@ -104,6 +140,16 @@ export class RPSIO {
         return cpuCore;
       case SPINLOCK_ST:
         return this.spinLock;
+      case MTIME_CTRL:
+        return this.mtimeCtrl;
+      case MTIME:
+        return this.mtimeTimer.counter >>> 0;
+      case MTIMEH:
+        return 0; // approximation: mtime never wraps past 32 bits in practice
+      case MTIMECMP:
+        return this.mtimecmpAlarm[cpuCore].target >>> 0;
+      case MTIMECMPH:
+        return this.mtimecmpHigh[cpuCore];
     }
     // Divider, Interpolator, FIFO get handled per core in sio-core
     return this.sioCore[cpuCore].readUint32(offset);
@@ -167,6 +213,25 @@ export class RPSIO {
         break;
       case GPIO_HI_OE_XOR:
         this.gpioHiOutputEnable ^= value & GPIO_MASK;
+        break;
+      case MTIME_CTRL:
+        this.mtimeCtrl = value;
+        this.mtimeTimer.enable = !!(value & MTIME_CTRL_EN);
+        break;
+      case MTIME:
+        this.mtimeTimer.set(value >>> 0);
+        break;
+      case MTIMEH:
+        break; // approximation: high word not tracked
+      case MTIMECMPH:
+        this.mtimecmpHigh[cpuCore] = value >>> 0;
+        break;
+      case MTIMECMP:
+        // Writing mtimecmp clears the (level-sensitive) interrupt condition
+        // until mtime reaches the new target — matches real hardware, and is
+        // how firmware acknowledges/reschedules the tick after each fire.
+        this.rp2040.setInterruptCore(this.sio_mtimecmp_irq, false, cpuCore);
+        this.mtimecmpAlarm[cpuCore].target = value >>> 0;
         break;
       default:
         // Divider, Interpolator, FIFO get handled per core in sio-core
