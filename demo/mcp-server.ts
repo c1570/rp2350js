@@ -17,7 +17,7 @@
 
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { RP2350McpServer } from '../src/mcp/rp2350-mcp-server';
-import { bootrom_rp2350_A2 } from './bootrom_rp2350';
+import { bootrom_rp2350_A2 } from '../src/bootroms';
 
 const mcpServer = new RP2350McpServer(bootrom_rp2350_A2);
 const transport = new StdioServerTransport();

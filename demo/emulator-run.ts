@@ -7,7 +7,7 @@ const log_gpios = true;
 import * as fs from 'fs';
 import { RP2350 } from '../src';
 import { GPIOPinState } from '../src/gpio-pin';
-import { bootrom_rp2350_A2 } from './bootrom_rp2350';
+import { bootrom_rp2350_A2 } from '../src/bootroms';
 import { loadHex } from './intelhex';
 import { GDBTCPServer } from '../src/gdb/gdb-tcp-server';
 import { RISCVGDBServer } from '../src/gdb/riscv-gdb-server';
@@ -43,7 +43,7 @@ for (let i = 0; i < 11; i++) {
     });
   } else {
     mcu.gpio[i].addListener((state: GPIOPinState, oldState: GPIOPinState) =>
-      mcu.gpio[i].setInputValue(state == 1)
+      mcu.gpio[i].setInputValue(state == 1),
     );
   }
 }

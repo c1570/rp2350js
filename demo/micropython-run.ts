@@ -4,7 +4,7 @@ import { GDBTCPServer } from '../src/gdb/gdb-tcp-server';
 import { ArmGDBServer } from '../src/gdb/arm-gdb-server';
 import { USBCDC } from '../src/usb/cdc';
 import { ConsoleLogger, LogLevel } from '../src/utils/logging';
-import { bootromB1 } from './bootrom';
+import { bootromB1 } from '../src/bootroms';
 import { loadUF2, loadMicropythonFlashImage, loadCircuitpythonFlashImage } from './load-flash';
 import fs from 'fs';
 import minimist from 'minimist';

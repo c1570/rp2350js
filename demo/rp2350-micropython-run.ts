@@ -1,7 +1,7 @@
 import { RP2350, CoreArch } from '../src';
 import { USBCDC } from '../src/usb/cdc';
 import { ConsoleLogger, LogLevel } from '../src/utils/logging';
-import { bootrom_rp2350_A2 } from './bootrom_rp2350';
+import { bootrom_rp2350_A2 } from '../src/bootroms';
 import { loadUF2, loadMicropythonFlashImage } from './load-flash';
 import fs from 'fs';
 import minimist from 'minimist';

@@ -48,7 +48,7 @@ import { CortexM33Core } from '../src/cortex-m33/core';
 import { isThumb32 } from '../src/cortex-m33/execute-thumb32';
 import { USBCDC } from '../src/usb/cdc';
 import { ConsoleLogger, LogLevel } from '../src/utils/logging';
-import { bootrom_rp2350_A2 } from './bootrom_rp2350';
+import { bootrom_rp2350_A2 } from '../src/bootroms';
 import { loadUF2 } from './load-flash';
 
 const RISCV_OBJDUMP = process.env['DEBUG_TRACE_RISCV_OBJDUMP'] || 'riscv32-corev-elf-objdump';
@@ -123,7 +123,7 @@ const imagePath = envStr(
   'DEBUG_TRACE_IMAGE',
   coreArch === 'arm'
     ? './demo/RP2_Micropython_M33.uf2'
-    : './demo/RPI_PICO2-RISCV-20260406-v1.28.0.uf2'
+    : './demo/RPI_PICO2-RISCV-20260406-v1.28.0.uf2',
 );
 /** Safety cap on trace length so a forgotten stop point can't OOM the process. */
 const maxTraceEntries = envNum('DEBUG_TRACE_MAX_ENTRIES', 500_000);
@@ -189,7 +189,7 @@ if (traceStartAtSetupCall !== null) {
       `[setup] sendSetupPacket call #${setupCallCount} at instr #${currentInstrNum}: ` +
         `${Array.from(setupPacket.slice(0, 8))
           .map((b) => b.toString(16).padStart(2, '0'))
-          .join(' ')}`
+          .join(' ')}`,
     );
     if (setupCallCount === traceStartAtSetupCall && setupTriggerHitAt === null) {
       setupTriggerHitAt = currentInstrNum;
@@ -219,7 +219,7 @@ if (watchIrqs.length > 0) {
         console.log(
           `[irq] setInterrupt(${irq}, ${value}) at instr #${currentInstrNum}: ` +
             `core0(meiea=${riscv0.meiea[irq]}, waiting=${riscv0.waiting}) ` +
-            `core1(meiea=${riscv1.meiea[irq]}, waiting=${riscv1.waiting})`
+            `core1(meiea=${riscv1.meiea[irq]}, waiting=${riscv1.waiting})`,
         );
       }
       return origSetInterrupt(irq, value);
@@ -236,7 +236,7 @@ if (watchWriteValues.length > 0) {
       const instrSuffix = mcu.currentCore === traceCoreNumber ? `, instr #${currentInstrNum}` : '';
       console.log(
         `[watch] core${mcu.currentCore} wrote 0x${(value >>> 0).toString(16)} to address ` +
-          `0x${(address >>> 0).toString(16)} at PC=0x${(core.PC >>> 0).toString(16)}${instrSuffix}`
+          `0x${(address >>> 0).toString(16)} at PC=0x${(core.PC >>> 0).toString(16)}${instrSuffix}`,
       );
     }
     return origWriteUint32(address, value);
@@ -250,9 +250,9 @@ if (watchWriteAddresses.length > 0) {
     const instrSuffix = mcu.currentCore === traceCoreNumber ? `, instr #${currentInstrNum}` : '';
     console.log(
       `[watch] core${mcu.currentCore} wrote ${width}-bit value 0x${(value >>> 0).toString(
-        16
+        16,
       )} to address ` +
-        `0x${(address >>> 0).toString(16)} at PC=0x${(core.PC >>> 0).toString(16)}${instrSuffix}`
+        `0x${(address >>> 0).toString(16)} at PC=0x${(core.PC >>> 0).toString(16)}${instrSuffix}`,
     );
   };
   const origWriteUint32b = mcu.writeUint32.bind(mcu);
@@ -423,7 +423,7 @@ if (watchPcs.length > 0) {
           coreArch === 'riscv' ? [regs[10], regs[11], regs[12]] : [regs[0], regs[1], regs[2]];
         console.log(
           `[pc] core${i} reached 0x${pc.toString(16)} at instr #${currentInstrNum}: ` +
-            `a0=0x${a0.toString(16)} a1=0x${a1.toString(16)} a2=0x${a2.toString(16)}`
+            `a0=0x${a0.toString(16)} a1=0x${a1.toString(16)} a2=0x${a2.toString(16)}`,
         );
       }
       return orig();
@@ -460,7 +460,7 @@ function disassemble(entries: TraceEntry[]): string[] {
         : execFileSync(
             ARM_OBJDUMP,
             ['-D', '-b', 'binary', '-m', 'arm', '--disassembler-options=force-thumb', tmpFile],
-            { encoding: 'utf-8', maxBuffer: 1024 * 1024 * 256 }
+            { encoding: 'utf-8', maxBuffer: 1024 * 1024 * 256 },
           );
   } catch (e) {
     console.error(`objdump failed (${(e as Error).message}); trace will show raw opcodes only.`);
@@ -469,7 +469,7 @@ function disassemble(entries: TraceEntry[]): string[] {
         ? coreArch === 'riscv'
           ? `.word 0x${(((e.hw1 << 16) | e.hw0) >>> 0).toString(16)}`
           : `.word 0x${e.hw0.toString(16)} 0x${e.hw1.toString(16)}`
-        : `<unknown 0x${e.hw0.toString(16)}>`
+        : `<unknown 0x${e.hw0.toString(16)}>`,
     );
   } finally {
     fs.rmSync(tmpFile, { force: true });
@@ -484,7 +484,7 @@ function disassemble(entries: TraceEntry[]): string[] {
   if (asmLines.length !== entries.length) {
     console.error(
       `objdump produced ${asmLines.length} lines for ${entries.length} traced instructions — ` +
-        `disassembly may be misaligned below.`
+        `disassembly may be misaligned below.`,
     );
   }
   return asmLines;
@@ -546,7 +546,7 @@ function dumpTrace() {
   console.log(
     `\n=== Execution trace: core ${traceCoreNumber}, instructions ` +
       `${traceStartInstructionNumber}-${traceStartInstructionNumber + traceEntries.length - 1}, ` +
-      `${traceEntries.length} entries (oldest first, most recent last) ===`
+      `${traceEntries.length} entries (oldest first, most recent last) ===`,
   );
   const asm = disassemble(traceEntries);
   for (let i = 0; i < traceEntries.length; i++) {
@@ -554,8 +554,8 @@ function dumpTrace() {
     const line = asm[i] ?? '?';
     console.log(
       `[core${e.core}] #${e.instrNum} PC=0x${e.pc.toString(16).padStart(8, '0')}  ${line.padEnd(
-        32
-      )}  ${formatRegs(e)}`
+        32,
+      )}  ${formatRegs(e)}`,
     );
   }
 }
@@ -570,11 +570,11 @@ function dumpStatus(reason: string) {
       const meinext = c.csrs[0xbe4] >>> 0;
       const pendingIrqs = c.meipa.reduce(
         (acc, v, irq) => (v ? [...acc, irq] : acc),
-        [] as number[]
+        [] as number[],
       );
       const enabledIrqs = c.meiea.reduce(
         (acc, v, irq) => (v ? [...acc, irq] : acc),
-        [] as number[]
+        [] as number[],
       );
       console.log(
         `core${i}: pc=0x${(c.PC >>> 0).toString(16)} waiting=${c.waiting} eventRegistered=${
@@ -582,8 +582,8 @@ function dumpStatus(reason: string) {
         } ` +
           `stopped=${c.stopped} mstatus.MIE=${(mstatus >>> 3) & 1} mie.MEIE=${(mie >>> 11) & 1} ` +
           `meinext=0x${meinext.toString(16)} pendingIrqs=[${pendingIrqs.join(
-            ','
-          )}] enabledIrqs=[${enabledIrqs.join(',')}]`
+            ',',
+          )}] enabledIrqs=[${enabledIrqs.join(',')}]`,
       );
     }
   } else {
@@ -593,7 +593,7 @@ function dumpStatus(reason: string) {
           c.eventRegistered
         } ` +
           `stopped=${c.stopped} ipsr=${c.regs.ipsr} primask=${c.regs.primask} faultmask=${c.regs.faultmask} ` +
-          `control=0x${c.regs.control.toString(16)}`
+          `control=0x${c.regs.control.toString(16)}`,
       );
     }
   }
@@ -613,7 +613,7 @@ function runBatch() {
       `CRASH: ${(e as Error).message}\n` +
         `(core ${traceCoreNumber} was at instruction #${currentInstrNum}, PC=0x${(
           tracedCore.PC >>> 0
-        ).toString(16)})`
+        ).toString(16)})`,
     );
     process.exit(1);
   }
@@ -623,7 +623,7 @@ function runBatch() {
   }
   if (totalSteps >= maxSteps) {
     dumpStatus(
-      `Stopped: exhausted maxSteps=${maxSteps} without reaching stopAtInstructionNumber or a crash`
+      `Stopped: exhausted maxSteps=${maxSteps} without reaching stopAtInstructionNumber or a crash`,
     );
     process.exit(0);
   }

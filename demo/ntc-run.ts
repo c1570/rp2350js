@@ -17,8 +17,7 @@ import * as fs from 'fs';
 import { RP2040 } from '../src';
 import { RP2350 } from '../src';
 import { GPIOPinState } from '../src/gpio-pin';
-import { bootromB1 } from './bootrom';
-import { bootrom_rp2350_A2 } from './bootrom_rp2350';
+import { bootromB1, bootrom_rp2350_A2 } from '../src/bootroms';
 import { loadHex } from './intelhex';
 
 const homedir = require('os').homedir();
@@ -47,7 +46,7 @@ function mcuTagSetter(mcuNumber: number) {
       console.log(
         `cycle_tag ${tag} on mcu ${mcuNumber} core ${coreNumber} cycle ${
           coreNumber == 0 ? mcu[mcuNumber].core0.cycles : mcu[mcuNumber].core1.cycles
-        }`
+        }`,
       );
     }
   };
@@ -352,8 +351,10 @@ async function run_mcus() {
       const tag = pTags_updated[i];
       let instrAnn = ' ';
       const opcPar = pInstrs[i] & 0b1110000011100000;
-      if (opcPar == 0b0100000000000000) instrAnn = 'i'; // IN PINS
-      else if (opcPar == 0b0110000000000000) instrAnn = 'o'; // OUT PINS
+      if (opcPar == 0b0100000000000000)
+        instrAnn = 'i'; // IN PINS
+      else if (opcPar == 0b0110000000000000)
+        instrAnn = 'o'; // OUT PINS
       else if (opcPar == 0b0110000010000000) instrAnn = 'd'; // OUT PINDIRS
       wTags.push(tag == pTags[i] ? '~~ ' : tag.padStart(2, '0') + instrAnn);
     }
@@ -377,7 +378,7 @@ async function run_mcus() {
     logs.push(
       `${cycleTag} / ${busTag} | ${bus_state_str} | M ${mcu_main.core0.PC.toString(16).padStart(
         8,
-        '0'
+        '0',
       )}/${wTags[0]} ${mcu_main.core1.PC.toString(16).padStart(8, '0')}/${
         wTags[1]
       } | V ${mcu_vic.core0.PC.toString(16).padStart(8, '0')}/${
@@ -390,7 +391,7 @@ async function run_mcus() {
         .toString()
         .padStart(2, '0')} 6510@${cpu_addr.toString(16).padStart(4, '0')} ${bus_pins} ${bus_bin
         .toString(16)
-        .padStart(2, '0')}`
+        .padStart(2, '0')}`,
     );
   }
 
@@ -441,7 +442,7 @@ async function run_mcus() {
               render_idle_cycles = 0;
               if (vic_loop_stats.length > 100000)
                 vic_loop_stats = vic_loop_stats.slice(
-                  vic_loop_stats.length - max_len_vic_loop_stats
+                  vic_loop_stats.length - max_len_vic_loop_stats,
                 );
             }
           }
@@ -483,15 +484,15 @@ async function run_mcus() {
               if (pio_fdebug & 0x0f000000)
                 // ignore MAIN TX stalls for now
                 throw new Error(
-                  `${hex_files[mcu_id][0]} PIO ${pio} TX STALL: ${(pio_fdebug >> 24) & 15}`
+                  `${hex_files[mcu_id][0]} PIO ${pio} TX STALL: ${(pio_fdebug >> 24) & 15}`,
                 );
             if (pio_fdebug & 0x000f0000)
               throw new Error(
-                `${hex_files[mcu_id][0]} PIO ${pio} TX OVERFLOW: ${(pio_fdebug >> 16) & 15}`
+                `${hex_files[mcu_id][0]} PIO ${pio} TX OVERFLOW: ${(pio_fdebug >> 16) & 15}`,
               );
             if (pio_fdebug & 0x00000f00)
               throw new Error(
-                `${hex_files[mcu_id][0]} PIO ${pio} RX UNDERFLOW: ${(pio_fdebug >> 8) & 15}`
+                `${hex_files[mcu_id][0]} PIO ${pio} RX UNDERFLOW: ${(pio_fdebug >> 8) & 15}`,
               );
           }
         }
@@ -563,7 +564,7 @@ async function run_mcus() {
               var curBuf = fs.readFileSync(`${trace_6510_filename}.current.gif`);
               if (curBuf.toString() !== tstBuf.toString())
                 throw new Error(
-                  `Video output differs after trace, see ${trace_6510_filename}.current.gif`
+                  `Video output differs after trace, see ${trace_6510_filename}.current.gif`,
                 );
               trace_6510_file_it = null;
               if (process.env.CNM64_FINISH_WITH_TRACE) process.exit(0);
@@ -573,8 +574,8 @@ async function run_mcus() {
                   .toString(16)
                   .padStart(
                     4,
-                    '0'
-                  )}, 6510 cycle ${cycles_6510}, line ${trace_6510_step}, tracefile ${trace_6510_filename}`
+                    '0',
+                  )}, 6510 cycle ${cycles_6510}, line ${trace_6510_step}, tracefile ${trace_6510_filename}`,
               );
           }
           addr_6510_last = addr_6510;
@@ -586,7 +587,7 @@ async function run_mcus() {
     setTimeout(() => run_mcus(), 0);
   } catch (e) {
     logs.push(
-      `*** Exception ${e} - try running with CNM64_RUN_TO_CYCLE=${mcu[0].core0.cycles} ***`
+      `*** Exception ${e} - try running with CNM64_RUN_TO_CYCLE=${mcu[0].core0.cycles} ***`,
     );
     log_state();
     if (logs.length > 5000) logs = logs.slice(logs.length - 5000);
@@ -606,7 +607,7 @@ async function run_mcus() {
           l.idle
         } cycles, core1 idle ${l.idle2} cycles, bus addr ${l.addr6510
           .toString(16)
-          .padStart(4, '0')}, vic_l ${l.vic_l}, vic_h ${l.vic_h}`
+          .padStart(4, '0')}, vic_l ${l.vic_l}, vic_h ${l.vic_h}`,
       );
     }
     console.error('\n*** VIC-II statistics ***');
@@ -614,7 +615,7 @@ async function run_mcus() {
       vic_loop_stats = vic_loop_stats.slice(vic_loop_stats.length - max_len_vic_loop_stats);
     for (let l of vic_loop_stats) {
       console.error(
-        `6510 cycle ${l.cycle6510}, ARM cycle ${l.startCycle}, VIC tick/idle ${l.duration}/${l.idle} cycles, render idle ${l.idle2} cycles, vic_l ${l.vic_l}, vic_h ${l.vic_h}`
+        `6510 cycle ${l.cycle6510}, ARM cycle ${l.startCycle}, VIC tick/idle ${l.duration}/${l.idle} cycles, render idle ${l.idle2} cycles, vic_l ${l.vic_l}, vic_h ${l.vic_h}`,
       );
     }
     write_pic('/tmp/cnm64.gif');
