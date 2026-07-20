@@ -49,7 +49,6 @@ export class CPU implements ICpuCore {
   csrs = new Uint32Array(0x1000);
   pc = 0;
   next_pc = 0;
-  stopped = false; //TODO
   cycles = 0;
   currentMode: ExecutionMode = ExecutionMode.Mode_Machine;
 

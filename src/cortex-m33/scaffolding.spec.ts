@@ -137,7 +137,6 @@ describe('RP2350 ARM (Cortex-M33) scaffolding', () => {
 
   it('ARM core executeInstruction returns without crashing', () => {
     const chip = new RP2350(false, undefined, { coreArch: 'arm' });
-    chip.armCore0.stopped = false;
     const cycles = chip.armCore0.executeInstruction();
     expect(cycles).toBeGreaterThan(0);
     expect(chip.armCore0.cycles).toBeGreaterThan(0);

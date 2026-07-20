@@ -17,8 +17,6 @@ import * as fs from 'fs';
 import { RP2040 } from '../src';
 import { RP2350 } from '../src';
 import { GPIOPinState } from '../src/gpio-pin';
-import { bootromB1, bootrom_rp2350_A2 } from '../src/bootroms';
-import { loadHex } from './intelhex';
 
 const homedir = require('os').homedir();
 
@@ -46,7 +44,7 @@ function mcuTagSetter(mcuNumber: number) {
       console.log(
         `cycle_tag ${tag} on mcu ${mcuNumber} core ${coreNumber} cycle ${
           coreNumber == 0 ? mcu[mcuNumber].core0.cycles : mcu[mcuNumber].core1.cycles
-        }`,
+        }`
       );
     }
   };
@@ -55,17 +53,12 @@ function mcuTagSetter(mcuNumber: number) {
 for (let i = 0; i < hex_files.length; i++) {
   if (i >= 2) {
     mcu[i] = new RP2040();
-    mcu[i].loadBootrom(bootromB1);
-    mcu[i].core0.PC = 0x10000000;
-    mcu[i].core1.PC = 0x10000000;
+    mcu[i].loadFirmware(hex_files[i][1], { entryPc: 0x10000000 });
     mcu[i].core1.waiting = true;
   } else {
     mcu[i] = new RP2350();
-    mcu[i].loadBootrom(bootrom_rp2350_A2);
-    mcu[i].core0.pc = 0x10000036;
-    mcu[i].core1.pc = 0x10000036;
+    mcu[i].loadFirmware(hex_files[i][1], { entryPc: 0x10000036 });
   }
-  loadHex(fs.readFileSync(hex_files[i][1], 'utf-8'), mcu[i].flash, 0x10000000);
   mcu[i].uart[0].onByte = (value: number) => {
     process.stdout.write(new Uint8Array([value]));
   };
@@ -351,10 +344,8 @@ async function run_mcus() {
       const tag = pTags_updated[i];
       let instrAnn = ' ';
       const opcPar = pInstrs[i] & 0b1110000011100000;
-      if (opcPar == 0b0100000000000000)
-        instrAnn = 'i'; // IN PINS
-      else if (opcPar == 0b0110000000000000)
-        instrAnn = 'o'; // OUT PINS
+      if (opcPar == 0b0100000000000000) instrAnn = 'i'; // IN PINS
+      else if (opcPar == 0b0110000000000000) instrAnn = 'o'; // OUT PINS
       else if (opcPar == 0b0110000010000000) instrAnn = 'd'; // OUT PINDIRS
       wTags.push(tag == pTags[i] ? '~~ ' : tag.padStart(2, '0') + instrAnn);
     }

@@ -6,7 +6,6 @@ const SRAM = 0x20000000;
 function setup() {
   const chip = new RP2350(false, undefined, { coreArch: 'arm' });
   const core = chip.armCore0;
-  core.stopped = false;
   chip.currentCore = 0;
   chip.writeUint32(0xe000ed08, SRAM);
   chip.writeUint32(0xe000ed88, 0x00ff0000);

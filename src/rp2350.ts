@@ -44,6 +44,12 @@ import { RPWatchdog } from './peripherals/watchdog';
 import { ConsoleLogger, Logger, LogLevel } from './utils/logging';
 import { CortexM33Core } from './cortex-m33/core';
 import { RPPPB2350 } from './peripherals/ppb_rp2350';
+import { bootrom_rp2350_A2 } from './bootroms';
+import {
+  loadFirmware as loadFirmwareHelper,
+  LoadFirmwareOptions,
+  LoadFirmwareResult,
+} from './utils/load-firmware';
 
 export const FLASH_START_ADDRESS = 0x10000000;
 export const RAM_START_ADDRESS = 0x20000000;
@@ -294,6 +300,14 @@ export class RP2350 implements IRPChip {
     this.otp.writeUint32(0x158, archsel);
     this.otp.writeUint32(0x15c, archsel);
 
+    // Auto-load the bundled A2 bootrom and erased-flash state before the
+    // initial reset, so freshly-constructed chips boot the same way real
+    // silicon does. Subsequent reset() calls preserve flash contents
+    // (matching hardware); callers can override the bootrom via a
+    // subsequent `loadBootrom(...)` call.
+    this.bootrom.set(bootrom_rp2350_A2);
+    this.flash.fill(0xff);
+
     this.reset();
     this.core[0].otherCore = this.core[1];
     this.core[1].otherCore = this.core[0];
@@ -305,14 +319,14 @@ export class RP2350 implements IRPChip {
     this.qspi[1].padValue = 0x56; // IE=1, PUE=1, ISO=1
     this.qspi[1].setInputValue(true);
 
-    // A watchdog fire is a real chip reset on hardware; the bootrom relies on
-    // this to hand off from its own `wfi` into loaded firmware. `resetCores()`
-    // (not `reset()`) — flash must survive a watchdog reset, like on silicon.
-    // The watchdog's own CTRL/LOAD also resets (in the PSM reset scope,
-    // unlike scratch, which is excluded so vectored-boot info survives).
+    // Watchdog reset: per PSM WDSEL configuration in the bootrom
+    // (psm_hw->wdsel = ~PSM_WDSEL_PROC_COLD_BITS), this resets nearly the
+    // full chip — cores, peripherals, and the watchdog's own CTRL/LOAD —
+    // matching real silicon. Watchdog scratch is outside the PSM reset
+    // scope, so vectored-boot info survives.
     this.watchdog.onWatchdogTrigger = () => {
-      this.logger.warn('WATCHDOG', 'Watchdog fired — resetting cores');
-      this.resetCores();
+      this.logger.warn('WATCHDOG', 'Watchdog fired — resetting chip');
+      this.reset();
       this.watchdog.reset();
     };
   }
@@ -329,6 +343,23 @@ export class RP2350 implements IRPChip {
   }
 
   /**
+   * Load firmware from a HEX or UF2 file, then (by default) re-initialise
+   * the chip so the cores start ready to boot the loaded image.
+   *
+   * For SRAM images, watchdog scratch[4..7] is set up as a vectored-boot
+   * handshake so the bootrom scans the SRAM window for an IMAGE_DEF block
+   * and launches the firmware (replicating what nsboot does on real
+   * hardware after a UF2 upload). For flash images, the bootrom does its
+   * normal flash scan.
+   *
+   * See `src/utils/load-firmware.ts` for option details (override entry PC,
+   * skip chip init, etc.).
+   */
+  loadFirmware(path: string, options?: LoadFirmwareOptions): LoadFirmwareResult {
+    return loadFirmwareHelper(this, path, options);
+  }
+
+  /**
    * @param enableCoprocessors ARM only: when true, sets CPACR to enable full
    * access to all 8 coprocessor slots (CP0-CP11) directly, matching what the
    * real bootrom does during its own boot sequence. Defaults to false (real
@@ -339,25 +370,12 @@ export class RP2350 implements IRPChip {
    * bootrom's own CPACR setup.
    */
   reset(enableCoprocessors = false) {
-    this.resetCores(enableCoprocessors);
-    this.pwm.reset();
-    this.flash.fill(0xff);
-  }
-
-  /**
-   * Re-vectors both cores to their hardware reset state (MSP/PC from VTOR on
-   * ARM, the fixed Hazard3 reset vector on RISC-V) without touching flash or
-   * other peripheral state — what a real *watchdog-triggered* reset does on
-   * silicon, as opposed to `reset()`'s full power-on reset. Exposed
-   * separately so flash contents (e.g. loaded via `loadUF2`) survive a
-   * watchdog reset, matching real hardware.
-   */
-  resetCores(enableCoprocessors = false) {
     if (this.coreArch === 'arm') {
       for (const c of this.core as CortexM33Core[]) c.reset(enableCoprocessors);
     } else {
       for (const c of this.core) c.reset();
     }
+    this.pwm.reset();
   }
 
   readUint32(address: number): number {
@@ -667,8 +685,6 @@ export class RP2350 implements IRPChip {
   }
 
   stepCores() {
-    this.core[0].stopped = false;
-    this.core[1].stopped = false;
     this.currentCore = 0;
     const elapsed = this.core[0].executeInstruction();
     this.currentCore = 1;
@@ -696,8 +712,4 @@ export class RP2350 implements IRPChip {
   stop() {}
   // eslint-disable-next-line @typescript-eslint/no-empty-function
   execute() {}
-
-  executing(core: number): boolean {
-    return this.core[core].stopped;
-  }
 }

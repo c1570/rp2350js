@@ -1,8 +1,7 @@
 import { RP2350, CoreArch } from '../src';
 import { USBCDC } from '../src/usb/cdc';
 import { ConsoleLogger, LogLevel } from '../src/utils/logging';
-import { bootrom_rp2350_A2 } from '../src/bootroms';
-import { loadUF2, loadMicropythonFlashImage } from './load-flash';
+import { loadMicropythonFlashImage } from './load-flash';
 import fs from 'fs';
 import minimist from 'minimist';
 
@@ -18,7 +17,6 @@ if (coreArch !== 'arm' && coreArch !== 'riscv') {
 }
 
 const mcu = new RP2350(false, undefined, { coreArch });
-mcu.loadBootrom(bootrom_rp2350_A2);
 mcu.logger = new ConsoleLogger(LogLevel.Info);
 
 mcu.uart[0].onByte = (value: number) => {
@@ -31,12 +29,18 @@ const imageName =
     ? './demo/RPI_PICO2-20260406-v1.28.0.uf2'
     : './demo/RPI_PICO2-RISCV-20260406-v1.28.0.uf2');
 console.log(`Loading uf2 image ${imageName}`);
-loadUF2(imageName, mcu);
+// Load UF2 with initChip=false so we can layer the littlefs image onto flash
+// before the bootrom handoff / chip reset runs.
+mcu.loadFirmware(imageName, { initChip: false });
 
 if (fs.existsSync('littlefs.img')) {
   console.log(`Loading littlefs image littlefs.img`);
   loadMicropythonFlashImage('littlefs.img', mcu);
 }
+
+// Now initialise the chip: bootrom scans flash for the IMAGE_DEF and hands
+// off to firmware on the next step().
+mcu.reset();
 
 const cdc = new USBCDC(mcu.usbCtrl);
 cdc.onDeviceConnected = () => {
@@ -75,20 +79,6 @@ process.stdin.on('data', (chunk) => {
     cdc.sendSerialByte(byte);
   }
 });
-
-// Boot through the real bootrom rather than jumping to the firmware reset
-// vector directly. reset() already performs the vectored hardware reset for
-// either architecture (ARMv8-M: MSP/PC from VTOR=0's bootrom table; RISC-V:
-// Hazard3's fixed reset vector 0x7dfc), so both cores start at the bootrom
-// entry; it scans/verifies the flash IMAGE_DEF and hands off to firmware.
-// RISC-V cores default to `stopped = false` and are already free-running;
-// ARM cores default to `stopped = true` and need un-parking. (ARM core1
-// parks itself in the bootrom via WFE, waiting for the SIO mailbox handshake,
-// rather than being flagged "stopped" — matches real hardware.)
-if (coreArch === 'arm') {
-  mcu.armCore0.stopped = false;
-  mcu.armCore1.stopped = false;
-}
 
 // Bounded batches yield to the event loop (cf. Simulator.execute()); a plain
 // `while (1) { mcu.step(); }` would starve stdout flushing and stdin input.

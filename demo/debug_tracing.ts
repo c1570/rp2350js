@@ -48,8 +48,6 @@ import { CortexM33Core } from '../src/cortex-m33/core';
 import { isThumb32 } from '../src/cortex-m33/execute-thumb32';
 import { USBCDC } from '../src/usb/cdc';
 import { ConsoleLogger, LogLevel } from '../src/utils/logging';
-import { bootrom_rp2350_A2 } from '../src/bootroms';
-import { loadUF2 } from './load-flash';
 
 const RISCV_OBJDUMP = process.env['DEBUG_TRACE_RISCV_OBJDUMP'] || 'riscv32-corev-elf-objdump';
 const ARM_OBJDUMP = process.env['DEBUG_TRACE_ARM_OBJDUMP'] || 'arm-none-eabi-objdump';
@@ -153,7 +151,6 @@ const watchPcs: number[] = envNumList('DEBUG_TRACE_WATCH_PC', []);
 // ---- Boot the chip, same sequence as demo/rp2350-micropython-run.ts ----
 
 const mcu = new RP2350(false, undefined, { coreArch });
-mcu.loadBootrom(bootrom_rp2350_A2);
 mcu.logger = new ConsoleLogger(LogLevel.Error);
 
 mcu.uart[0].onByte = (value: number) => {
@@ -161,21 +158,10 @@ mcu.uart[0].onByte = (value: number) => {
 };
 
 console.log(`Loading uf2 image ${imagePath}`);
-loadUF2(imagePath, mcu);
+mcu.loadFirmware(imagePath);
 
-// `loadBootrom()` already re-runs reset() with the bootrom image in place, so
-// both cores come out of it sitting at the real hardware reset state (ARM:
-// MSP/PC vectored from VTOR; RISC-V: Hazard3 reset vector 0x7dfc). ARM cores
-// default to `stopped = true` and need un-parking; RISC-V cores default to
-// `stopped = false` and are already free-running.
 const core0 = mcu.core[0];
 const core1 = mcu.core[1];
-if (coreArch === 'arm') {
-  core0.stopped = false;
-  // core1 parks itself in the bootrom (WFE, waiting for the SIO mailbox
-  // handshake) rather than being flagged "stopped" — matches real hardware.
-  core1.stopped = false;
-}
 
 /** Set (to the traced core's current instrNum) once `traceStartAtSetupCall`
  * sendSetupPacket() calls have happened. instrumentCore() reads this. */
@@ -580,7 +566,7 @@ function dumpStatus(reason: string) {
         `core${i}: pc=0x${(c.PC >>> 0).toString(16)} waiting=${c.waiting} eventRegistered=${
           c.eventRegistered
         } ` +
-          `stopped=${c.stopped} mstatus.MIE=${(mstatus >>> 3) & 1} mie.MEIE=${(mie >>> 11) & 1} ` +
+          `mstatus.MIE=${(mstatus >>> 3) & 1} mie.MEIE=${(mie >>> 11) & 1} ` +
           `meinext=0x${meinext.toString(16)} pendingIrqs=[${pendingIrqs.join(
             ',',
           )}] enabledIrqs=[${enabledIrqs.join(',')}]`,
@@ -592,8 +578,8 @@ function dumpStatus(reason: string) {
         `core${i}: pc=0x${(c.PC >>> 0).toString(16)} waiting=${c.waiting} eventRegistered=${
           c.eventRegistered
         } ` +
-          `stopped=${c.stopped} ipsr=${c.regs.ipsr} primask=${c.regs.primask} faultmask=${c.regs.faultmask} ` +
-          `control=0x${c.regs.control.toString(16)}`,
+          `ipsr=${c.regs.ipsr} primask=${c.regs.primask} faultmask=${c.regs.faultmask} ` +
+          `control=0x${c.regs.control.toString(16)}`
       );
     }
   }

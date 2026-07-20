@@ -53,9 +53,11 @@ export interface RunningDaemon {
   close(): Promise<void>;
 }
 
-/** Resolve a bootrom option into a Uint32Array (or null for "none"). */
+/** Resolve a bootrom option into a Uint32Array (or null for "none"/"default"). */
 function resolveBootrom(spec: string): { data: Uint32Array | null; label: string } {
-  if (spec === 'rp2350-a2') return { data: bootrom_rp2350_A2, label: 'rp2350-a2' };
+  // The bundled RP2350 A2 bootrom is now auto-loaded by the RP2350
+  // constructor, so "rp2350-a2" (the default) means "use what's built in".
+  if (spec === 'rp2350-a2') return { data: null, label: 'rp2350-a2' };
   if (spec === 'rp2040-b1') return { data: bootromB1, label: 'rp2040-b1' };
   if (spec === 'none') return { data: null, label: 'none' };
   // Otherwise treat as path to a .bin file. Read 32-bit little-endian words.
@@ -84,7 +86,12 @@ export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
   }
 
   const { data: bootromData, label: bootromLabel } = resolveBootrom(opts.bootrom);
-  const mcp = new EmulatorController(bootromData ?? undefined);
+  const mcp = new EmulatorController();
+  // Honor an explicit non-default bootrom override by overwriting the
+  // constructor's auto-load. The default ("rp2350-a2") is already loaded.
+  if (bootromData) {
+    mcp.chip.loadBootrom(bootromData);
+  }
 
   // Optionally load firmware at startup via the MCP tool, so we share the
   // exact code path with runtime load_firmware calls.

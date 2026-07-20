@@ -92,8 +92,6 @@ export class CortexM0Core implements ICpuCore {
   // Sibling core for SEV (send-event) inter-core wakeup. Set by the chip.
   otherCore!: CortexM0Core;
 
-  stopped = true;
-
   /** Hook to listen for function calls - branch-link (BL/BLX) instructions */
   blTaken = (core: CortexM0Core, blx: boolean) => {
     void core; // surpress unused variable warnings
@@ -762,7 +760,6 @@ export class CortexM0Core implements ICpuCore {
     else if (opcode >> 8 === 0b10111110) {
       const imm8 = opcode & 0xff;
       this.breakRewind = 2;
-      this.stopped = true;
       this.onBreak?.(imm8);
     }
     // BL
@@ -1308,7 +1305,6 @@ export class CortexM0Core implements ICpuCore {
     else if (opcode >> 8 == 0b11011110) {
       const imm8 = opcode & 0xff;
       this.breakRewind = 2;
-      this.stopped = true;
       this.onBreak?.(imm8);
     }
     // UDF (Encoding T2)
@@ -1316,7 +1312,6 @@ export class CortexM0Core implements ICpuCore {
       const imm4 = opcode & 0xf;
       const imm12 = opcode2 & 0xfff;
       this.breakRewind = 4;
-      this.stopped = true;
       this.onBreak?.((imm4 << 12) | imm12);
       this.PC += 2;
     }

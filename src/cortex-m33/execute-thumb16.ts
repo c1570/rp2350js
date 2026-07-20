@@ -256,7 +256,6 @@ export function executeThumb16(core: CortexM33Core, opcodePC: number, opcode: nu
   else if (opcode >> 8 === 0b10111110) {
     const imm8 = opcode & 0xff;
     core.breakRewind = 2;
-    core.stopped = true;
     core.onBreak?.(imm8);
   }
   // BL — Thumb-32 wide (0b11110 + 0b11x01x); handled in execute-thumb32.ts,
@@ -863,7 +862,6 @@ export function executeThumb16(core: CortexM33Core, opcodePC: number, opcode: nu
   else if (opcode >> 8 === 0b11011110) {
     const imm8 = opcode & 0xff;
     core.breakRewind = 2;
-    core.stopped = true;
     core.onBreak?.(imm8);
   }
   // UXTB

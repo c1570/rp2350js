@@ -6,7 +6,6 @@ const SRAM = 0x20000000;
 function setup() {
   const chip = new RP2350(false, undefined, { coreArch: 'arm' });
   const core = chip.armCore0;
-  core.stopped = false;
   chip.currentCore = 0;
   chip.writeUint32(0xe000ed08, SRAM); // VTOR
   chip.writeUint32(0xe000ed88, 0x00f00000); // CPACR: enable CP10/CP11
@@ -192,7 +191,6 @@ describe('Cortex-M33 FPU (VFPv5-SP)', () => {
   it('FPU op without CPACR enable triggers NOCP fault', () => {
     const chip = new RP2350(false, undefined, { coreArch: 'arm' });
     const core = chip.armCore0;
-    core.stopped = false;
     chip.currentCore = 0;
     chip.writeUint32(0xe000ed08, SRAM); // VTOR
     // Set up SP + HardFault vector.

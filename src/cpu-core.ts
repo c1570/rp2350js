@@ -20,8 +20,6 @@ export interface ICpuCore {
   waiting: boolean;
   /** True when a WFE event has been latched but not yet consumed. */
   eventRegistered: boolean;
-  /** True when the core is halted (e.g. on a breakpoint trap). */
-  stopped: boolean;
   /**
    * Set by interrupt sources (NVIC, SysTick, peripheral IRQs) when pending
    * state changes; consumed and cleared by the core's exception-arbitration

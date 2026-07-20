@@ -13,16 +13,17 @@
  *
  * Value conventions:
  *   - All register values, addresses, and offsets in tool *outputs* are
- *     formatted as zero-padded hex strings (e.g. "0x20000220").
+ *     formatted as zero-padded hex strings (e.g. "0x20000222").
  *   - All integer *inputs* accept a JSON number, a decimal string, or a
  *     "0x"-prefixed hex string (case-insensitive); see parseUint().
  *
  * Usage:
- *   const ctrl = new EmulatorController(); // optional bootrom Uint32Array arg
+ *   const ctrl = new EmulatorController();
  *   const result = ctrl.handleToolCall('read_registers', { core: 0 });
- * Firmware is loaded at runtime via the load_firmware tool, or you can
- * pre-seed chip state via the read/write_register and read/write_memory
- * tools before invoking any other tool.
+ * Firmware is loaded at runtime via the load_firmware tool, which drives
+ * the bundled bootrom end-to-end (vectored RAM-boot handshake for SRAM
+ * images, normal flash scan for flash images). Or pre-seed chip state
+ * via the read/write_register and read/write_memory tools.
  */
 
 import { randomBytes } from 'crypto';
@@ -32,9 +33,6 @@ import * as path from 'path';
 import { RP2350 } from '../rp2350';
 import { CPU } from '../riscv/cpu';
 import { CortexM33Core } from '../cortex-m33/core';
-import { loadHex } from './load-hex';
-import { loadUF2 } from './load-uf2';
-import { decodeBlock } from 'uf2';
 import { formatPioDump, formatGpioDump } from './pio-gpio-dump';
 
 /**
@@ -246,10 +244,9 @@ export class EmulatorController {
   private breakpoints = new Set<number>();
   private tracepoints = new Map<string, number>(); // label → address
   private traces: { tag: string; core: number; pc: number; cycles: number }[] = [];
-  private bootrom: Uint32Array | null = null;
   // Last-loaded firmware info, for reset()
   private fwPath: string | null = null;
-  private fwEntryPc: number = 0;
+  private fwEntryPc: number | undefined = undefined;
   private fwUseSram: boolean = false;
   private fwIsUf2: boolean = false;
   private fwDisPath: string | null = null;
@@ -260,14 +257,14 @@ export class EmulatorController {
   chip: RP2350;
   fwArch: 'riscv' | 'arm' = 'riscv';
 
-  constructor(bootrom?: Uint32Array) {
-    if (bootrom) this.bootrom = bootrom;
+  constructor() {
     this.chip = this.createChip();
   }
 
   private createChip(): RP2350 {
+    // RP2350's constructor auto-loads the bundled A2 bootrom, so the chip
+    // is ready to boot the same way real silicon does.
     const chip = new RP2350(false, undefined, { coreArch: this.fwArch });
-    if (this.bootrom) chip.loadBootrom(this.bootrom);
     chip.onTrace = (core, pc, tag) => {
       this.traces.push({
         tag,
@@ -527,7 +524,6 @@ export class EmulatorController {
 
   private singleStep(core: number) {
     const cpu = this.chip.core[core];
-    cpu.stopped = false;
     this.chip.currentCore = core;
     const traceStart = this.traces.length;
     const elapsed = cpu.executeInstruction();
@@ -632,42 +628,19 @@ export class EmulatorController {
     useSram?: boolean,
     disassemblyPath?: string
   ) {
-    const isUf2 = path.toLowerCase().endsWith('.uf2');
-
-    if (!isUf2) {
-      const hex = fs.readFileSync(path, 'utf-8');
-      // Auto-detect SRAM vs flash from hex extended address record
-      const detectSram = (source: string): boolean => {
-        for (const line of source.split('\n')) {
-          if (line[0] === ':' && line.substring(7, 9) === '04') {
-            return parseInt(line.substring(9, 13), 16) >= 0x2000;
-          }
-        }
-        return false;
-      };
-      const sram = useSram ?? detectSram(hex);
-      const pc = entryPc ?? (sram ? 0x20000220 : 0x10000036);
-
-      this.fwPath = path;
-      this.fwEntryPc = pc;
-      this.fwUseSram = sram;
-      this.fwIsUf2 = false;
-      this.reinitChip(hex, sram, pc);
-    } else {
-      // UF2 files: detect SRAM vs flash from the first block's address
-      const uf2Data = fs.readFileSync(path);
-      const tmpBuf = new Uint8Array(512);
-      tmpBuf.set(uf2Data.subarray(0, 512));
-      const firstBlock = decodeBlock(tmpBuf);
-      const isSram = firstBlock.flashAddress >= 0x20000000;
-      const pc = entryPc ?? (isSram ? 0x20000220 : 0x10000036);
-
-      this.fwPath = path;
-      this.fwEntryPc = pc;
-      this.fwUseSram = isSram;
-      this.fwIsUf2 = true;
-      this.reinitChipUf2(path, pc);
-    }
+    // Drive the bootrom the same way nsboot does on real hardware: for SRAM
+    // images we set up the watchdog scratch vectored-boot handshake; the
+    // bootrom then scans the window and extracts the real entry PC + SP
+    // from the IMAGE_DEF. For flash images we let the bootrom do its normal
+    // flash scan. If `entryPc` is supplied, the helper bypasses the bootrom
+    // and sets both cores' PC directly (used for synthetic fixtures without
+    // an IMAGE_DEF, or to force a specific entry).
+    this.fwPath = path;
+    this.chip = this.createChip();
+    const result = this.chip.loadFirmware(path, { entryPc });
+    this.fwUseSram = result.useSram;
+    this.fwIsUf2 = result.format === 'uf2';
+    this.fwEntryPc = entryPc != null ? entryPc >>> 0 : undefined;
 
     // Load disassembly if provided (or auto-detect .dis alongside .hex/.uf2)
     const disPath = disassemblyPath ?? path.replace(/\.(hex|uf2)$/i, '.dis');
@@ -686,7 +659,7 @@ export class EmulatorController {
     return this.json({
       ok: true,
       path,
-      entry_pc: hex(this.fwEntryPc),
+      entry_pc: this.fwEntryPc != null ? hex(this.fwEntryPc) : null,
       use_sram: this.fwUseSram,
       format: this.fwIsUf2 ? 'uf2' : 'hex',
       disassembly_loaded: this.disLines.length > 0,
@@ -788,12 +761,12 @@ export class EmulatorController {
 
   private reset(keepBreakpoints = false) {
     if (this.fwPath) {
-      if (this.fwIsUf2) {
-        this.reinitChipUf2(this.fwPath, this.fwEntryPc);
-      } else {
-        const hex = fs.readFileSync(this.fwPath, 'utf-8');
-        this.reinitChip(hex, this.fwUseSram, this.fwEntryPc);
-      }
+      // Re-load firmware through the bootrom-based path. Pass any explicit
+      // entryPc override preserved from the original load_firmware call.
+      this.chip = this.createChip();
+      this.chip.loadFirmware(this.fwPath, {
+        entryPc: this.fwEntryPc,
+      });
       // Reload disassembly if it was previously loaded
       if (this.fwDisPath && fs.existsSync(this.fwDisPath)) {
         this.parseDisassembly(fs.readFileSync(this.fwDisPath, 'utf-8'));
@@ -815,26 +788,6 @@ export class EmulatorController {
       disassembly_loaded: this.disLines.length > 0,
       breakpoints_kept: keepBreakpoints,
     });
-  }
-
-  private reinitChip(hex: string, useSram: boolean, entryPc: number) {
-    this.chip = this.createChip();
-    if (useSram) {
-      loadHex(hex, this.chip.sram, 0x20000000);
-    } else {
-      loadHex(hex, this.chip.flash, 0x10000000);
-    }
-    this.chip.core[0].PC = entryPc;
-    this.chip.core[1].PC = entryPc;
-    this.chip.core[1].waiting = true;
-  }
-
-  private reinitChipUf2(path: string, entryPc: number) {
-    this.chip = this.createChip();
-    loadUF2(path, this.chip);
-    this.chip.core[0].PC = entryPc;
-    this.chip.core[1].PC = entryPc;
-    this.chip.core[1].waiting = true;
   }
 
   private dumpPio(instance?: number) {

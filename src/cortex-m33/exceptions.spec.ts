@@ -14,7 +14,6 @@ describe('Cortex-M33 exception entry/return + NVIC', () => {
   it('external IRQ handler runs and returns to main code', () => {
     const chip = new RP2350(false, undefined, { coreArch: 'arm' });
     const core = chip.armCore0;
-    core.stopped = false;
 
     // Set up vector table at SRAM. Vector for IRQ 0 (vector 16) at SRAM + 64.
     const VTOR = SRAM;
@@ -83,7 +82,6 @@ describe('Cortex-M33 exception entry/return + NVIC', () => {
   it('handler using push{r4,lr}/pop{r4,pc} (not bx lr) still returns correctly', () => {
     const chip = new RP2350(false, undefined, { coreArch: 'arm' });
     const core = chip.armCore0;
-    core.stopped = false;
 
     const VTOR = SRAM;
     chip.writeUint32(VTOR + 16 * 4, SRAM + 0x200); // IRQ 0 handler
@@ -129,7 +127,6 @@ describe('Cortex-M33 exception entry/return + NVIC', () => {
   it('PENDSV can be pended and runs at low priority', () => {
     const chip = new RP2350(false, undefined, { coreArch: 'arm' });
     const core = chip.armCore0;
-    core.stopped = false;
 
     const VTOR = SRAM;
     chip.writeUint32(VTOR + 14 * 4, SRAM + 0x200); // PendSV vector
@@ -173,7 +170,6 @@ describe('Cortex-M33 exception entry/return + NVIC', () => {
     it('sync-fault stacks the faulting 32-bit instruction address (not PC-2)', () => {
       const chip = new RP2350(false, undefined, { coreArch: 'arm' });
       const core = chip.armCore0;
-      core.stopped = false;
       chip.currentCore = 0;
       const VTOR = SRAM;
       chip.writeUint32(0xe000ed08, VTOR); // VTOR
@@ -201,7 +197,6 @@ describe('Cortex-M33 exception entry/return + NVIC', () => {
     it('IT state + pad bit restored from stacked xPSR on exception return', () => {
       const chip = new RP2350(false, undefined, { coreArch: 'arm' });
       const core = chip.armCore0;
-      core.stopped = false;
       chip.currentCore = 0;
       const VTOR = SRAM;
       chip.writeUint32(VTOR + 16 * 4, SRAM + 0x200); // IRQ 0 handler
@@ -242,7 +237,6 @@ describe('Cortex-M33 exception entry/return + NVIC', () => {
     it('BASEPRI masks a lower-priority external IRQ (unified &0xE0 scale)', () => {
       const chip = new RP2350(false, undefined, { coreArch: 'arm' });
       const core = chip.armCore0;
-      core.stopped = false;
       chip.currentCore = 0;
       const VTOR = SRAM;
       chip.writeUint32(VTOR + 16 * 4, SRAM + 0x200); // IRQ 0 handler
@@ -299,7 +293,6 @@ describe('Cortex-M33 exception entry/return + NVIC', () => {
       // stay 0.
       const chip = new RP2350(false, undefined, { coreArch: 'arm' });
       const core = chip.armCore0;
-      core.stopped = false;
       chip.currentCore = 0;
       const VTOR = SRAM;
       chip.writeUint32(VTOR + 16 * 4, SRAM + 0x200); // IRQ 0 handler
@@ -332,7 +325,6 @@ describe('Cortex-M33 exception entry/return + NVIC', () => {
       // from the correct frame SP (frameSp + 0x20), not the stale fpcar.
       const chip = new RP2350(false, undefined, { coreArch: 'arm' });
       const core = chip.armCore0;
-      core.stopped = false;
       chip.currentCore = 0;
       const VTOR = SRAM;
       chip.writeUint32(VTOR + 16 * 4, SRAM + 0x200); // IRQ 0 handler

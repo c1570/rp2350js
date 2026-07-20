@@ -4,8 +4,7 @@ import { GDBTCPServer } from '../src/gdb/gdb-tcp-server';
 import { ArmGDBServer } from '../src/gdb/arm-gdb-server';
 import { USBCDC } from '../src/usb/cdc';
 import { ConsoleLogger, LogLevel } from '../src/utils/logging';
-import { bootromB1 } from '../src/bootroms';
-import { loadUF2, loadMicropythonFlashImage, loadCircuitpythonFlashImage } from './load-flash';
+import { loadMicropythonFlashImage, loadCircuitpythonFlashImage } from './load-flash';
 import fs from 'fs';
 import minimist from 'minimist';
 
@@ -23,7 +22,6 @@ const expectText = args['expect-text'];
 
 const simulator = new Simulator();
 const mcu = simulator.rp2040;
-mcu.loadBootrom(bootromB1);
 mcu.logger = new ConsoleLogger(LogLevel.Error);
 
 let imageName: string;
@@ -33,7 +31,9 @@ if (!args.circuitpython) {
   imageName = args.image ?? 'adafruit-circuitpython-raspberry_pi_pico-en_US-8.0.2.uf2';
 }
 console.log(`Loading uf2 image ${imageName}`);
-loadUF2(imageName, mcu);
+// Load UF2 with initChip=false so we can layer a filesystem image onto flash
+// before the chip reset runs.
+mcu.loadFirmware(imageName, { initChip: false });
 
 if (fs.existsSync('littlefs.img') && !args.circuitpython) {
   console.log(`Loading uf2 image littlefs.img`);
@@ -43,6 +43,10 @@ if (fs.existsSync('littlefs.img') && !args.circuitpython) {
   // Instead of reading from file, it would also be possible to generate the LittleFS image on-the-fly here, e.g. using
   // https://github.com/wokwi/littlefs-wasm or https://github.com/littlefs-project/littlefs-js
 }
+
+// Now reset so the cores start at the bootrom reset vector and run the
+// normal flash scan on the next step().
+mcu.reset();
 
 if (args.gdb) {
   const gdbServer = new GDBTCPServer(new ArmGDBServer(simulator), 3333);

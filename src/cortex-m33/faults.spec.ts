@@ -7,7 +7,6 @@ const EXC_HARDFAULT = 3;
 function setup() {
   const chip = new RP2350(false, undefined, { coreArch: 'arm' });
   const core = chip.armCore0;
-  core.stopped = false;
   chip.currentCore = 0;
   chip.writeUint32(0xe000ed08, SRAM); // VTOR
   return { chip, core };
@@ -53,15 +52,19 @@ describe('Cortex-M33 fault model', () => {
     expect(core.PC).toBe(SRAM + 0x600);
   });
 
-  it('lockup: HardFault-in-HardFault halts the core', () => {
+  it('lockup: HardFault-in-HardFault returns without taking the exception', () => {
     const { chip, core } = setup();
     // Put core directly in HardFault handler state.
     core.regs.xpsr = (core.regs.xpsr & ~0x1ff) | 3; // IPSR=3
     core.regs.msp = SRAM + 0x1000;
     core.regs.sp = core.regs.msp;
     // Directly call exceptionEntry for HardFault → triggers lockup check.
+    // In lockup the handler must NOT advance: no stack push, no IPSR update,
+    // no vector fetch — real hardware enters a "stable fault" halt.
     core.exceptionEntry(EXC_HARDFAULT);
-    expect(core.stopped).toBe(true);
+    const spBefore = core.regs.msp;
+    expect(core.regs.sp).toBe(spBefore); // no stack frame pushed
+    expect(core.regs.ipsr).toBe(3); // unchanged
   });
 });
 
@@ -203,7 +206,6 @@ describe('Cortex-M33 MPU/SAU registers', () => {
       // then returns -1; the UsageFault/HardFault must still be delivered.
       const chip = new RP2350(false, undefined, { coreArch: 'arm' });
       const core = chip.armCore0;
-      core.stopped = false;
       chip.currentCore = 0;
       chip.writeUint32(0xe000ed08, SRAM); // VTOR
       chip.writeUint32(SRAM + 3 * 4, SRAM + 0x300); // HardFault vector
@@ -214,9 +216,8 @@ describe('Cortex-M33 MPU/SAU registers', () => {
       chip.writeUint16(SRAM + 2, 0x0a81); // VADD.F32 (CP10, CPACR=0 → NOCP)
       core.PC = SRAM;
       core.executeInstruction();
-      // The fault was delivered (HardFault taken), NOT a bare halt: stopped is
-      // false and IPSR shows we're in the HardFault handler.
-      expect(core.stopped).toBe(false);
+      // The fault was delivered (HardFault taken), NOT a bare halt: IPSR
+      // shows we're in the HardFault handler.
       expect(core.regs.ipsr).toBe(3); // HardFault
       expect(chip.readUint32(0xe000ed28) & (1 << 21)).not.toBe(0); // NOCP
     });

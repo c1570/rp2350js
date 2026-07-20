@@ -54,8 +54,6 @@ export class CortexM33Core implements ICpuCore {
   waiting = false;
   /** True when a WFE event has been latched but not yet consumed. */
   eventRegistered = false;
-  /** True when the core is halted (BKPT / UDF / lockup / bootrom hook). */
-  stopped = true;
   /** Set when IRQ pending state changes; cleared by checkForInterrupts(). */
   interruptsUpdated = false;
   /** How many bytes to rewind the last break instruction (BKPT/UDF). */
@@ -127,7 +125,6 @@ export class CortexM33Core implements ICpuCore {
     this.waiting = false;
     this.eventRegistered = false;
     this.interruptsUpdated = false;
-    this.stopped = true;
     this.pendingSVCall = false;
     this.pendingFault = null;
     this.currentMode = ExecutionMode.Thread;
@@ -274,9 +271,9 @@ export class CortexM33Core implements ICpuCore {
     const regs = this.regs;
     const st = this.ppb();
 
-    // Lockup: HardFault-in-HardFault.
+    // Lockup: HardFault-in-HardFault. Real hardware enters a "stable fault"
+    // state and stops fetching; we just return without taking the exception.
     if (excNum === EXC_HARDFAULT && regs.ipsr === EXC_HARDFAULT) {
-      this.stopped = true;
       return;
     }
 
@@ -640,7 +637,7 @@ export class CortexM33Core implements ICpuCore {
     }
 
     // Deliver pending synchronous fault.
-    if (this.pendingFault !== null && !this.stopped) {
+    if (this.pendingFault !== null) {
       const f = this.pendingFault;
       this.pendingFault = null;
       this.deliverFault(f);

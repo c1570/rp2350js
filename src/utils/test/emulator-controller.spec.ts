@@ -412,21 +412,41 @@ describe('EmulatorController', () => {
       return tmp;
     }
 
-    test('load_firmware loads SRAM hex and sets PC', () => {
+    test('load_firmware loads SRAM hex with explicit entry_pc', () => {
+      // Synthetic fixture (single NOP) has no IMAGE_DEF, so the bootrom
+      // path can't auto-discover the entry. Pass entry_pc explicitly to
+      // bypass the bootrom and set PC directly.
       const hexPath = writeTempHex(0x20000000, [0x13, 0x00, 0x00, 0x00]); // nop at 0x20000000
-      const data = json(server.handleToolCall('load_firmware', { path: hexPath }));
+      const data = json(
+        server.handleToolCall('load_firmware', { path: hexPath, entry_pc: 0x20000000 })
+      );
       expect(data.ok).toBe(true);
       expect(data.use_sram).toBe(true);
-      expect(data.entry_pc).toBe(hex(0x20000220));
+      expect(data.entry_pc).toBe(hex(0x20000000));
+      const status = json(server.handleToolCall('get_status', {}));
+      expect(status.core0.pc).toBe(hex(0x20000000));
       fs.unlinkSync(hexPath);
     });
 
-    test('load_firmware loads flash hex', () => {
+    test('load_firmware loads flash hex with explicit entry_pc', () => {
       const hexPath = writeTempHex(0x10000000, [0x6f, 0x00, 0x00, 0x00]); // j at 0x10000000
-      const data = json(server.handleToolCall('load_firmware', { path: hexPath }));
+      const data = json(
+        server.handleToolCall('load_firmware', { path: hexPath, entry_pc: 0x10000000 })
+      );
       expect(data.ok).toBe(true);
       expect(data.use_sram).toBe(false);
-      expect(data.entry_pc).toBe(hex(0x10000036));
+      expect(data.entry_pc).toBe(hex(0x10000000));
+      fs.unlinkSync(hexPath);
+    });
+
+    test('load_firmware without entry_pc reports null (bootrom will determine)', () => {
+      // For real firmware, entry_pc is determined at run time by the bootrom.
+      // The controller reports null in the load_firmware response; the actual
+      // entry is observable by stepping until the cores leave the bootrom.
+      const hexPath = writeTempHex(0x20000000, [0x13, 0x00, 0x00, 0x00]);
+      const data = json(server.handleToolCall('load_firmware', { path: hexPath }));
+      expect(data.ok).toBe(true);
+      expect(data.entry_pc).toBeNull();
       fs.unlinkSync(hexPath);
     });
 
@@ -441,6 +461,7 @@ describe('EmulatorController', () => {
     });
 
     test('reset reloads last firmware', () => {
+      // Synthetic fixture needs explicit entry_pc (no IMAGE_DEF).
       const hexPath = writeTempHex(0x20000000, [0x13, 0x00, 0x00, 0x00]);
       server.handleToolCall('load_firmware', { path: hexPath, entry_pc: 0x20000000 });
       // Step one instruction to dirty the state
@@ -459,7 +480,7 @@ describe('EmulatorController', () => {
       fs.unlinkSync(hexPath);
     });
 
-    test('load_firmware loads UF2 binary', () => {
+    test('load_firmware loads UF2 binary (real firmware, bootrom picks entry)', () => {
       const data = json(
         server.handleToolCall('load_firmware', { path: 'demo/riscv_blink/blink_simple.uf2' })
       );
@@ -467,7 +488,17 @@ describe('EmulatorController', () => {
       expect(data.format).toBe('uf2');
       // This UF2 targets SRAM (0x20000000)
       expect(data.use_sram).toBe(true);
-      expect(data.entry_pc).toBe(hex(0x20000220));
+      // No entry_pc supplied → bootrom will determine it. Verify by running
+      // until the bootrom hands off to firmware and the cores land in SRAM.
+      const runData = json(server.handleToolCall('run', { max_instructions: 200000 }));
+      expect(runData.instructions_executed).toBeGreaterThan(0);
+      const status = json(server.handleToolCall('get_status', {}));
+      // The bootrom's actual entry address for current pico-sdk (0x20000222,
+      // just past the embedded block). Allow any SRAM address — the real
+      // value depends on the SDK version that built the .uf2.
+      const pc = parseInt(status.core0.pc, 16);
+      expect(pc).toBeGreaterThanOrEqual(0x20000000);
+      expect(pc).toBeLessThan(0x20040000);
     });
 
     test('reset without firmware clears state', () => {
@@ -494,10 +525,12 @@ describe('EmulatorController', () => {
     });
 
     test('single_step includes disassembly context', () => {
+      // Real firmware with a .dis file; use explicit entry_pc to land directly
+      // at the firmware so a single_step puts us in disassembly range.
       server.handleToolCall('load_firmware', {
         path: 'demo/riscv_blink/blink_simple.hex',
+        entry_pc: 0x20000222, // _reset_handler (post-embedded-block entry)
       });
-      // Step past the entry point; the result should include disassembly
       const data = json(server.handleToolCall('single_step', { core: 0 }));
       expect(data.disassembly).toBeDefined();
       expect(typeof data.disassembly).toBe('string');

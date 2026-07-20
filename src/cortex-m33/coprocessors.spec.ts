@@ -6,7 +6,6 @@ const SRAM = 0x20000000;
 function setup() {
   const chip = new RP2350(false, undefined, { coreArch: 'arm' });
   const core = chip.armCore0;
-  core.stopped = false;
   chip.currentCore = 0;
   chip.writeUint32(0xe000ed08, SRAM);
   // Enable CP0/4/5/7 (GPIOC/DCP/RCP) and CP10/11 (FPU). 2 bits each.
@@ -411,7 +410,6 @@ describe('Cortex-M33 coprocessor edge cases', () => {
   it('DCP op with CPACR disabled triggers NOCP UsageFault', () => {
     const chip = new RP2350(false, undefined, { coreArch: 'arm' });
     const core = chip.armCore0;
-    core.stopped = false;
     chip.currentCore = 0;
     chip.writeUint32(0xe000ed08, SRAM); // VTOR
     chip.writeUint32(SRAM + 3 * 4, SRAM + 0x300); // HardFault vector

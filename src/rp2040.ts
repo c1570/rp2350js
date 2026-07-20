@@ -28,6 +28,12 @@ import { RPUSBController } from './peripherals/usb';
 import { RPSIO } from './sio';
 import { RPWatchdog } from './peripherals/watchdog';
 import { ConsoleLogger, Logger, LogLevel } from './utils/logging';
+import { bootromB1 } from './bootroms';
+import {
+  loadFirmware as loadFirmwareHelper,
+  LoadFirmwareOptions,
+  LoadFirmwareResult,
+} from './utils/load-firmware';
 
 export const FLASH_START_ADDRESS = 0x10000000;
 export const FLASH_END_ADDRESS = 0x14000000;
@@ -164,6 +170,12 @@ export class RP2040 implements IRPChip {
   public onTrace = (coreNumber: number, pc: number, tag: string) => {};
 
   constructor(readonly clock: IClock = new SimulationClock()) {
+    // Auto-load the bundled RP2040 B1 bootrom and erased-flash state before
+    // the initial reset. Subsequent reset() calls preserve flash contents
+    // (matching hardware); callers can override via `loadBootrom(...)`.
+    this.bootrom.set(bootromB1);
+    this.flash.fill(0xff);
+
     this.reset();
     this.core[0].otherCore = this.core[1];
     this.core[1].otherCore = this.core[0];
@@ -180,10 +192,18 @@ export class RP2040 implements IRPChip {
     this.disassembly = dis;
   }
 
+  /**
+   * Load firmware from a HEX or UF2 file, then (by default) re-initialise
+   * the chip so the cores start ready to boot the loaded image. See
+   * `src/utils/load-firmware.ts` for option details.
+   */
+  loadFirmware(path: string, options?: LoadFirmwareOptions): LoadFirmwareResult {
+    return loadFirmwareHelper(this, path, options);
+  }
+
   reset() {
     for (const c of this.core) c.reset();
     this.pwm.reset();
-    this.flash.fill(0xff);
   }
 
   readUint32(address: number): number {
@@ -443,8 +463,6 @@ export class RP2040 implements IRPChip {
   }
 
   stepCores() {
-    this.core[0].stopped = false;
-    this.core[1].stopped = false;
     const core0StartCycles = this.core[0].cycles;
     this.currentCore = 0;
     this.core[0].executeInstruction();
@@ -472,8 +490,4 @@ export class RP2040 implements IRPChip {
   stop() {}
   // eslint-disable-next-line @typescript-eslint/no-empty-function
   execute() {}
-
-  executing(core: number): boolean {
-    return this.core[core].stopped;
-  }
 }
