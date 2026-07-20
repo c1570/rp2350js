@@ -35,6 +35,7 @@ import { CortexM33Core } from '../cortex-m33/core';
 import { loadHex } from './load-hex';
 import { loadUF2 } from './load-uf2';
 import { decodeBlock } from 'uf2';
+import { formatPioDump, formatGpioDump } from './pio-gpio-dump';
 
 /**
  * Human-readable descriptions for every tool exposed by EmulatorController.
@@ -60,7 +61,8 @@ export const TOOL_DESCRIPTIONS: Record<string, string> = {
     'Set a named tracepoint at an address. Firmware can contain hardwired trace markers (0xabcd/0xffff magic bytes followed by a NUL-terminated tag string placed at a jal return address) which fire automatically. Use list_tracepoints to see all traces including hardwired ones.',
   clear_tracepoint: 'Remove a tracepoint by label',
   list_tracepoints: 'List all tracepoints (label → address) and any recorded traces',
-  dump_pio: 'Dump PIO state machine registers (pc, x, y, ISR, OSR, FIFOs)',
+  dump_pio:
+    'Dump PIO state machine registers (pc, x, y, ISR, OSR, FIFOs), pin routing (in_base/out_base/set_base/sideset_base/jmp_pin, with absolute chip-pin numbers, counts, wrap), and shift direction (left/right) per SM. Includes per-PIO GPIOBASE.',
   dump_gpio: 'Dump all GPIO pin states (function, in/out values, pullups)',
   load_firmware:
     'Load an Intel HEX (.hex) or UF2 (.uf2) firmware file. Re-instantiates the chip with bootrom + firmware. HEX files auto-detect SRAM vs flash from the address map; UF2 files auto-detect from the first block address. Optionally attach a .dis disassembly file for source context in run/single_step output.',
@@ -836,82 +838,10 @@ export class EmulatorController {
   }
 
   private dumpPio(instance?: number) {
-    const pios = this.chip.pio;
-    const lines: string[] = [];
-    const indices =
-      instance != null && instance >= 0 && instance < pios.length
-        ? [instance]
-        : pios.map((_, i) => i);
-
-    for (const i of indices) {
-      const pio = pios[i];
-      lines.push(`=== PIO${i} ===`);
-      for (let sm = 0; sm < pio.machines.length; sm++) {
-        const m = pio.machines[sm];
-        lines.push(
-          `  SM${sm}: pc=${m.pc} x=0x${(m.x >>> 0).toString(16)} y=0x${(m.y >>> 0).toString(16)}` +
-            ` enabled=${m.enabled ? 1 : 0} waiting=${m.waiting ? 1 : 0}` +
-            ` tx=${m.txFIFO.itemCount}/${m.txFIFO.size} rx=${m.rxFIFO.itemCount}/${m.rxFIFO.size}` +
-            ` instr=0x${(pio.instructions[m.pc] >>> 0).toString(16).padStart(8, '0')}`
-        );
-        lines.push(
-          `    ISR=0x${(m.inputShiftReg >>> 0).toString(16).padStart(8, '0')} (${(
-            m.inputShiftReg >>> 0
-          )
-            .toString(2)
-            .padStart(32, '0')}) ${m.inputShiftCount}/${m.pushThreshold} bits` +
-            (m.shiftCtrl & (1 << 16) ? ' autopush' : '') +
-            (m.shiftCtrl & (1 << 18) ? ' →' : ' ←')
-        );
-        lines.push(
-          `    OSR=0x${(m.outputShiftReg >>> 0).toString(16).padStart(8, '0')} (${(
-            m.outputShiftReg >>> 0
-          )
-            .toString(2)
-            .padStart(32, '0')}) ${m.outputShiftCount}/${m.pullThreshold} bits` +
-            (m.shiftCtrl & (1 << 17) ? ' autopull' : '') +
-            (m.shiftCtrl & (1 << 19) ? ' →' : ' ←')
-        );
-      }
-    }
-    return this.text(lines.join('\n') + '\n');
+    return this.text(formatPioDump(this.chip, instance) + '\n');
   }
 
   private dumpGpio() {
-    const pins = this.chip.gpio;
-    const n = pins.length;
-    const funcNames = [
-      'SPI',
-      'UART',
-      'I2C',
-      'XIP',
-      'PWM',
-      'SIO',
-      'PIO0',
-      'PIO1',
-      'PIO2',
-      'CLK',
-      'USB',
-    ];
-    const funcName = (f: number) => funcNames[f] ?? `FUNC${f}`;
-
-    const lines: string[] = [`=== GPIO (${n} pins) ===`];
-    for (let i = 0; i < n; i++) {
-      const p = pins[i];
-      lines.push(
-        `  GP${i.toString().padStart(2)} ${funcName(p.functionSelect).padEnd(5)}` +
-          ` in=${p.inputValue ? 1 : 0} out=${p.outputValue ? 1 : 0} oe=${p.outputEnable ? 1 : 0}` +
-          ` irq=${p.irqValue ? 1 : 0} pu=${p.pullupEnabled ? 1 : 0} pd=${p.pulldownEnabled ? 1 : 0}`
-      );
-    }
-    let inBits = '';
-    let outBits = '';
-    for (let i = 0; i < n; i++) {
-      inBits = (pins[i].inputValue ? '1' : '0') + inBits;
-      outBits = (pins[i].outputValue ? '1' : '0') + outBits;
-    }
-    lines.push(`  inputs:  ${inBits}`);
-    lines.push(`  outputs: ${outBits}`);
-    return this.text(lines.join('\n') + '\n');
+    return this.text(formatGpioDump(this.chip) + '\n');
   }
 }

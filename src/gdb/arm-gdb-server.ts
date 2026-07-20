@@ -21,6 +21,7 @@ import {
   gdbMessage,
   unescapeBinary,
 } from './gdb-utils';
+import { formatPioDump, formatGpioDump } from '../utils/pio-gpio-dump';
 
 /* string value: armv6m-none-unknown-eabi */
 const lldbTriple = '61726d76366d2d6e6f6e652d756e6b6e6f776e2d65616269';
@@ -412,86 +413,12 @@ export class ArmGDBServer extends GDBServer {
   }
 
   private dumpPio(instance: number): string {
-    const pios = this.rp2040.pio;
-    const lines: string[] = [];
-    const indices = instance >= 0 && instance < pios.length ? [instance] : pios.map((_, i) => i);
-
-    for (const i of indices) {
-      const pio = pios[i];
-      lines.push(`=== PIO${i} ===`);
-      for (let sm = 0; sm < pio.machines.length; sm++) {
-        const m = pio.machines[sm];
-        lines.push(
-          `  SM${sm}: pc=${m.pc} x=0x${(m.x >>> 0).toString(16)} y=0x${(m.y >>> 0).toString(16)}` +
-            ` enabled=${m.enabled ? 1 : 0} waiting=${m.waiting ? 1 : 0}` +
-            ` tx=${m.txFIFO.itemCount}/${m.txFIFO.size} rx=${m.rxFIFO.itemCount}/${m.rxFIFO.size}` +
-            ` instr=0x${(pio.instructions[m.pc] >>> 0).toString(16).padStart(8, '0')}`
-        );
-        lines.push(
-          `    ISR=0x${(m.inputShiftReg >>> 0).toString(16).padStart(8, '0')} (${(
-            m.inputShiftReg >>> 0
-          )
-            .toString(2)
-            .padStart(32, '0')}) ${m.inputShiftCount}/${m.pushThreshold} bits` +
-            (m.shiftCtrl & (1 << 16) ? ' autopush' : '') +
-            (m.shiftCtrl & (1 << 18) ? ' →' : ' ←')
-        );
-        lines.push(
-          `    OSR=0x${(m.outputShiftReg >>> 0).toString(16).padStart(8, '0')} (${(
-            m.outputShiftReg >>> 0
-          )
-            .toString(2)
-            .padStart(32, '0')}) ${m.outputShiftCount}/${m.pullThreshold} bits` +
-            (m.shiftCtrl & (1 << 17) ? ' autopull' : '') +
-            (m.shiftCtrl & (1 << 19) ? ' →' : ' ←')
-        );
-      }
-    }
-    return (
-      gdbMessage('O' + encodeHexBuf(new TextEncoder().encode(lines.join('\n') + '\n'))) +
-      gdbMessage('OK')
-    );
+    const body = formatPioDump(this.rp2040, instance >= 0 ? instance : undefined) + '\n';
+    return gdbMessage('O' + encodeHexBuf(new TextEncoder().encode(body))) + gdbMessage('OK');
   }
 
   private dumpGpio(): string {
-    const pins = this.rp2040.gpio;
-    const n = pins.length;
-    const funcNames = [
-      'SPI',
-      'UART',
-      'I2C',
-      'XIP',
-      'PWM',
-      'SIO',
-      'PIO0',
-      'PIO1',
-      'PIO2',
-      'CLK',
-      'USB',
-    ];
-    const funcName = (f: number) => funcNames[f] ?? `FUNC${f}`;
-
-    const lines: string[] = [`=== GPIO (${n} pins) ===`];
-    for (let i = 0; i < n; i++) {
-      const p = pins[i];
-      const fn = p.functionSelect;
-      lines.push(
-        `  GP${i.toString().padStart(2)} ${funcName(fn).padEnd(5)}` +
-          ` in=${p.inputValue ? 1 : 0} out=${p.outputValue ? 1 : 0} oe=${p.outputEnable ? 1 : 0}` +
-          ` irq=${p.irqValue ? 1 : 0} pu=${p.pullupEnabled ? 1 : 0} pd=${p.pulldownEnabled ? 1 : 0}`
-      );
-    }
-    let inBits = '';
-    let outBits = '';
-    for (let i = 0; i < n; i++) {
-      inBits = (pins[i].inputValue ? '1' : '0') + inBits;
-      outBits = (pins[i].outputValue ? '1' : '0') + outBits;
-    }
-    lines.push(`  inputs:  ${inBits}`);
-    lines.push(`  outputs: ${outBits}`);
-    return (
-      gdbMessage('O' + encodeHexBuf(new TextEncoder().encode(lines.join('\n') + '\n'))) +
-      gdbMessage('OK')
-    );
+    const body = formatGpioDump(this.rp2040) + '\n';
+    return gdbMessage('O' + encodeHexBuf(new TextEncoder().encode(body))) + gdbMessage('OK');
   }
 }
