@@ -237,6 +237,19 @@ export function executeThumb16(core: CortexM33Core, opcodePC: number, opcode: nu
   }
   // B (unconditional T2)
   else if (opcode >> 11 === 0b11100) {
+    // test for profiler trace magic
+    if (
+      core.chip.readUint16(opcodePC + 2) === 0xabcd &&
+      core.chip.readUint16(opcodePC + 4) === 0xffff
+    ) {
+      let profTag = '';
+      for (let i = opcodePC + 6; ; i++) {
+        const ch = core.chip.readUint8(i);
+        if (ch === 0) break;
+        profTag += String.fromCharCode(ch);
+      }
+      core.chip.onTrace(core.coreIndex, opcodePC, profTag);
+    }
     let imm11 = (opcode & 0x7ff) << 1;
     if (imm11 & (1 << 11)) imm11 = (imm11 & 0x7ff) - 0x800;
     regs.pc = (regs.pc + imm11 + 2) >>> 0;
