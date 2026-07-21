@@ -226,17 +226,34 @@ describe('RP2350.loadFirmware end-to-end (RISC-V)', () => {
 
 describe('RP2350.loadFirmware end-to-end (ARM)', () => {
   test('ARM chip loads flash firmware without error', () => {
-    // The ARM bootrom path may have unimplemented instructions for full
-    // firmware execution, but the loadFirmware mechanism itself must not
-    // regress. Verify the load completes. RP2_Micropython_M33.uf2 is a
-    // flash image (use_sram=false), so no vectored-boot scratch setup.
+    // blink_simple is a flash image built for the RP2350 ARM M33 core
+    // (PICO_PLATFORM=rp2350-arm-s). The loadFirmware mechanism itself must
+    // not regress. Verify the load completes. It's a flash image
+    // (use_sram=false), so no vectored-boot scratch setup.
     const chip = new RP2350(false, undefined, { coreArch: 'arm' });
-    const result = chip.loadFirmware('demo/RP2_Micropython_M33.uf2');
+    const result = chip.loadFirmware('demo/m33_blink/blink_simple.uf2');
     expect(result.useSram).toBe(false);
     // No vectored-boot magic for flash images.
     expect(chip.readUint32(WATCHDOG_SCRATCH(4))).toBe(0);
     // ARM core should be at its reset vector (in bootrom space).
     expect(chip.core[0].PC).toBeLessThan(0x10000);
+  });
+
+  test('ARM flash firmware reaches flash entry through bootrom flash scan', () => {
+    // The bootrom flash scan should hand off to the firmware's
+    // _reset_handler (0x1000015a for this build of blink_simple).
+    const chip = new RP2350(false, undefined, { coreArch: 'arm' });
+    chip.loadFirmware('demo/m33_blink/blink_simple.hex');
+    let firstFlash = -1;
+    for (let i = 0; i < 500_000; i++) {
+      chip.step();
+      const pc = chip.core[0].PC;
+      if (pc >= 0x1000015a && pc < 0x10000200) {
+        firstFlash = i;
+        break;
+      }
+    }
+    expect(firstFlash).toBeGreaterThan(0);
   });
 });
 
