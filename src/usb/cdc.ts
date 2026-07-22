@@ -67,6 +67,10 @@ export class USBCDC {
   private descriptors: number[] = [];
   private outEndpoint = -1;
   private inEndpoint = -1;
+  /** When non-null, the firmware armed the OUT endpoint but txFIFO was empty.
+   * The read is deferred until sendSerialByte pushes data, matching real
+   * hardware where AVAILABLE stays set until a host packet arrives. */
+  private pendingOutReadSize = 0;
 
   constructor(readonly usb: RPUSBController) {
     this.usb.onUSBEnabled = () => {
@@ -116,11 +120,11 @@ export class USBCDC {
     };
     this.usb.onEndpointRead = (endpoint, size) => {
       if (endpoint === this.outEndpoint) {
-        const buffer = new Uint8Array(Math.min(size, this.txFIFO.itemCount));
-        for (let i = 0; i < buffer.length; i++) {
-          buffer[i] = this.txFIFO.pull();
+        if (this.txFIFO.itemCount > 0) {
+          this.deliverOutData(size);
+        } else {
+          this.pendingOutReadSize = size;
         }
-        this.usb.endpointReadDone(this.outEndpoint, buffer);
       }
     };
   }
@@ -140,7 +144,20 @@ export class USBCDC {
     this.initialized = true;
   }
 
+  private deliverOutData(size: number) {
+    const buffer = new Uint8Array(Math.min(size, this.txFIFO.itemCount));
+    for (let i = 0; i < buffer.length; i++) {
+      buffer[i] = this.txFIFO.pull();
+    }
+    this.usb.endpointReadDone(this.outEndpoint, buffer);
+  }
+
   sendSerialByte(data: number) {
     this.txFIFO.push(data);
+    if (this.pendingOutReadSize > 0) {
+      const size = this.pendingOutReadSize;
+      this.pendingOutReadSize = 0;
+      this.deliverOutData(size);
+    }
   }
 }
