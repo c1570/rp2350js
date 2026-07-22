@@ -508,4 +508,79 @@ describe('Cortex-M33 coprocessor edge cases', () => {
     expect(st.rcpSalt).toBe(0xabcdeffe);
     expect(st.rcpSaltValid).toBe(true);
   });
+
+  it('RCP salts start invalid for both cores', () => {
+    const { chip } = setup();
+    expect(chip.ppb!.coreState[0].rcpSaltValid).toBe(false);
+    expect(chip.ppb!.coreState[1].rcpSaltValid).toBe(false);
+  });
+
+  it('rcp_salt_core1 (CRm=1) on core 0 writes core 1 salt, not core 0', () => {
+    // Per datasheet §3.6.3.1 core 0's coprocessor port provisions both cores'
+    // salts; CRm selects the *target* core. mcrr p7,8,r0,r1,c1 →
+    // hw0=0xec01 (Rt2=r1, L=0), hw1=0x0781 (Rt=r0, coproc=7, opc1=8, CRm=1).
+    const { chip, core } = setup();
+    const st0 = chip.ppb!.coreState[0];
+    const st1 = chip.ppb!.coreState[1];
+    core.regs.r[0] = 0xfeedface;
+    put32(chip, SRAM, 0xec01, 0x0781);
+    core.PC = SRAM;
+    core.executeInstruction();
+    expect(st1.rcpSalt).toBe(0xfeedface);
+    expect(st1.rcpSaltValid).toBe(true);
+    expect(st0.rcpSaltValid).toBe(false);
+  });
+
+  it('writing an already-valid salt triggers an RCP fault (NMI)', () => {
+    const { chip, core } = setup();
+    chip.writeUint32(SRAM + 2 * 4, SRAM + 0x200); // NMI vector
+    chip.writeUint16(SRAM + 0x200, 0xbf00); // NOP handler
+    core.regs.msp = SRAM + 0x2000;
+    core.regs.sp = SRAM + 0x2000;
+    // Core 1 salt already valid (e.g. previously provisioned by core 0).
+    chip.ppb!.coreState[1].rcpSaltValid = true;
+    core.regs.r[0] = 0x12345678;
+    put32(chip, SRAM, 0xec01, 0x0781); // mcrr p7,8,r0,r1,c1
+    core.PC = SRAM;
+    core.executeInstruction();
+    expect(core.regs.ipsr).toBe(2); // NMI
+    // The already-valid salt must not be overwritten.
+    expect(chip.ppb!.coreState[1].rcpSalt).toBe(0);
+  });
+
+  describe('MRC with Rt=15 (apsr_nzcv) writes flags, not PC', () => {
+    // Per ARMv8-M, an MRC whose destination is r15 transfers result[31:28]
+    // to the N/Z/C/V flags and leaves PC unchanged. Regression for the crash
+    // where the SDK's double routines did `mrc2 p4, ..., apsr_nzcv, ...` and
+    // the value was written straight to PC, jumping to address 0.
+    it('DCP mrc2 p4, #0, apsr_nzcv, c0, c0, #1 updates NZCV from DCP half', () => {
+      // hw0=0xfe10 (T2, L=1 → MRC2), hw1=0xf430 (Rt=15, coproc=4, opc2=1, CRm=0).
+      // → halfIdx = (0&7)*2 + (1&1) = 1.
+      const { chip, core } = setup();
+      chip.ppb!.coreState[0].dcpHalves[1] = 0xf0000000; // N=Z=C=V all set
+      put32(chip, SRAM, 0xfe10, 0xf430);
+      core.PC = SRAM;
+      core.executeInstruction();
+      // PC advanced past the 32-bit insn normally; NOT set to the result (0).
+      expect(core.regs.pc).toBe((SRAM + 4) >>> 0);
+      expect(core.regs.N).toBe(true);
+      expect(core.regs.Z).toBe(true);
+      expect(core.regs.C).toBe(true);
+      expect(core.regs.V).toBe(true);
+    });
+
+    it('GPIOC bulk read into apsr_nzcv sets flags from the GPIO word', () => {
+      // mrc p0, 0, apsr_nzcv, c0, c0: bulk OUT read. hw0=0xee10, hw1=0xf010
+      // (Rt=15 at bits[15:12]). Seed GPIO OUT to 0x20000000; the GPIOC mask
+      // (0x3fffffff) keeps bit29, which lands in APSR bit29 = C flag.
+      const { chip, core } = setup();
+      chip.sio.writeUint32(0x010, 0x20000000, 0);
+      put32(chip, SRAM, 0xee10, 0xf010);
+      core.PC = SRAM;
+      core.executeInstruction();
+      expect(core.regs.pc).toBe((SRAM + 4) >>> 0);
+      expect(core.regs.C).toBe(true);
+      expect(core.regs.N).toBe(false);
+    });
+  });
 });

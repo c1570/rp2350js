@@ -46,6 +46,7 @@ function step32(
     pc: core.regs.pc,
     N: core.regs.N,
     Z: core.regs.Z,
+    Q: core.regs.Q,
   };
 }
 
@@ -188,6 +189,79 @@ describe('Cortex-M33 Thumb-32 instructions', () => {
       const r = step32(0xfbe2, 0x0103, { r0: 5, r1: 0, r2: 2, r3: 3 });
       expect(r.r0).toBe(11); // 5 + 6
       expect(r.r1).toBe(0);
+    });
+    // SMMLA family (DSP extension): high-word signed multiply. Encoding
+    //   SMMLA:  0xfb5n | Ra Rd 0000 Rm   (hw1[15:12]=Ra, hw1[11:8]=Rd)
+    //   SMMLAR: ...                    Rm (hw1[4]=R, rounding bit)
+    //   SMMUL:  Ra=0b1111 (no accumulate). Verified against capstone.
+    it('SMMLA r0, r1, r2, r3 = (r1*r2)[63:32] + r3', () => {
+      // 0x10000 * 0x10000 = 0x1_0000_0000 → high word 1; +r3(7) = 8.
+      // hw0=0xfb51 (rn=1), hw1=(ra=3<<12)|(rd=0<<8)|rm=2 = 0x3002.
+      const r = step32(0xfb51, 0x3002, { r1: 0x10000, r2: 0x10000, r3: 7 });
+      expect(r.r0).toBe(8);
+    });
+    it('SMMLAR rounds the product high word up (low word >= 2^31)', () => {
+      // 0x10000 * 0x18000 = 0x1_8000_0000 → high=1, low=0x8000_0000 → rounds to 2.
+      // hw1[4]=R=1: 0x3002 | 0x10 = 0x3012.
+      const r = step32(0xfb51, 0x3012, { r1: 0x10000, r2: 0x18000, r3: 0 });
+      expect(r.r0).toBe(2);
+    });
+    it('SMMLA with negative signed operands', () => {
+      // (-0x10000) * 0x10000 = -0x1_0000_0000 → high word -1 (0xffffffff); +0 = 0xffffffff.
+      const r = step32(0xfb51, 0x3002, { r1: -0x10000 >>> 0, r2: 0x10000, r3: 0 });
+      expect(r.r0).toBe(0xffffffff >>> 0);
+    });
+    it('SMMUL r0, r1, r2 = (r1*r2)[63:32] (Ra=1111, no accumulate)', () => {
+      // Ra=0b1111: hw1 = (0xf<<12)|(rd=0<<8)|rm=2 = 0xf002.
+      const r = step32(0xfb51, 0xf002, { r1: 0x10000, r2: 0x10000 });
+      expect(r.r0).toBe(1);
+    });
+    it('SMMULR rounds to nearest (away from low-word >= 2^31)', () => {
+      // 0x18000*0x10000 = 0x1_8000_0000 → round → 2. hw1=0xf012 (R=1).
+      const r = step32(0xfb51, 0xf012, { r1: 0x18000, r2: 0x10000 });
+      expect(r.r0).toBe(2);
+    });
+  });
+
+  describe('SSAT / USAT (saturate)', () => {
+    // Encodings verified against `arm-none-eabi-as -march=armv7-m`.
+    //   SSAT: Rm=hw0[3:0], Rd=hw1[11:8], sat=hw1[4:0] (width=sat+1)
+    //   shift=(hw1[14:12]<<2)|hw1[7:6]; hw0[5]=1→ASR, 0→LSL
+    //   SSAT opField=16(LSL)/18(ASR); USAT opField=24(LSL)/26(ASR)
+    it('SSAT does not saturate in-range values', () => {
+      // ssat r0, #16, r1 → clamp to [-32768, 32767]. r1=100 fits.
+      // hw0=0xf301 (Rm=1), hw1=0x000f (sat=15→#16, Rd=0).
+      const r = step32(0xf301, 0x000f, { r1: 100 });
+      expect(r.r0).toBe(100);
+      expect(r.Q).toBe(false);
+    });
+    it('SSAT saturates positive overflow and sets Q', () => {
+      const r = step32(0xf301, 0x000f, { r1: 40000 });
+      expect(r.r0).toBe(32767);
+      expect(r.Q).toBe(true);
+    });
+    it('SSAT saturates negative overflow', () => {
+      const r = step32(0xf301, 0x000f, { r1: -40000 >>> 0 });
+      expect(r.r0).toBe(0xffff8000 >>> 0); // -32768
+      expect(r.Q).toBe(true);
+    });
+    it('SSAT with ASR shift saturates the shifted value', () => {
+      // ssat r0, #5, r1, asr #4 → clamp to [-16,15], r1=0x200>>4=32→saturate to 15.
+      // hw0=0xf321 (Rm=1, ASR), hw1=0x1004 (imm3=1→shift=4, Rd=0, sat=4→#5).
+      const r = step32(0xf321, 0x1004, { r1: 0x200 });
+      expect(r.r0).toBe(15);
+      expect(r.Q).toBe(true);
+    });
+    it('USAT saturates to unsigned range', () => {
+      // usat r0, #8, r1 → clamp to [0, 255]. hw0=0xf381 (Rm=1, USAT), hw1=0x0007.
+      const r = step32(0xf381, 0x0007, { r1: -1 >>> 0 });
+      expect(r.r0).toBe(0);
+      expect(r.Q).toBe(true);
+    });
+    it('USAT does not saturate in-range', () => {
+      const r = step32(0xf381, 0x0007, { r1: 200 });
+      expect(r.r0).toBe(200);
+      expect(r.Q).toBe(false);
     });
   });
 

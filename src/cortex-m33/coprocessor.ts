@@ -2,7 +2,7 @@
  * RP2350 Cortex-M33 coprocessors: CP0 GPIOC, CP4/5 DCP, CP7 RCP.
  * See RP2350 datasheet §3.6.
  */
-import { CortexM33Core } from './core';
+import { CortexM33Core, Fault } from './core';
 
 const PIN_MASK = 0x3fffffff; // 30 GPIO pins.
 
@@ -35,6 +35,24 @@ export function coprocessorExecute(core: CortexM33Core, hw0: number, hw1: number
 function isMrcMcr(hw0: number, hw1: number): boolean {
   const top = (hw0 >>> 12) & 0xf;
   return (top === 0xe || top === 0xf) && (hw1 & 0x10) !== 0;
+}
+
+/**
+ * Write an MRC (coprocessor → ARM register) result. Per ARMv8-M, when Rt=15
+ * (PC / APSR_nzcv) the transfer targets the condition flags: only
+ * result[31:28] are written to N/Z/C/V and the PC is left unchanged. This is
+ * the encoding capstone prints as `mrc pN, ..., apsr_nzcv, ...` and is used
+ * by the SDK's double-precision routines (e.g. `mrc2 p4` to read DCP status
+ * into the flags). Writing the value straight to r[15] instead corrupts the
+ * PC and jumps to address 0.
+ */
+function writeMrcResult(core: CortexM33Core, Rt: number, value: number) {
+  const v = value >>> 0;
+  if (Rt === 15) {
+    core.regs.xpsr = (core.regs.xpsr & 0x0fffffff) | (v & 0xf0000000);
+  } else {
+    core.regs.r[Rt] = v;
+  }
 }
 
 // ============================================================================
@@ -84,11 +102,11 @@ function cp0Gpioc(core: CortexM33Core, hw0: number, hw1: number): number {
   if (isBulk) {
     if (isRead) {
       if (isInput) {
-        regs.r[Rt] = sio.readUint32(GPIO_IN, core.coreIndex) & PIN_MASK;
+        writeMrcResult(core, Rt, sio.readUint32(GPIO_IN, core.coreIndex) & PIN_MASK);
       } else if (!isHi) {
-        regs.r[Rt] = sio.readUint32(baseOffset, core.coreIndex) & PIN_MASK;
+        writeMrcResult(core, Rt, sio.readUint32(baseOffset, core.coreIndex) & PIN_MASK);
       } else {
-        regs.r[Rt] = 0; // HI bank RAZ
+        writeMrcResult(core, Rt, 0); // HI bank RAZ
       }
     } else {
       const val = regs.r[Rt] & PIN_MASK;
@@ -113,15 +131,15 @@ function cp0Gpioc(core: CortexM33Core, hw0: number, hw1: number): number {
     // Per-bit operation.
     const pin = (CRn << 4) | CRm;
     if (pin >= 30) {
-      if (isRead) regs.r[Rt] = 0;
+      if (isRead) writeMrcResult(core, Rt, 0);
       return 1;
     }
     const bitMask = 1 << pin;
     if (isRead) {
       if (isInput) {
-        regs.r[Rt] = (sio.readUint32(GPIO_IN, core.coreIndex) >> pin) & 1;
+        writeMrcResult(core, Rt, (sio.readUint32(GPIO_IN, core.coreIndex) >> pin) & 1);
       } else {
-        regs.r[Rt] = (sio.readUint32(baseOffset, core.coreIndex) >> pin) & 1;
+        writeMrcResult(core, Rt, (sio.readUint32(baseOffset, core.coreIndex) >> pin) & 1);
       }
     } else {
       if (!isInput && !isHi) {
@@ -185,7 +203,7 @@ function cp45Dcp(core: CortexM33Core, hw0: number, hw1: number): number {
     const isRead = ((hw0 >>> 4) & 1) !== 0;
     const halfIdx = (CRm & 0x7) * 2 + (opc2 & 1);
     if (isRead) {
-      core.regs.r[Rt] = st.dcpHalves[halfIdx] >>> 0;
+      writeMrcResult(core, Rt, st.dcpHalves[halfIdx] >>> 0);
     } else {
       st.dcpHalves[halfIdx] = core.regs.r[Rt] >>> 0;
     }
@@ -377,7 +395,7 @@ function cp7Rcp(core: CortexM33Core, hw0: number, hw1: number): number {
   const isMcrrMrrc = hw0Hi === 0xec || hw0Hi === 0xfc;
 
   if (isMcrrMrrc) {
-    return cp7McrrMrrc(core, hw0, hw1, st);
+    return cp7McrrMrrc(core, hw0, hw1);
   }
   // MCR/MRC/CDP family (0xEE or 0xFE prefix).
   if (!isMrcMcr(hw0, hw1)) {
@@ -406,7 +424,7 @@ function cp7Rcp(core: CortexM33Core, hw0: number, hw1: number): number {
         if (isRead) {
           // rcp_canary_get: R[t] = salt ^ 0xDEADBEEF (or 0 ^ 0xDEADBEEF if invalid).
           const salt = st.rcpSaltValid ? st.rcpSalt : 0;
-          regs.r[Rt] = (salt ^ 0xdeadbeef) >>> 0;
+          writeMrcResult(core, Rt, (salt ^ 0xdeadbeef) >>> 0);
         } else {
           // rcp_canary_check: assert R[t] == expected.
           const salt = st.rcpSaltValid ? st.rcpSalt : 0;
@@ -464,8 +482,7 @@ function cp7Rcp(core: CortexM33Core, hw0: number, hw1: number): number {
 function cp7McrrMrrc(
   core: CortexM33Core,
   hw0: number,
-  hw1: number,
-  st: { rcpSalt: number; rcpSaltValid: boolean }
+  hw1: number
 ): number {
   // L bit (hw0[4]): 0=MCRR (write), 1=MRRC (read). MRRC2 from CP7 is a NOP
   // per the reference (coprocessor.rs:676-679) — must not trigger rcp ops.
@@ -482,20 +499,36 @@ function cp7McrrMrrc(
       if (CRm === 0) {
         // rcp_iequal: assert R[Rt] == R[Rt2].
         if (regs.r[Rt] !== regs.r[Rt2]) {
-          core.pendingFault = 3; // Nmi
+          core.pendingFault = Fault.Nmi;
         }
       }
       return 1;
-    case 8:
-      // rcp_salt_core0 / rcp_salt_core1.
-      if (CRm === 0) {
-        st.rcpSalt = regs.r[Rt];
-        st.rcpSaltValid = true;
-      } else if (CRm === 1) {
-        st.rcpSalt = regs.r[Rt];
-        st.rcpSaltValid = true;
+    case 8: {
+      // rcp_salt_core0 (CRm=0) / rcp_salt_core1 (CRm=1). Per datasheet
+      // §3.6.3.1, core 0's coprocessor port writes BOTH cores' salts during
+      // early boot, so CRm selects the *target* core's salt register — not
+      // the executing core. Initially the salt is invalid; rcp_salt_coreN
+      // writes a 64-bit value (Rt:Rt2) and marks it valid. Writing an
+      // already-valid salt is an anomaly that triggers an RCP fault (NMI).
+      const states = (core.chip as unknown as {
+        ppb?: {
+          coreState: [
+            { rcpSalt: number; rcpSaltValid: boolean },
+            { rcpSalt: number; rcpSaltValid: boolean }
+          ];
+        };
+      }).ppb!.coreState;
+      const target = states[CRm & 1];
+      if (target.rcpSaltValid) {
+        core.pendingFault = Fault.Nmi;
+      } else {
+        // 64-bit salt; the low word (Rt) seeds the stack-canary value
+        // returned by rcp_canary_get, which is all the model needs.
+        target.rcpSalt = regs.r[Rt];
+        target.rcpSaltValid = true;
       }
       return 1;
+    }
     default:
       return 1; // NOP for unimplemented.
   }

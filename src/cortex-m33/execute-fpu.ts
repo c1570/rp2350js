@@ -157,6 +157,25 @@ export function fpuExecute(core: CortexM33Core, hw0: number, hw1: number): numbe
       dv.setFloat32(0, regs.s[sm], true);
       const bits = dv.getUint32(0, true);
       regs.s[sd] = Math.fround(signed ? bits | 0 : bits >>> 0);
+    } else if (opc3 === 0xa) {
+      // VCVT.F32.{S32,U32} Sd, Sm, #fbits — fixed-point-to-float (the
+      // "integer" form opc3=0x8 does no scaling). hw1[7]=1 signed, 0 unsigned.
+      // fbits = 32 - esc, esc = 2*hw1[3:0] + hw1[5]. The source operand is
+      // bit-reinterpreted from Sm; for this encoding Sm shares fields with
+      // the scale so we use Sd as Sm (matches all firmware instances).
+      const signed = (hw1 >>> 7) & 1;
+      const esc = 2 * (hw1 & 0xf) + ((hw1 >>> 5) & 1);
+      const fbits = 32 - esc;
+      const src = regs.s[sd];
+      const buf = new ArrayBuffer(4);
+      const dv = new DataView(buf);
+      dv.setFloat32(0, src, true);
+      const bits = dv.getUint32(0, true);
+      const intVal = signed ? bits | 0 : bits >>> 0;
+      const scale = Math.pow(2, fbits);
+      regs.s[sd] = Math.fround(intVal / scale);
+      regs.fpscr = fpscr;
+      return 1;
     } else if (opc3 === 0xc || opc3 === 0xd) {
       // VCVT.{U32,S32}.F32 Sd, Sm — float-to-int, round-toward-zero form
       // (hw1[7]=1; the FPSCR-rounding-mode "VCVTR" form is hw1[7]=0 and isn't
@@ -195,6 +214,34 @@ export function fpuExecute(core: CortexM33Core, hw0: number, hw1: number): numbe
       return -1;
     }
     regs.fpscr = fpscr;
+    return 1;
+  }
+
+  // MCRR/MRRC VMOV (two ARM regs ↔ two FP regs). hw0[7:4]=0100 (MCRR, ARM→FP)
+  // or 0101 (MRRC, FP→ARM). opc1=hw1[7:4]=1, CRm=hw1[3:0] encodes the starting
+  // S register. Rt2=hw0[3:0], Rt=hw1[15:12], coproc=hw1[11:8]=10.
+  if (((hw0 & 0xfff0) === 0xec40 || (hw0 & 0xfff0) === 0xec50) && coproc === 10) {
+    const isLoad = (hw0 >>> 4) & 1; // 0=MCRR(ARM→FP), 1=MRRC(FP→ARM)
+    const rt = (hw1 >>> 12) & 0xf;
+    const rt2 = hw0 & 0xf;
+    const crm = hw1 & 0xf;
+    const sn = ((crm & 1) << 4) | ((crm >>> 1) << 1);
+    const sm = sn + 1;
+    const buf = new ArrayBuffer(4);
+    const dv = new DataView(buf);
+    if (isLoad) {
+      // MRRC: FP → ARM
+      dv.setFloat32(0, regs.s[sn], true);
+      regs.r[rt] = dv.getUint32(0, true);
+      dv.setFloat32(0, regs.s[sm], true);
+      regs.r[rt2] = dv.getUint32(0, true);
+    } else {
+      // MCRR: ARM → FP
+      dv.setUint32(0, regs.r[rt] >>> 0, true);
+      regs.s[sn] = dv.getFloat32(0, true);
+      dv.setUint32(0, regs.r[rt2] >>> 0, true);
+      regs.s[sm] = dv.getFloat32(0, true);
+    }
     return 1;
   }
 
@@ -258,6 +305,43 @@ export function fpuExecute(core: CortexM33Core, hw0: number, hw1: number): numbe
     } else {
       new DataView(buf).setFloat32(0, regs.s[sd], true);
       core.chip.writeUint32(addr, new DataView(buf).getUint32(0, true));
+    }
+    return 2;
+  }
+
+  // VLDM/VSTM (load/store multiple single-precision registers). General form
+  // that covers VPUSH/VPOP and arbitrary base registers. The 0xec/0xed prefix
+  // plus coproc=10 identifies this class, EXCLUDING MCRR/MRRC (VMOV
+  // two-register) which shares the prefix but has hw0[7:5]=0b010/0b11.
+  // Fields: U=hw0[7], D=hw0[6], W=hw0[5], L=hw0[4], Rn=hw0[3:0];
+  // hw1: Vd[15:12], coproc[11:8], imm8[7:0].
+  // Verified against `arm-none-eabi-as`.
+  if (
+    ((hw0 & 0xff00) === 0xec00 || (hw0 & 0xff00) === 0xed00) &&
+    coproc === 10 &&
+    ((hw0 >>> 5) & 0x7) >= 0b100
+  ) {
+    const u = (hw0 >>> 7) & 1;
+    const w = (hw0 >>> 5) & 1;
+    const isLoad = (hw0 >>> 4) & 1;
+    const rn = hw0 & 0xf;
+    const sd = getSd(hw0, hw1);
+    const count = hw1 & 0xff;
+    let addr = u ? regs.r[rn] >>> 0 : (regs.r[rn] - count * 4) >>> 0;
+    const buf = new ArrayBuffer(4);
+    const dv = new DataView(buf);
+    for (let i = 0; i < count; i++) {
+      if (isLoad) {
+        dv.setUint32(0, core.chip.readUint32(addr), true);
+        regs.s[sd + i] = dv.getFloat32(0, true);
+      } else {
+        dv.setFloat32(0, regs.s[sd + i], true);
+        core.chip.writeUint32(addr, dv.getUint32(0, true));
+      }
+      addr = (addr + 4) >>> 0;
+    }
+    if (w) {
+      regs.r[rn] = u ? (regs.r[rn] + count * 4) >>> 0 : (regs.r[rn] - count * 4) >>> 0;
     }
     return 2;
   }

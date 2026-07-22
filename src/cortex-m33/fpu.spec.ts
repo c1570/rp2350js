@@ -188,6 +188,60 @@ describe('Cortex-M33 FPU (VFPv5-SP)', () => {
     expect(core.regs.s[0]).toBeCloseTo(3.14159, 5);
   });
 
+  it('VMOV s0, s1, r3, r0 (MCRR, two ARM → two FP)', () => {
+    // vmov s0, s1, r3, r0: hw0=0xec40, hw1=0x3a10
+    const { chip, core } = setup();
+    core.regs.r[3] = f32ToU32(1.5);
+    core.regs.r[0] = f32ToU32(-2.25);
+    put32(chip, SRAM, 0xec40, 0x3a10);
+    core.PC = SRAM;
+    core.executeInstruction();
+    expect(core.regs.s[0]).toBeCloseTo(1.5, 6);
+    expect(core.regs.s[1]).toBeCloseTo(-2.25, 6);
+  });
+
+  it('VMOV r3, r0, s0, s1 (MRRC, two FP → two ARM)', () => {
+    // vmov r3, r0, s0, s1: hw0=0xec50, hw1=0x3a10
+    const { chip, core } = setup();
+    core.regs.s[0] = 3.5;
+    core.regs.s[1] = -7.0;
+    put32(chip, SRAM, 0xec50, 0x3a10);
+    core.PC = SRAM;
+    core.executeInstruction();
+    expect(u32ToF32(core.regs.r[3])).toBeCloseTo(3.5, 6);
+    expect(u32ToF32(core.regs.r[0])).toBeCloseTo(-7.0, 6);
+  });
+
+  it('VLDM r3!, {s8, s9, s10} loads 3 S regs from arbitrary base', () => {
+    // vldmia r3, {s8, s9, s10}: hw0=0xec93, hw1=0x4a03
+    const { chip, core } = setup();
+    const base = SRAM + 0x100;
+    core.regs.r[3] = base;
+    chip.writeUint32(base, f32ToU32(1.0));
+    chip.writeUint32(base + 4, f32ToU32(2.0));
+    chip.writeUint32(base + 8, f32ToU32(3.0));
+    put32(chip, SRAM, 0xec93, 0x4a03);
+    core.PC = SRAM;
+    core.executeInstruction();
+    expect(core.regs.s[8]).toBeCloseTo(1.0, 6);
+    expect(core.regs.s[9]).toBeCloseTo(2.0, 6);
+    expect(core.regs.s[10]).toBeCloseTo(3.0, 6);
+  });
+
+  it('VSTM r3!, {s0, s1} stores 2 S regs to arbitrary base', () => {
+    // vstmia r3, {s0, s1}: hw0=0xec80, hw1=0x0a02 (L=0, D=0, Vd=0, imm8=2)
+    const { chip, core } = setup();
+    const base = SRAM + 0x200;
+    core.regs.r[3] = base;
+    core.regs.s[0] = 10.5;
+    core.regs.s[1] = -20.25;
+    put32(chip, SRAM, 0xec83, 0x0a02);
+    core.PC = SRAM;
+    core.executeInstruction();
+    expect(u32ToF32(chip.readUint32(base))).toBeCloseTo(10.5, 6);
+    expect(u32ToF32(chip.readUint32(base + 4))).toBeCloseTo(-20.25, 6);
+  });
+
   it('FPU op without CPACR enable triggers NOCP fault', () => {
     const chip = new RP2350(false, undefined, { coreArch: 'arm' });
     const core = chip.armCore0;

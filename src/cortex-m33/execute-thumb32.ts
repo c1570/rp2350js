@@ -636,6 +636,52 @@ function dispatchDpPlainImm(core: CortexM33Core, hw0: number, hw1: number): numb
     }
     return 1;
   }
+  // SSAT / USAT: signed/unsigned saturate. Field layout (verified against
+  // `arm-none-eabi-as`):
+  //   Rm = hw0[3:0], Rd = hw1[11:8], sat_imm = hw1[4:0] (sat width = sat_imm+1)
+  //   shift = (hw1[14:12]<<2)|hw1[7:6]; hw0[5]=1 → ASR, 0 → LSL
+  //   SSAT: opField=16(LSL)/18(ASR); USAT: opField=24(LSL)/26(ASR) [hw0[7] set]
+  if (opField === 0b10000 || opField === 0b10010 || opField === 0b11000 || opField === 0b11010) {
+    const isUnsigned = (opField & 0b01000) !== 0;
+    const isAsr = (opField & 0b00010) !== 0;
+    const rmReg = hw0 & 0xf;
+    const rdSat = (hw1 >>> 8) & 0xf;
+    const satImm = hw1 & 0x1f;
+    const satWidth = satImm + 1;
+    const imm2sat = (hw1 >>> 6) & 0x3;
+    const shiftAmt = (imm3 << 2) | imm2sat;
+    let val = regs.r[rmReg] | 0;
+    if (shiftAmt > 0) {
+      val = isAsr ? (val >> shiftAmt) : (val << shiftAmt);
+    }
+    if (isUnsigned) {
+      // USAT: clamp to [0, 2^satWidth - 1]
+      const max = satWidth >= 32 ? 0xffffffff : ((1 << satWidth) - 1) >>> 0;
+      if (val < 0) {
+        regs.r[rdSat] = 0;
+        regs.setQ();
+      } else if ((val >>> 0) > max) {
+        regs.r[rdSat] = max;
+        regs.setQ();
+      } else {
+        regs.r[rdSat] = val >>> 0;
+      }
+    } else {
+      // SSAT: clamp to [-2^(satWidth-1), 2^(satWidth-1) - 1]
+      const maxPos = satWidth >= 32 ? 0x7fffffff : (1 << (satWidth - 1)) - 1;
+      const minNeg = satWidth >= 32 ? -0x80000000 : -(1 << (satWidth - 1));
+      if (val > maxPos) {
+        regs.r[rdSat] = maxPos >>> 0;
+        regs.setQ();
+      } else if (val < minNeg) {
+        regs.r[rdSat] = minNeg >>> 0;
+        regs.setQ();
+      } else {
+        regs.r[rdSat] = val >>> 0;
+      }
+    }
+    return 1;
+  }
   return -1;
 }
 
@@ -1199,6 +1245,23 @@ function dispatchMultiply(core: CortexM33Core, hw0: number, hw1: number): number
         regs.setQ();
       }
     }
+    return 1;
+  }
+  if (op === 0b0101) {
+    // SMMLA/SMMLAR/SMMUL/SMMULR (DSP extension): signed modular multiply —
+    // the high 32 bits of a 32x32→64 signed product, optionally rounded (R
+    // bit at hw1[4]) and accumulated into Ra. Field layout is the same as the
+    // MLA class: Ra = hw1[15:12], Rd = hw1[11:8], Rm = hw1[3:0], Rn = hw0[3:0].
+    // Ra = 0b1111 selects the non-accumulating SMMUL form. Verified against
+    // `arm-none-eabi-as` / capstone decodes.
+    const round = (hw1 >>> 4) & 1;
+    const [hi, lo] = mul64Signed(regs.r[rn], regs.r[rm]);
+    // Add 2^31 before taking the high word when rounding: this increments the
+    // high word exactly when the low word is >= 0x80000000.
+    let prodHi = hi | 0; // signed high word of the 64-bit product
+    if (round && (lo >>> 0) >= 0x80000000) prodHi = (prodHi + 1) | 0;
+    const acc = ra === 0xf ? 0 : (regs.r[ra] | 0);
+    regs.r[rd] = (prodHi + acc) >>> 0;
     return 1;
   }
   if (op === 0b0000) {
