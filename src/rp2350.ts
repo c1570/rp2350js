@@ -1,5 +1,4 @@
 import { IRPChip } from './rpchip';
-import { IClock } from './clock/clock';
 import { SimulationClock } from './clock/simulation-clock';
 import { ICpuCore } from './cpu-core';
 import { CPU } from './riscv/cpu';
@@ -84,6 +83,8 @@ export interface RP2350Options {
    * OTP flags) but emulator consumers have historically expected RISC-V.
    */
   coreArch?: CoreArch;
+  /** Path to a HEX/UF2 firmware image to load after initial reset. */
+  loadFirmware?: string;
 }
 
 export class RP2350 implements IRPChip {
@@ -144,6 +145,7 @@ export class RP2350 implements IRPChip {
   }
 
   /* Clocks */
+  readonly clock = new SimulationClock();
   clkSys = 125 * MHz;
   clkPeri = 125 * MHz;
 
@@ -278,12 +280,8 @@ export class RP2350 implements IRPChip {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars, @typescript-eslint/no-empty-function
   public onTrace = (coreNumber: number, pc: number, tag: string) => {};
 
-  constructor(
-    readonly debug: boolean = false,
-    readonly clock: IClock = new SimulationClock(),
-    options?: RP2350Options
-  ) {
-    this.coreArch = options?.coreArch ?? 'riscv';
+  constructor(options: RP2350Options = {}) {
+    this.coreArch = options.coreArch ?? 'riscv';
     if (this.coreArch === 'arm') {
       this.core = [new CortexM33Core(this, 'ARMCore0', 0), new CortexM33Core(this, 'ARMCore1', 1)];
       this.ppb = new RPPPB2350(this, 'PPB');
@@ -329,6 +327,10 @@ export class RP2350 implements IRPChip {
       this.reset();
       this.watchdog.reset();
     };
+
+    if (options.loadFirmware) {
+      this.loadFirmware(options.loadFirmware);
+    }
   }
 
   currentCore = 0;
@@ -390,7 +392,9 @@ export class RP2350 implements IRPChip {
       // datasheet / ARMv8-M ARM §B8.3).
       const pc = this.core[this.currentCore]?.PC;
       throw Error(
-        `${LOG_NAME} unaligned word read from address ${address.toString(16)} at PC=${pc !== undefined ? pc.toString(16) : 'unknown'} (core${this.currentCore})`
+        `${LOG_NAME} unaligned word read from address ${address.toString(16)} at PC=${
+          pc !== undefined ? pc.toString(16) : 'unknown'
+        } (core${this.currentCore})`
       );
     }
     if (address >= RAM_START_ADDRESS && address < RAM_START_ADDRESS + this.sram.length) {
@@ -430,7 +434,9 @@ export class RP2350 implements IRPChip {
     {
       const pc = this.core[this.currentCore]?.PC;
       throw Error(
-        `${LOG_NAME} Read from invalid memory address: ${address.toString(16)} at PC=${pc !== undefined ? pc.toString(16) : 'unknown'} (core${this.currentCore})`
+        `${LOG_NAME} Read from invalid memory address: ${address.toString(16)} at PC=${
+          pc !== undefined ? pc.toString(16) : 'unknown'
+        } (core${this.currentCore})`
       );
     }
     //return 0xffffffff;
@@ -468,7 +474,9 @@ export class RP2350 implements IRPChip {
     if (address & 0x3) {
       const pc = this.core[this.currentCore]?.PC;
       throw Error(
-        `${LOG_NAME} unaligned word write to address ${address.toString(16)} at PC=${pc !== undefined ? pc.toString(16) : 'unknown'} (core${this.currentCore})`
+        `${LOG_NAME} unaligned word write to address ${address.toString(16)} at PC=${
+          pc !== undefined ? pc.toString(16) : 'unknown'
+        } (core${this.currentCore})`
       );
     }
     if (address >= RAM_START_ADDRESS && address < RAM_START_ADDRESS + this.sram.length) {
@@ -505,7 +513,9 @@ export class RP2350 implements IRPChip {
       } else {
         const pc = this.core[this.currentCore]?.PC;
         throw Error(
-          `${LOG_NAME} Write to invalid memory address: ${address.toString(16)} at PC=${pc !== undefined ? pc.toString(16) : 'unknown'} (core${this.currentCore})`
+          `${LOG_NAME} Write to invalid memory address: ${address.toString(16)} at PC=${
+            pc !== undefined ? pc.toString(16) : 'unknown'
+          } (core${this.currentCore})`
         );
       }
     }
@@ -527,7 +537,10 @@ export class RP2350 implements IRPChip {
       if (peripheral.byteAddressable) {
         const offset = alignedAddress & 0x3fff;
         const originalValue = peripheral.readUint32(offset);
-        peripheral.writeUint32(offset, (originalValue & ~(0xff << shift)) | ((value & 0xff) << shift));
+        peripheral.writeUint32(
+          offset,
+          (originalValue & ~(0xff << shift)) | ((value & 0xff) << shift)
+        );
         return;
       }
       const atomicType = (alignedAddress & 0x3000) >> 12;

@@ -16,7 +16,7 @@ if (coreArch !== 'arm' && coreArch !== 'riscv') {
   throw new Error(`RP2350_CORE_ARCH=${coreArch} must be "arm" or "riscv"`);
 }
 
-const mcu = new RP2350(false, undefined, { coreArch });
+const mcu = new RP2350({ coreArch });
 mcu.logger = new ConsoleLogger(LogLevel.Info);
 
 mcu.uart[0].onByte = (value: number) => {

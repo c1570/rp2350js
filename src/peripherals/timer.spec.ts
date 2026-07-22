@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { MockClock } from '../clock/mock-clock';
 import { RP2040 } from '../rp2040';
 
 const ALARM1 = 0x40054014;
@@ -15,7 +14,7 @@ const INTS = 0x40054040;
 describe('RPTimer', () => {
   describe('Alarms', () => {
     it('should set Alarm 1 to armed when writing to ALARM1 register', () => {
-      const rp2040 = new RP2040(new MockClock());
+      const rp2040 = new RP2040();
       rp2040.writeUint32(ALARM1, 0x1000);
       expect(rp2040.readUint32(ARMED)).toEqual(0x2);
     });
@@ -29,14 +28,13 @@ describe('RPTimer', () => {
     });
 
     it('should generate an IRQ 3 interrupt when Alarm 3 fires', () => {
-      const clock = new MockClock();
-      const rp2040 = new RP2040(clock);
+      const rp2040 = new RP2040();
       // Arm the alarm
       rp2040.writeUint32(ALARM3, 1000);
       expect(rp2040.readUint32(ARMED)).toEqual(0x8);
       expect(rp2040.readUint32(INTR)).toEqual(0);
       // Advance time so that the alarm will fire
-      clock.advance(2000);
+      rp2040.clock.tick(2000 * 1000);
       expect(rp2040.readUint32(ARMED)).toEqual(0);
       expect(rp2040.readUint32(INTR)).toEqual(0x8);
       expect(rp2040.readUint32(INTS)).toEqual(0);
@@ -53,8 +51,7 @@ describe('RPTimer', () => {
     });
 
     it('should generate an interrupt if INTF is 1 even when the INTE bit is 0', () => {
-      const clock = new MockClock();
-      const rp2040 = new RP2040(clock);
+      const rp2040 = new RP2040();
       expect(rp2040.readUint32(INTS)).toEqual(0);
       expect(rp2040.readUint32(INTE)).toEqual(0);
       rp2040.writeUint32(INTF, 0x4);

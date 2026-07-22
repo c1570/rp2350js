@@ -150,15 +150,13 @@ const watchPcs: number[] = envNumList('DEBUG_TRACE_WATCH_PC', []);
 
 // ---- Boot the chip, same sequence as demo/rp2350-micropython-run.ts ----
 
-const mcu = new RP2350(false, undefined, { coreArch });
+const mcu = new RP2350({ coreArch, loadFirmware: imagePath });
 mcu.logger = new ConsoleLogger(LogLevel.Error);
 
 mcu.uart[0].onByte = (value: number) => {
   process.stdout.write(new Uint8Array([value]));
 };
 
-console.log(`Loading uf2 image ${imagePath}`);
-mcu.loadFirmware(imagePath);
 
 const core0 = mcu.core[0];
 const core1 = mcu.core[1];

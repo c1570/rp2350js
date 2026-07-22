@@ -4,7 +4,7 @@ import { RP2350 } from '../rp2350';
 const SRAM = 0x20000000;
 
 function setup() {
-  const chip = new RP2350(false, undefined, { coreArch: 'arm' });
+  const chip = new RP2350({ coreArch: 'arm' });
   const core = chip.armCore0;
   chip.currentCore = 0;
   chip.writeUint32(0xe000ed08, SRAM);
@@ -75,14 +75,14 @@ describe('Cortex-M33 TrustZone stubs', () => {
   });
 
   it('NS PPB alias can read CPUID', () => {
-    const chip = new RP2350(false, undefined, { coreArch: 'arm' });
+    const chip = new RP2350({ coreArch: 'arm' });
     chip.currentCore = 0;
     // NS alias: 0xe002ed00 should return same CPUID as 0xe000ed00.
     expect(chip.readUint32(0xe002ed00)).toBe(0x410fd213);
   });
 
   it('NS PPB alias can write/read VTOR', () => {
-    const chip = new RP2350(false, undefined, { coreArch: 'arm' });
+    const chip = new RP2350({ coreArch: 'arm' });
     chip.currentCore = 0;
     chip.writeUint32(0xe002ed08, 0x20001000);
     expect(chip.readUint32(0xe000ed08)).toBe(0x20001000);

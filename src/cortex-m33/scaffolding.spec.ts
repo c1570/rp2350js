@@ -14,7 +14,7 @@ describe('RP2350 ARM (Cortex-M33) scaffolding', () => {
   });
 
   it('constructs ARM cores when coreArch: arm is requested', () => {
-    const chip = new RP2350(false, undefined, { coreArch: 'arm' });
+    const chip = new RP2350({ coreArch: 'arm' });
     expect(chip.coreArch).toBe('arm');
     expect(chip.ppb).toBeDefined();
     expect(chip.armCore0).toBeInstanceOf(CortexM33Core);
@@ -99,13 +99,13 @@ describe('RP2350 ARM (Cortex-M33) scaffolding', () => {
   });
 
   it('PPB CPUID reads as the documented M33 r0p1 value', () => {
-    const chip = new RP2350(false, undefined, { coreArch: 'arm' });
+    const chip = new RP2350({ coreArch: 'arm' });
     const cpuid = chip.readUint32(0xe000ed00);
     expect(cpuid >>> 0).toBe(0x410fd213);
   });
 
   it('PPB VTOR is writable per core and reads back', () => {
-    const chip = new RP2350(false, undefined, { coreArch: 'arm' });
+    const chip = new RP2350({ coreArch: 'arm' });
     chip.currentCore = 0;
     chip.writeUint32(0xe000ed08, 0x20001000);
     expect(chip.readUint32(0xe000ed08)).toBe(0x20001000);
@@ -119,7 +119,7 @@ describe('RP2350 ARM (Cortex-M33) scaffolding', () => {
   });
 
   it('NVIC pending/enabled bitmasks are per-core and writable', () => {
-    const chip = new RP2350(false, undefined, { coreArch: 'arm' });
+    const chip = new RP2350({ coreArch: 'arm' });
     chip.currentCore = 0;
     // NVIC_ISPR0 = 0xe000e200, NVIC_ISER0 = 0xe000e100.
     chip.writeUint32(0xe000e100, 1 << 5); // enable IRQ 5
@@ -136,7 +136,7 @@ describe('RP2350 ARM (Cortex-M33) scaffolding', () => {
   });
 
   it('ARM core executeInstruction returns without crashing', () => {
-    const chip = new RP2350(false, undefined, { coreArch: 'arm' });
+    const chip = new RP2350({ coreArch: 'arm' });
     const cycles = chip.armCore0.executeInstruction();
     expect(cycles).toBeGreaterThan(0);
     expect(chip.armCore0.cycles).toBeGreaterThan(0);
@@ -145,7 +145,7 @@ describe('RP2350 ARM (Cortex-M33) scaffolding', () => {
   it('ICpuCore.setInterrupt is implemented on both architectures', () => {
     const riscvChip = new RP2350();
     expect(() => riscvChip.core0.setInterrupt(0, true)).not.toThrow();
-    const armChip = new RP2350(false, undefined, { coreArch: 'arm' });
+    const armChip = new RP2350({ coreArch: 'arm' });
     expect(() => armChip.armCore0.setInterrupt(0, true)).not.toThrow();
   });
 });

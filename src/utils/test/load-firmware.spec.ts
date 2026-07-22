@@ -150,8 +150,7 @@ describe('loadFirmwareFromHex / loadFirmwareFromUF2', () => {
 
 describe('RP2350.loadFirmware end-to-end (RISC-V)', () => {
   test('boots SRAM image via vectored-boot handoff, reaches firmware entry', () => {
-    const chip = new RP2350();
-    chip.loadFirmware('demo/riscv_blink/blink_simple.hex');
+    const chip = new RP2350({ loadFirmware: 'demo/riscv_blink/blink_simple.hex' });
     // Run enough steps for the bootrom to scan, validate, and launch.
     let firstFwStep = -1;
     let firstFwPc = -1;
@@ -173,22 +172,19 @@ describe('RP2350.loadFirmware end-to-end (RISC-V)', () => {
   });
 
   test('vectored-boot scratch is set after loadFirmware for SRAM image', () => {
-    const chip = new RP2350();
-    chip.loadFirmware('demo/riscv_blink/blink_simple.hex');
+    const chip = new RP2350({ loadFirmware: 'demo/riscv_blink/blink_simple.hex' });
     expect(chip.readUint32(WATCHDOG_SCRATCH(4))).toBe(0xb007c0d3); // magic
     expect(chip.readUint32(WATCHDOG_SCRATCH(2))).toBe(0x20000000); // window_base
   });
 
   test('vectored-boot scratch is NOT set for flash image (normal flash scan)', () => {
-    const chip = new RP2350();
-    chip.loadFirmware('demo/riscv_timer/hello_timer.hex');
+    const chip = new RP2350({ loadFirmware: 'demo/riscv_timer/hello_timer.hex' });
     // No vectored-boot magic.
     expect(chip.readUint32(WATCHDOG_SCRATCH(4))).toBe(0);
   });
 
   test('SRAM blink firmware toggles GPIO through bootrom path', () => {
-    const chip = new RP2350();
-    chip.loadFirmware('demo/riscv_blink/blink_simple.hex');
+    const chip = new RP2350({ loadFirmware: 'demo/riscv_blink/blink_simple.hex' });
     let toggles = 0;
     chip.gpio[2].addListener((s: GPIOPinState, o: GPIOPinState) => {
       if (s === 1 && o === 0) toggles++;
@@ -198,8 +194,7 @@ describe('RP2350.loadFirmware end-to-end (RISC-V)', () => {
   });
 
   test('flash firmware reaches flash entry through bootrom flash scan', () => {
-    const chip = new RP2350();
-    chip.loadFirmware('demo/riscv_timer/hello_timer.hex');
+    const chip = new RP2350({ loadFirmware: 'demo/riscv_timer/hello_timer.hex' });
     let firstFlash = -1;
     for (let i = 0; i < 500_000; i++) {
       chip.step();
@@ -213,8 +208,7 @@ describe('RP2350.loadFirmware end-to-end (RISC-V)', () => {
   });
 
   test('PIO blink firmware boots and configures PIO via bootrom path', () => {
-    const chip = new RP2350();
-    chip.loadFirmware('demo/riscv_pio_blink/pio_blink.hex');
+    const chip = new RP2350({ loadFirmware: 'demo/riscv_pio_blink/pio_blink.hex' });
     let gpio3Toggles = 0;
     chip.gpio[3].addListener((s: GPIOPinState, o: GPIOPinState) => {
       if (s === 1 && o === 0) gpio3Toggles++;
@@ -230,7 +224,7 @@ describe('RP2350.loadFirmware end-to-end (ARM)', () => {
     // (PICO_PLATFORM=rp2350-arm-s). The loadFirmware mechanism itself must
     // not regress. Verify the load completes. It's a flash image
     // (use_sram=false), so no vectored-boot scratch setup.
-    const chip = new RP2350(false, undefined, { coreArch: 'arm' });
+    const chip = new RP2350({ coreArch: 'arm' });
     const result = chip.loadFirmware('demo/m33_blink/blink_simple.uf2');
     expect(result.useSram).toBe(false);
     // No vectored-boot magic for flash images.
@@ -242,8 +236,7 @@ describe('RP2350.loadFirmware end-to-end (ARM)', () => {
   test('ARM flash firmware reaches flash entry through bootrom flash scan', () => {
     // The bootrom flash scan should hand off to the firmware's
     // _reset_handler (0x1000015a for this build of blink_simple).
-    const chip = new RP2350(false, undefined, { coreArch: 'arm' });
-    chip.loadFirmware('demo/m33_blink/blink_simple.hex');
+    const chip = new RP2350({ coreArch: 'arm', loadFirmware: 'demo/m33_blink/blink_simple.hex' });
     let firstFlash = -1;
     for (let i = 0; i < 500_000; i++) {
       chip.step();

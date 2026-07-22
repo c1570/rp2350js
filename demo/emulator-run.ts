@@ -7,8 +7,7 @@ import { GPIOPinState } from '../src/gpio-pin';
 import { GDBTCPServer } from '../src/gdb/gdb-tcp-server';
 import { RISCVGDBServer } from '../src/gdb/riscv-gdb-server';
 
-const mcu = new RP2350();
-mcu.loadFirmware(`${filename}.hex`);
+const mcu = new RP2350({ loadFirmware: `${filename}.hex` });
 
 const disassembly =
   fs.readFileSync('./demo/bootrom_rp2350.dis', 'utf-8') + fs.readFileSync(`${filename}.dis`);

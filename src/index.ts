@@ -4,7 +4,7 @@ export { GPIOPin, GPIOPinState } from './gpio-pin';
 export { BasePeripheral, Peripheral } from './peripherals/peripheral';
 export { RPI2C, I2CSpeed, I2CMode } from './peripherals/i2c';
 export { RPUSBController } from './peripherals/usb';
-export { RP2040 } from './rp2040';
+export { RP2040, RP2040Options } from './rp2040';
 export { RP2350, CoreArch, RP2350Options } from './rp2350';
 export { USBCDC } from './usb/cdc';
 export {

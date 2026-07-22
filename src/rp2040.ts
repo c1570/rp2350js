@@ -1,5 +1,4 @@
 import { IRPChip } from './rpchip';
-import { IClock } from './clock/clock';
 import { SimulationClock } from './clock/simulation-clock';
 import { CortexM0Core } from './cortex-m0-core';
 import { GPIOPin, FUNCTION_PWM, FUNCTION_SIO, FUNCTION_PIO0, FUNCTION_PIO1 } from './gpio-pin';
@@ -48,6 +47,12 @@ const KB = 1024;
 const MB = 1024 * KB;
 const MHz = 1_000_000;
 
+/** Constructor options for {@link RP2040}. */
+export interface RP2040Options {
+  /** Path to a HEX/UF2 firmware image to load after initial reset. */
+  loadFirmware?: string;
+}
+
 export class RP2040 implements IRPChip {
   readonly bootrom = new Uint32Array(4 * KB);
   readonly sram = new Uint8Array(264 * KB);
@@ -72,6 +77,7 @@ export class RP2040 implements IRPChip {
   }
 
   /* Clocks */
+  readonly clock = new SimulationClock();
   clkSys = 125 * MHz;
   clkPeri = 125 * MHz;
 
@@ -169,7 +175,7 @@ export class RP2040 implements IRPChip {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars, @typescript-eslint/no-empty-function
   public onTrace = (coreNumber: number, pc: number, tag: string) => {};
 
-  constructor(readonly clock: IClock = new SimulationClock()) {
+  constructor(options: RP2040Options = {}) {
     // Auto-load the bundled RP2040 B1 bootrom and erased-flash state before
     // the initial reset. Subsequent reset() calls preserve flash contents
     // (matching hardware); callers can override via `loadBootrom(...)`.
@@ -179,6 +185,10 @@ export class RP2040 implements IRPChip {
     this.reset();
     this.core[0].otherCore = this.core[1];
     this.core[1].otherCore = this.core[0];
+
+    if (options.loadFirmware) {
+      this.loadFirmware(options.loadFirmware);
+    }
   }
 
   currentCore = 0;

@@ -12,7 +12,7 @@ const SRAM = 0x20000000;
 
 describe('Cortex-M33 exception entry/return + NVIC', () => {
   it('external IRQ handler runs and returns to main code', () => {
-    const chip = new RP2350(false, undefined, { coreArch: 'arm' });
+    const chip = new RP2350({ coreArch: 'arm' });
     const core = chip.armCore0;
 
     // Set up vector table at SRAM. Vector for IRQ 0 (vector 16) at SRAM + 64.
@@ -80,7 +80,7 @@ describe('Cortex-M33 exception entry/return + NVIC', () => {
   // means SP-before-the-pop != the frame address, so this specifically
   // requires more than one register in the pop list to catch the bug.
   it('handler using push{r4,lr}/pop{r4,pc} (not bx lr) still returns correctly', () => {
-    const chip = new RP2350(false, undefined, { coreArch: 'arm' });
+    const chip = new RP2350({ coreArch: 'arm' });
     const core = chip.armCore0;
 
     const VTOR = SRAM;
@@ -125,7 +125,7 @@ describe('Cortex-M33 exception entry/return + NVIC', () => {
   });
 
   it('PENDSV can be pended and runs at low priority', () => {
-    const chip = new RP2350(false, undefined, { coreArch: 'arm' });
+    const chip = new RP2350({ coreArch: 'arm' });
     const core = chip.armCore0;
 
     const VTOR = SRAM;
@@ -168,7 +168,7 @@ describe('Cortex-M33 exception entry/return + NVIC', () => {
   // ---- Exception entry/return edge cases ----
   describe('Exception entry/return edge cases', () => {
     it('sync-fault stacks the faulting 32-bit instruction address (not PC-2)', () => {
-      const chip = new RP2350(false, undefined, { coreArch: 'arm' });
+      const chip = new RP2350({ coreArch: 'arm' });
       const core = chip.armCore0;
       chip.currentCore = 0;
       const VTOR = SRAM;
@@ -195,7 +195,7 @@ describe('Cortex-M33 exception entry/return + NVIC', () => {
     });
 
     it('IT state + pad bit restored from stacked xPSR on exception return', () => {
-      const chip = new RP2350(false, undefined, { coreArch: 'arm' });
+      const chip = new RP2350({ coreArch: 'arm' });
       const core = chip.armCore0;
       chip.currentCore = 0;
       const VTOR = SRAM;
@@ -235,7 +235,7 @@ describe('Cortex-M33 exception entry/return + NVIC', () => {
     });
 
     it('BASEPRI masks a lower-priority external IRQ (unified &0xE0 scale)', () => {
-      const chip = new RP2350(false, undefined, { coreArch: 'arm' });
+      const chip = new RP2350({ coreArch: 'arm' });
       const core = chip.armCore0;
       chip.currentCore = 0;
       const VTOR = SRAM;
@@ -279,7 +279,7 @@ describe('Cortex-M33 exception entry/return + NVIC', () => {
       // With SHPR2 = 0x20000000, SVC priority byte = 0x20, &0xE0 = 0x20.
       // An external IRQ at priority 0x40 (&0xE0 = 0x40) is LOWER priority than
       // SVC (0x20 < 0x40, and lower numerical = higher urgency).
-      const chip = new RP2350(false, undefined, { coreArch: 'arm' });
+      const chip = new RP2350({ coreArch: 'arm' });
       const st = chip.ppb!.coreState[0];
       st.shpr2 = 0x20000000; // SVC priority byte = 0x20
       st.nvicPriority[0] = 4; // IRQ 0 priority = 4 (byte 0x40, &0xE0 = 0x40)
@@ -291,7 +291,7 @@ describe('Cortex-M33 exception entry/return + NVIC', () => {
       // FPCA=0 before the IRQ. Entry doesn't push an FP frame. On Thread-mode
       // return with a non-FP EXC_RETURN (bit 4 = 1 → no FP frame), FPCA must
       // stay 0.
-      const chip = new RP2350(false, undefined, { coreArch: 'arm' });
+      const chip = new RP2350({ coreArch: 'arm' });
       const core = chip.armCore0;
       chip.currentCore = 0;
       const VTOR = SRAM;
@@ -323,7 +323,7 @@ describe('Cortex-M33 exception entry/return + NVIC', () => {
       // With FPCA=1, entry pushes an FP frame and sets fpcar. If fpcar is then
       // overwritten (simulating a nested entry), the return must still read
       // from the correct frame SP (frameSp + 0x20), not the stale fpcar.
-      const chip = new RP2350(false, undefined, { coreArch: 'arm' });
+      const chip = new RP2350({ coreArch: 'arm' });
       const core = chip.armCore0;
       chip.currentCore = 0;
       const VTOR = SRAM;
@@ -358,7 +358,7 @@ describe('Cortex-M33 exception entry/return + NVIC', () => {
     });
 
     it('SysTick CVR write clears COUNTFLAG', () => {
-      const chip = new RP2350(false, undefined, { coreArch: 'arm' });
+      const chip = new RP2350({ coreArch: 'arm' });
       chip.currentCore = 0;
       const st = chip.ppb!.coreState[0];
       // Set COUNTFLAG as if SysTick had counted to 0.

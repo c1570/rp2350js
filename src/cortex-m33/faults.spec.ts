@@ -5,7 +5,7 @@ const SRAM = 0x20000000;
 const EXC_HARDFAULT = 3;
 
 function setup() {
-  const chip = new RP2350(false, undefined, { coreArch: 'arm' });
+  const chip = new RP2350({ coreArch: 'arm' });
   const core = chip.armCore0;
   chip.currentCore = 0;
   chip.writeUint32(0xe000ed08, SRAM); // VTOR
@@ -133,7 +133,7 @@ describe('Cortex-M33 FP lazy stacking', () => {
 
 describe('Cortex-M33 MPU/SAU registers', () => {
   it('MPU region registers round-trip', () => {
-    const chip = new RP2350(false, undefined, { coreArch: 'arm' });
+    const chip = new RP2350({ coreArch: 'arm' });
     chip.currentCore = 0;
     // Select region 3.
     chip.writeUint32(0xe000ed98, 3); // MPU_RNR
@@ -148,7 +148,7 @@ describe('Cortex-M33 MPU/SAU registers', () => {
   });
 
   it('SAU region registers round-trip', () => {
-    const chip = new RP2350(false, undefined, { coreArch: 'arm' });
+    const chip = new RP2350({ coreArch: 'arm' });
     chip.currentCore = 0;
     chip.writeUint32(0xe000edd8, 2); // SAU_RNR
     chip.writeUint32(0xe000eddc, 0x10000000); // SAU_RBAR
@@ -158,7 +158,7 @@ describe('Cortex-M33 MPU/SAU registers', () => {
   });
 
   it('SFSR is W1C', () => {
-    const chip = new RP2350(false, undefined, { coreArch: 'arm' });
+    const chip = new RP2350({ coreArch: 'arm' });
     chip.currentCore = 0;
     const st = chip.ppb!.coreState[0];
     st.sfsr = 0xff;
@@ -167,14 +167,14 @@ describe('Cortex-M33 MPU/SAU registers', () => {
   });
 
   it('FPDSCR round-trips', () => {
-    const chip = new RP2350(false, undefined, { coreArch: 'arm' });
+    const chip = new RP2350({ coreArch: 'arm' });
     chip.currentCore = 0;
     chip.writeUint32(0xe000ef3c, 0x08000000);
     expect(chip.readUint32(0xe000ef3c)).toBe(0x08000000);
   });
 
   it('MVFR0 reports FPv5-SP feature bits', () => {
-    const chip = new RP2350(false, undefined, { coreArch: 'arm' });
+    const chip = new RP2350({ coreArch: 'arm' });
     chip.currentCore = 0;
     const mvfr0 = chip.readUint32(0xe000ef40);
     // Should indicate single-precision FP support (not zero).
@@ -204,7 +204,7 @@ describe('Cortex-M33 MPU/SAU registers', () => {
       // The throw-on-unimplemented guard must NOT swallow synchronous faults that
       // are already pending (NOCP). VADD with CP10 disabled sets pendingFault
       // then returns -1; the UsageFault/HardFault must still be delivered.
-      const chip = new RP2350(false, undefined, { coreArch: 'arm' });
+      const chip = new RP2350({ coreArch: 'arm' });
       const core = chip.armCore0;
       chip.currentCore = 0;
       chip.writeUint32(0xe000ed08, SRAM); // VTOR

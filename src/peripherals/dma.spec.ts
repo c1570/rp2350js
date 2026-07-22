@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { RP2040 } from '..';
-import { MockClock } from '../clock/mock-clock';
 import { bit } from '../utils/bit';
 
 const CH2_WRITE_ADDR = 0x50000084;
@@ -25,8 +24,7 @@ const TREQ_PERMANENT = 0x3f;
 
 describe('DMA', () => {
   it('should support DMA channel chaining', () => {
-    const clock = new MockClock();
-    const cpu = new RP2040(clock);
+    const cpu = new RP2040();
 
     // This test uses DMA to copy 4 chunks of 8-byte data, located in different memory areas, into a single memory area.
     // We use two DMA channels, 2 and 6 (numbers are arbitrary).
@@ -77,7 +75,7 @@ describe('DMA', () => {
     expect(cpu.readUint32(CH6_CTRL_TRIG) & BUSY).toEqual(BUSY);
 
     // Now the DMA transfer should be running. Skip some clock cycles, allowing it to finish:
-    clock.advance(32);
+    cpu.clock.tick(32 * 1000);
 
     // Check that the transfer has indeed completed
     expect(cpu.readUint32(CH2_AL3_READ_ADDR_TRIG)).toEqual(0);

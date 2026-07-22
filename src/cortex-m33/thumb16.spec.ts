@@ -14,7 +14,7 @@ const SRAM = 0x20000000;
 
 /** Helper: build a chip, set core0 PC, optionally pre-load SRAM. */
 function setup(pc: number = SRAM): { chip: RP2350; core: CortexM33Core } {
-  const chip = new RP2350(false, undefined, { coreArch: 'arm' });
+  const chip = new RP2350({ coreArch: 'arm' });
   const core = chip.armCore0;
   core.PC = pc;
   return { chip, core };

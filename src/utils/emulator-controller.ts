@@ -264,7 +264,7 @@ export class EmulatorController {
   private createChip(): RP2350 {
     // RP2350's constructor auto-loads the bundled A2 bootrom, so the chip
     // is ready to boot the same way real silicon does.
-    const chip = new RP2350(false, undefined, { coreArch: this.fwArch });
+    const chip = new RP2350({ coreArch: this.fwArch });
     chip.onTrace = (core, pc, tag) => {
       this.traces.push({
         tag,

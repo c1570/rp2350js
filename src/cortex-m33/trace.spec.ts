@@ -30,7 +30,7 @@ function writeMagicTag(chip: RP2350, addr: number, tag: string) {
 
 describe('Cortex-M33 profiler trace magic', () => {
   test('B (unconditional T2) fires onTrace with the tag and the B address', () => {
-    const chip = new RP2350(false, undefined, { coreArch: 'arm' });
+    const chip = new RP2350({ coreArch: 'arm' });
     const core = chip.armCore0;
 
     // b +10  ->  0xe003  (imm11 field = 3, byte offset = 6, target = pc+10)
@@ -51,7 +51,7 @@ describe('Cortex-M33 profiler trace magic', () => {
   });
 
   test('B without the marker does not fire onTrace', () => {
-    const chip = new RP2350(false, undefined, { coreArch: 'arm' });
+    const chip = new RP2350({ coreArch: 'arm' });
     const core = chip.armCore0;
 
     // b +10 with zeros (not 0xabcd/0xffff) after it.
