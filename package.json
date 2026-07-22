@@ -36,26 +36,32 @@
     "rp2_emu": "dist/cjs/rp2-emu-cli/rp2-emu.js"
   },
   "engines": {
-    "node": ">=16.0.0"
+    "node": ">=18.0.0"
   },
+  "sideEffects": false,
   "exports": {
     ".": {
+      "types": "./dist/cjs/index.d.ts",
       "import": "./dist/esm/index.js",
       "require": "./dist/cjs/index.js"
     },
     "./gdb-tcp-server": {
+      "types": "./dist/cjs/gdb/gdb-tcp-server.d.ts",
       "import": "./dist/esm/gdb/gdb-tcp-server.js",
       "require": "./dist/cjs/gdb/gdb-tcp-server.js"
     },
     "./emulator-controller": {
+      "types": "./dist/cjs/utils/emulator-controller.d.ts",
       "import": "./dist/esm/utils/emulator-controller.js",
       "require": "./dist/cjs/utils/emulator-controller.js"
     },
     "./mcp-server": {
+      "types": "./dist/cjs/mcp/mcp-server.d.ts",
       "import": "./dist/esm/mcp/mcp-server.js",
       "require": "./dist/cjs/mcp/mcp-server.js"
     },
     "./bootroms": {
+      "types": "./dist/cjs/bootroms/index.d.ts",
       "import": "./dist/esm/bootroms/index.js",
       "require": "./dist/cjs/bootroms/index.js"
     }
@@ -63,7 +69,7 @@
   "scripts": {
     "build": "rimraf dist && tsc && tsc -p tsconfig.esm.json && node build-scripts/fix-esm-extensions.js && node build-scripts/dist-package-json",
     "prepublishOnly": "npm run build",
-    "prepare": "husky install",
+    "prepare": "husky install || exit 0",
     "format:check": "prettier --check **/*.{ts,js} !**/dist/** !**/node_modules/**",
     "lint": "eslint . --ext .ts",
     "start:demo": "ts-node demo/emulator-run.ts",
@@ -79,10 +85,12 @@
     "bin:dev": "ts-node src/rp2-emu-cli/rp2-emu.ts"
   },
   "devDependencies": {
+    "@skyra/gifenc": "^1.0.1",
     "@types/minimist": "^1.2.2",
-    "@types/node": "^14.14.22",
+    "@types/node": "^18.19.0",
     "@typescript-eslint/eslint-plugin": "^4.22.1",
     "@typescript-eslint/parser": "^4.22.1",
+    "canvas": "^3.2.0",
     "eslint": "^7.26.0",
     "husky": "^8.0.0",
     "lint-staged": "^11.0.0",
@@ -92,7 +100,6 @@
     "ts-node": "^10.0.1",
     "ts-node-dev": "^1.1.8",
     "typescript": "^5.9.3",
-    "uf2": "^1.0.0",
     "vitest": "^0.34.5"
   },
   "lint-staged": {
@@ -106,8 +113,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "@skyra/gifenc": "^1.0.1",
-    "canvas": "^3.2.0",
+    "uf2": "^2.0.0",
     "zod": "^4.4.3"
   }
 }
