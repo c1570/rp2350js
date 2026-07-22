@@ -3,7 +3,8 @@ import minimist from 'minimist';
 import { GPIOPinState, Simulator } from '../src';
 import { ConsoleLogger, LogLevel } from '../src/utils/logging';
 import { bootromB1 } from '../src/bootroms';
-import { loadUF2, loadMicropythonFlashImage } from '../demo/load-flash';
+import { loadUF2 } from '../src/utils/load-uf2';
+import { loadMicropythonFlashImage } from '../demo/load-flash';
 
 const args = minimist(process.argv.slice(2));
 

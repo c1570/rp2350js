@@ -27,5 +27,3 @@ export function loadMicropythonFlashImage(filename: string, rp2040: IRPChip) {
 export function loadCircuitpythonFlashImage(filename: string, rp2040: IRPChip) {
   loadFlashImage(filename, rp2040, CIRCUITPYTHON_FS_FLASH_START, CIRCUITPYTHON_FS_BLOCKSIZE);
 }
-
-export { loadUF2 } from '../src/utils/load-uf2';

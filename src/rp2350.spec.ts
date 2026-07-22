@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { BasePeripheral } from './peripherals/peripheral';
 import { RP2350 } from './rp2350';
 import { bootrom_rp2350_A2 } from './bootroms';
-import { loadHex } from '../demo/intelhex';
+import { loadHex } from './utils/load-hex';
 import { GPIOPinState } from '../src/gpio-pin';
 import { IRQ } from './irq_rp2350';
 
