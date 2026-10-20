@@ -1361,29 +1361,25 @@ function dispatchMultiply(core: CortexM33Core, hw0: number, hw1: number): number
   }
   if (op === 0b1100) {
     // SMLAL: signed Rn*Rm + RdHi:RdLo → RdHi:RdLo
-    const acc = (regs.r[rdHi] >>> 0) * 0x100000000 + (regs.r[rdLo] >>> 0);
+    const accLo = regs.r[rdLo] >>> 0;
+    const accHi = regs.r[rdHi] >>> 0;
     mul64Signed(regs.r[rn], regs.r[rm], core.mul64Scratch);
-    const hi = core.mul64Scratch.hi;
-    const lo = core.mul64Scratch.lo;
-    const product = (hi >>> 0) * 0x100000000 + (lo >>> 0);
-    const signedAcc = acc > 0x7fffffffffffffff ? acc - 0x10000000000000000 : acc;
-    const signedProd = product > 0x7fffffffffffffff ? product - 0x10000000000000000 : product;
-    const sum = signedAcc + signedProd;
-    const u64 = sum < 0 ? sum + 0x10000000000000000 : sum;
-    regs.r[rdLo] = u64 & 0xffffffff;
-    regs.r[rdHi] = (u64 / 0x100000000) & 0xffffffff;
+    // Never combine the words into a JS Number: 64-bit values lose low bits.
+    const lo = ((core.mul64Scratch.lo >>> 0) + accLo) >>> 0;
+    const carry = lo < accLo ? 1 : 0;
+    regs.r[rdLo] = lo;
+    regs.r[rdHi] = ((core.mul64Scratch.hi >>> 0) + accHi + carry) >>> 0;
     return 2;
   }
   if (op === 0b1110) {
     // UMLAL: unsigned Rn*Rm + RdHi:RdLo → RdHi:RdLo
-    const acc = (regs.r[rdHi] >>> 0) * 0x100000000 + (regs.r[rdLo] >>> 0);
+    const accLo = regs.r[rdLo] >>> 0;
+    const accHi = regs.r[rdHi] >>> 0;
     mul64(regs.r[rn] >>> 0, regs.r[rm] >>> 0, core.mul64Scratch);
-    const hi = core.mul64Scratch.hi;
-    const lo = core.mul64Scratch.lo;
-    const product = (hi >>> 0) * 0x100000000 + (lo >>> 0);
-    const sum = acc + product;
-    regs.r[rdLo] = sum & 0xffffffff;
-    regs.r[rdHi] = (sum / 0x100000000) & 0xffffffff;
+    const lo = ((core.mul64Scratch.lo >>> 0) + accLo) >>> 0;
+    const carry = lo < accLo ? 1 : 0;
+    regs.r[rdLo] = lo;
+    regs.r[rdHi] = ((core.mul64Scratch.hi >>> 0) + accHi + carry) >>> 0;
     return 2;
   }
   return -1;

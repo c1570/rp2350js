@@ -190,6 +190,28 @@ describe('Cortex-M33 Thumb-32 instructions', () => {
       expect(r.r0).toBe(11); // 5 + 6
       expect(r.r1).toBe(0);
     });
+    it.each([
+      ['SMLAL', 0xfbc2, true],
+      ['UMLAL', 0xfbe2, false],
+    ] as const)('%s retains all accumulator bits and wraps at 64 bits', (_name, instruction, signed) => {
+      const cases = [
+        [0xffffffff, 0xffffffff, 1, 0],
+        [1, 1, 0xffffffff, 0xffffffff],
+        [0xffffffff, 1, 0, 0],
+        [0x80000000, 2, 3, 0],
+        [0x7fffffff, 0x7fffffff, 0x12345678, 0xabcdef01],
+        [2, 3, 0xfffffffe, 0x80000000],
+      ];
+      for (const [a, b, accLo, accHi] of cases) {
+        const aValue = signed ? BigInt.asIntN(32, BigInt(a)) : BigInt(a);
+        const bValue = signed ? BigInt.asIntN(32, BigInt(b)) : BigInt(b);
+        const accumulator = (BigInt(accHi) << 32n) | BigInt(accLo);
+        const expected = BigInt.asUintN(64, accumulator + aValue * bValue);
+        const result = step32(instruction, 0x0103, { r0: accLo, r1: accHi, r2: a, r3: b });
+        expect(result.r0 >>> 0).toBe(Number(expected & 0xffffffffn));
+        expect(result.r1 >>> 0).toBe(Number(expected >> 32n));
+      }
+    });
     // SMMLA family (DSP extension): high-word signed multiply. Encoding
     //   SMMLA:  0xfb5n | Ra Rd 0000 Rm   (hw1[15:12]=Ra, hw1[11:8]=Rd)
     //   SMMLAR: ...                    Rm (hw1[4]=R, rounding bit)

@@ -97,6 +97,18 @@ Notes
 - Xh3irq [CSR write bypass](https://github.com/Wren6991/Hazard3/blob/787da131a1e982543d9b308c1c25a09160e71a65/hdl/hazard3_core.v#L921)
 - Hazard3 [rv_opcodes.vh](https://github.com/Wren6991/Hazard3/blob/stable/hdl/rv_opcodes.vh) and [hazard3_decode.v](https://github.com/Wren6991/Hazard3/blob/787da131a1e982543d9b308c1c25a09160e71a65/hdl/hazard3_decode.v#L305)
 
+## Cortex-M33 long multiply-accumulate precision
+
+`SMLAL` and `UMLAL` preserve all 64 result bits by keeping the product and
+accumulator as separate 32-bit words and propagating the low-word carry.
+JavaScript numbers cannot represent every 64-bit integer: combining the words
+into one number can discard low bits before the addition. For example,
+`0xffffffff * 0xffffffff + 1` must produce `0xfffffffe00000002`, not
+`0xfffffffe00000000`.
+
+The Thumb-32 regression suite covers signed and unsigned products, low-word
+carry propagation, and wraparound modulo 2^64.
+
 ## License
 
 - Released under the MIT licence.
