@@ -188,6 +188,12 @@ export const TOOL_SUBCOMMANDS: Record<string, ToolDef> = {
     tool: 'dump_gpio',
     help: 'Dump all GPIO pin states (function, in/out values, pullups).',
   },
+  drive_gpio: {
+    tool: 'drive_gpio',
+    help: 'Drive a GPIO input level (virtual wire): set external input 0/1 on a pin.',
+    args: { pin: 'pin', value: 'value' },
+    required: ['pin', 'value'],
+  },
   load_firmware: {
     tool: 'load_firmware',
     help: 'Load an Intel HEX (.hex) or UF2 (.uf2) firmware file.',

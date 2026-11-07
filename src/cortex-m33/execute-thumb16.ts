@@ -187,7 +187,7 @@ export function executeThumb16(core: CortexM33Core, opcodePC: number, opcode: nu
     // ADD (register): 01000100 Rm(3) DN(1) Rdn(3)
     const Rm = (opcode >> 3) & 0xf;
     const Rdn = ((opcode & 0x80) >> 4) | (opcode & 0x7);
-    const leftValue = Rdn === pcRegister ? regs.pc + 2 : regs.r[Rdn];
+    const leftValue = Rdn === pcRegister ? ((regs.pc + 2) & ~3) >>> 0 : regs.r[Rdn]; // Align(PC,4)
     const rightValue = regs.r[Rm];
     const result = leftValue + rightValue;
     if (Rdn !== spRegister && Rdn !== pcRegister) {
@@ -586,7 +586,7 @@ export function executeThumb16(core: CortexM33Core, opcodePC: number, opcode: nu
   else if (opcode >> 8 === 0b01000110) {
     const Rm = (opcode >> 3) & 0xf;
     const Rd = ((opcode >> 4) & 0x8) | (opcode & 0x7);
-    const value = Rm === pcRegister ? regs.pc + 2 : regs.r[Rm];
+    const value = Rm === pcRegister ? ((regs.pc + 2) & ~3) >>> 0 : regs.r[Rm]; // Align(PC,4)
     if (Rd === pcRegister) {
       // MOV PC must handle EXC_RETURN (same as BX/POP) per ARMv8-M §B1.5.2.
       bxWritePC(core, value >>> 0);
