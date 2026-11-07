@@ -43,6 +43,8 @@ export class RPXIPQMI<ChipType extends IRPChip = IRPChip>
       return true;
     }
     if (this.ioQspi === undefined) {
+      // SAFETY: RP2350/RP2040 both carry a `peripherals` index table; the cast
+      // only reads it (never writes) and the instanceof narrows before use.
       const p = (this.rpchip as unknown as { peripherals?: Record<number, unknown> })
         .peripherals?.[0x40030];
       this.ioQspi = p instanceof RPIOQSPI ? (p as RPIOQSPI<ChipType>) : null;
@@ -61,7 +63,8 @@ export class RPXIPQMI<ChipType extends IRPChip = IRPChip>
   private addrBytes: number[] = [];
   private addr = 0;
   private progBytes: number[] = [];
-  private readKind: 'none' | 'status' | 'data' = 'none';
+  private readKind: 'none' | 'status' | 'rdid' = 'none';
+  private rdidIdx = 0;
   private readAddr = 0;
   private dummySkip = 0;
   private wel = false;
@@ -127,19 +130,33 @@ export class RPXIPQMI<ChipType extends IRPChip = IRPChip>
     this.csActive = true;
   }
 
+  // Fetch-decode caches key off flash contents but XIP writes bypass
+  // writeUint*, so erase/program must invalidate explicitly or executing
+  // newly programmed code runs stale decodes. Guarded: IRPChip leaves it
+  // optional for chips without a decode cache (plain field access, cts2c-safe).
+  private invalidateFlash(base: number, len: number) {
+    if (this.rpchip.invalidateFlashDecode) {
+      this.rpchip.invalidateFlashDecode(base, len);
+    }
+  }
+
   private endTransaction() {
     this.csActive = false;
     if (this.cmd === 0x20 && this.addrBytes.length === 3) {
       // SECTOR_ERASE (4KiB, address-aligned)
       const base = this.addr & ~0xfff;
       this.rpchip.flash.fill(0xff, base, base + 0x1000);
+      this.invalidateFlash(base, 0x1000);
     } else if (this.cmd === 0x02 && this.addrBytes.length === 3) {
       // PAGE_PROGRAM: NOR flash clears bits only; wraps within the page.
+      // (Full 256B pages already applied + invalidated incrementally in
+      // spiByte; this covers the partial-page tail at CS deassert.)
       const pageBase = this.addr & ~0xff;
       for (let i = 0; i < this.progBytes.length; i++) {
         const at = pageBase + ((this.addr + i) & 0xff);
         this.rpchip.flash[at] &= this.progBytes[i];
       }
+      this.invalidateFlash(pageBase, 0x100);
     }
     this.cmd = null;
     this.readKind = 'none';
@@ -181,11 +198,14 @@ export class RPXIPQMI<ChipType extends IRPChip = IRPChip>
         case 0x05: // RDSR
           this.readKind = 'status';
           break;
+        case 0x9f: // RDID (W25Q128 JEDEC ID: EF 40 18, repeating)
+          this.readKind = 'rdid';
+          this.rdidIdx = 0;
+          break;
         case 0x20: // SECTOR_ERASE
         case 0x02: // PAGE_PROGRAM
         case 0x03: // READ
         case 0x0b: // FAST_READ (one dummy byte after address)
-        case 0x9f: // RDID (clock out zeros, as before: no push)
           if (byte === 0x0b) {
             this.dummySkip = 1;
           }
@@ -209,12 +229,21 @@ export class RPXIPQMI<ChipType extends IRPChip = IRPChip>
       }
       return;
     }
+    if (this.readKind === 'rdid') {
+      // W25Q128 JEDEC ID, repeating. Index advances on every clock (pushed
+      // or not) so NOPUSH clocks stay in step, mirroring the READ path.
+      const slot = this.rdidIdx % 3;
+      this.rdidIdx++;
+      if (!nopush) {
+        this.pushRx(slot === 0 ? 0xef : slot === 1 ? 0x40 : 0x18);
+      }
+      return;
+    }
     if (this.cmd === 0x03 || this.cmd === 0x0b) {
       if (this.addrBytes.length < 3) {
         this.addrBytes.push(byte);
         if (this.addrBytes.length === 3) {
-          this.readAddr =
-            (this.addrBytes[0] << 16) | (this.addrBytes[1] << 8) | this.addrBytes[2];
+          this.readAddr = (this.addrBytes[0] << 16) | (this.addrBytes[1] << 8) | this.addrBytes[2];
         }
       } else if (this.dummySkip > 0) {
         this.dummySkip--;
@@ -230,12 +259,12 @@ export class RPXIPQMI<ChipType extends IRPChip = IRPChip>
       if (this.addrBytes.length < 3) {
         this.addrBytes.push(byte);
         if (this.addrBytes.length === 3) {
-          this.addr =
-            (this.addrBytes[0] << 16) | (this.addrBytes[1] << 8) | this.addrBytes[2];
+          this.addr = (this.addrBytes[0] << 16) | (this.addrBytes[1] << 8) | this.addrBytes[2];
           if (this.cmd === 0x20) {
             // SECTOR_ERASE (4KiB, address-aligned)
             const base = this.addr & ~0xfff;
             this.rpchip.flash.fill(0xff, base, base + 0x1000);
+            this.invalidateFlash(base, 0x1000);
             this.cmd = null;
           }
         }
@@ -249,6 +278,7 @@ export class RPXIPQMI<ChipType extends IRPChip = IRPChip>
         this.rpchip.flash[at] &= byte;
         this.progBytes.push(byte);
         if (this.progBytes.length >= 256) {
+          this.invalidateFlash(pageBase, 0x100);
           this.cmd = null;
         }
       }

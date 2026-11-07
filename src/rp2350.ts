@@ -508,6 +508,21 @@ export class RP2350 implements IRPChip {
     this.flashDecode.fill(0);
   }
 
+  /** Drops cached flash decodes covering a flash byte range (offset, len).
+   * Called by the QMI direct-mode flash model after erase/program change
+   * chip.flash behind the caches' back (XIP writes bypass writeUint*).
+   * Mirrors invalidateSramDecode, including the preceding-halfword overlap. */
+  invalidateFlashDecode(address: Uint32, len: number) {
+    const startIdx = (address & (FLASH_SIZE - 1)) >>> 1;
+    const endIdx = ((address + len - 1) & (FLASH_SIZE - 1)) >>> 1;
+    // Entries are keyed on an instruction's FIRST halfword, so a 32-bit instruction
+    // starting one halfword before the range overlaps it and must go too.
+    if (startIdx > 0) this.flashDecode[startIdx - 1] = 0;
+    for (let i = startIdx; i <= endIdx; i++) {
+      this.flashDecode[i] = 0;
+    }
+  }
+
   writeUint32(address: Uint32, value: Uint32) {
     address = address >>> 0;
     if (address & 0x3) {

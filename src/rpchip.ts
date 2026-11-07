@@ -32,6 +32,13 @@ export interface IRPChip {
   readonly flash: Uint8Array;
   readonly sram: Uint8Array;
 
+  /**
+   * Drop cached instruction decodes covering a flash byte range (offsets
+   * into {@link flash}). Optional: chips without a fetch-decode cache omit
+   * it and callers must guard. RP2350 implements it (RISC-V decode cache).
+   */
+  invalidateFlashDecode?(address: number, len: number): void;
+
   readonly usbDPRAM: Uint8Array;
   readonly usbDPRAMView: DataView;
 
