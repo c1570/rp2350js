@@ -62,6 +62,8 @@ export const TOOL_DESCRIPTIONS: Record<string, string> = {
   dump_pio:
     'Dump PIO state machine registers (pc, x, y, ISR, OSR, FIFOs), pin routing (in_base/out_base/set_base/sideset_base/jmp_pin, with absolute chip-pin numbers, counts, wrap), and shift direction (left/right) per SM. Includes per-PIO GPIOBASE.',
   dump_gpio: 'Dump all GPIO pin states (function, in/out values, pullups)',
+  drive_gpio:
+    'Drive a GPIO input level (virtual wire): set the external input value (0/1) on a pin, e.g. to feed a PIO UART RX from another emulated instance. Takes effect immediately; PIO/SIO see it on their next sample.',
   load_firmware:
     'Load an Intel HEX (.hex) or UF2 (.uf2) firmware file. Re-instantiates the chip with bootrom + firmware. HEX files auto-detect SRAM vs flash from the address map; UF2 files auto-detect from the first block address. Optionally attach a .dis disassembly file for source context in run/single_step output.',
   reset:
@@ -346,6 +348,8 @@ export class EmulatorController {
         return this.dumpPio(args.instance != null ? parseUint(args.instance) : undefined);
       case 'dump_gpio':
         return this.dumpGpio();
+      case 'drive_gpio':
+        return this.driveGpio(parseUint(args.pin), parseUint(args.value));
       case 'load_firmware':
         if (args.arch === 'arm' || args.arch === 'riscv') {
           this.fwArch = args.arch;
@@ -797,5 +801,16 @@ export class EmulatorController {
 
   private dumpGpio() {
     return this.text(formatGpioDump(this.chip) + '\n');
+  }
+
+  private driveGpio(pin: number, value: number) {
+    if (!Number.isInteger(pin) || pin < 0 || pin >= this.chip.gpio.length) {
+      throw new Error(`drive_gpio: pin ${pin} out of range 0..${this.chip.gpio.length - 1}`);
+    }
+    if (value !== 0 && value !== 1) {
+      throw new Error(`drive_gpio: value must be 0 or 1, got ${value}`);
+    }
+    this.chip.gpio[pin].setInputValue(value === 1);
+    return this.json({ pin, value });
   }
 }

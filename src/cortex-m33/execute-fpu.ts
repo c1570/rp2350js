@@ -289,9 +289,11 @@ export function fpuExecute(core: CortexM33Core, hw0: number, hw1: number): numbe
     return 1;
   }
 
-  // VLDR/VSTR (single register). Encoding: hw0 = 1110_1101_P_U_D_W_L_Rn with
-  // P=1, W=0 (bits[15:8]=0xED, bit5=0). U=hw0[7] selects add/subtract, D=hw0[6]
-  // is part of Sd, L=hw0[4] is load/store. (VPUSH has W=1 so is excluded here.)
+  // VLDR/VSTR (single or double register). Encoding: hw0 = 1110_1101_P_U_D_W_L_Rn
+  // with P=1, W=0 (bits[15:8]=0xED, bit5=0). U=hw0[7] selects add/subtract,
+  // D=hw0[6] is part of Sd/Dd, L=hw0[4] is load/store. (VPUSH has W=1 so is
+  // excluded here.) coproc (hw1[11:8]) 0xA = single (one word), 0xB = double
+  // (two words; M-profile D16 fixes D=0 so getSd() already equals 2*Dd).
   if ((hw0 & 0xff00) === 0xed00 && (hw0 & 0x20) === 0) {
     const isLoad = (hw0 & 0x10) !== 0; // L bit
     const u = (hw0 & 0x80) !== 0; // U bit (add/subtract), NOT a low Rn bit
@@ -304,8 +306,14 @@ export function fpuExecute(core: CortexM33Core, hw0: number, hw1: number): numbe
     const addr = (u ? base + offset : base - offset) >>> 0;
     if (isLoad) {
       regs.s[sd] = bitsToFloat(core.chip.readUint32(addr));
+      if (coproc === 11) {
+        regs.s[sd + 1] = bitsToFloat(core.chip.readUint32((addr + 4) >>> 0));
+      }
     } else {
       core.chip.writeUint32(addr, floatToBits(regs.s[sd]));
+      if (coproc === 11) {
+        core.chip.writeUint32((addr + 4) >>> 0, floatToBits(regs.s[sd + 1]));
+      }
     }
     return 2;
   }

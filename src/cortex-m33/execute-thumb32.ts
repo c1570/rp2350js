@@ -539,7 +539,7 @@ function dispatchDpModifiedImm(core: CortexM33Core, hw0: number, hw1: number): n
   thumbExpandImmC(imm12, regs.C, core.immCarryScratch);
   const imm = core.immCarryScratch.value;
   const teCarry = core.immCarryScratch.carryOut;
-  const rnVal = rn === 15 ? regs.pc : regs.r[rn];
+  const rnVal = rn === 15 ? (regs.pc & ~3) >>> 0 : regs.r[rn]; // PC read aligns, ARMv8-M
 
   // Logical ops set N/Z from the result and C from the ThumbExpandImm carry-out
   // when S=1.
@@ -625,14 +625,14 @@ function dispatchDpPlainImm(core: CortexM33Core, hw0: number, hw1: number): numb
   // ADDW: opField = 00000 (0)
   if (opField === 0b00000) {
     const imm12 = (i << 11) | (imm3 << 8) | imm8;
-    const base = rn === 15 ? regs.pc : regs.r[rn];
+    const base = rn === 15 ? (regs.pc & ~3) >>> 0 : regs.r[rn]; // Align(PC,4)
     regs.r[rd] = (base + imm12) >>> 0;
     return 1;
   }
   // SUBW: opField = 01010 (10)
   if (opField === 0b01010) {
     const imm12 = (i << 11) | (imm3 << 8) | imm8;
-    const base = rn === 15 ? regs.pc : regs.r[rn];
+    const base = rn === 15 ? (regs.pc & ~3) >>> 0 : regs.r[rn]; // Align(PC,4)
     regs.r[rd] = (base - imm12) >>> 0;
     return 1;
   }
@@ -790,7 +790,7 @@ function dispatchDpShiftedReg(core: CortexM33Core, hw0: number, hw1: number): nu
   const imm2 = (hw1 >>> 6) & 0x3;
   const shiftType = (hw1 >>> 4) & 0x3;
   const shiftAmt = (imm3 << 2) | imm2;
-  const rnVal = rn === 15 ? regs.pc : regs.r[rn];
+  const rnVal = rn === 15 ? (regs.pc & ~3) >>> 0 : regs.r[rn]; // PC read aligns, ARMv8-M
   const rmVal = regs.r[rm];
 
   // Apply the immediate-specified barrel shift to Rm, tracking the shifter
