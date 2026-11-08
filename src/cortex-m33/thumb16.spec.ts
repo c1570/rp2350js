@@ -480,4 +480,23 @@ describe('Cortex-M33 Thumb-16 instruction execution', () => {
       expect(core.PC).toBe(SRAM + 0x200);
     });
   });
+
+  describe('PC operand reads as Align(PC,4) (ARMv8-M regression)', () => {
+    // Run at a 2-mod-4 opcode address so the aligned and raw values differ:
+    // Align(opcodePC+4,4) = SRAM+4 vs raw SRAM+6.
+    it('ADD (register) with Rdn=PC aligns the PC operand', () => {
+      const { chip, core } = setup(SRAM + 2);
+      put16(chip, SRAM + 2, 0x448f); // ADD pc, pc, r1 (Rdn=PC form)
+      core.regs.r[1] = 0;
+      core.executeInstruction();
+      expect(core.PC >>> 0).toBe(0x20000004 >>> 0);
+    });
+
+    it('MOV (register) r0, pc aligns the PC operand', () => {
+      const { chip, core } = setup(SRAM + 2);
+      put16(chip, SRAM + 2, 0x4678); // MOV r0, pc
+      core.executeInstruction();
+      expect(core.regs.r[0]).toBe(0x20000004 >>> 0);
+    });
+  });
 });

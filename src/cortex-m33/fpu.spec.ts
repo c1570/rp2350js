@@ -630,4 +630,30 @@ describe('Cortex-M33 FPU (VFPv5-SP)', () => {
       expect(core.regs.s[0]).toBe(Math.fround(0 + a * b));
     });
   });
+
+  describe('VLDR/VSTR double-precision (coproc 0xB transfers two words)', () => {
+    it('VLDR d0 loads both halves', () => {
+      const { chip, core } = setup();
+      chip.writeUint32(SRAM + 0x40, f32ToU32(1.5));
+      chip.writeUint32(SRAM + 0x44, f32ToU32(-2.5));
+      core.regs.r[0] = SRAM + 0x40;
+      put32(chip, SRAM, 0xed90, 0x0b00); // vldr d0, [r0]
+      core.PC = SRAM;
+      core.executeInstruction();
+      expect(core.regs.s[0]).toBeCloseTo(1.5, 6);
+      expect(core.regs.s[1]).toBeCloseTo(-2.5, 6);
+    });
+
+    it('VSTR d1 stores both halves', () => {
+      const { chip, core } = setup();
+      core.regs.r[0] = SRAM + 0x40;
+      core.regs.s[2] = 4.0;
+      core.regs.s[3] = -0.5;
+      put32(chip, SRAM, 0xed80, 0x1b01); // vstr d1, [r0, #4]
+      core.PC = SRAM;
+      core.executeInstruction();
+      expect(chip.readUint32(SRAM + 0x44)).toBe(f32ToU32(4.0));
+      expect(chip.readUint32(SRAM + 0x48)).toBe(f32ToU32(-0.5));
+    });
+  });
 });

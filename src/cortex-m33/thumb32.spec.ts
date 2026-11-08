@@ -1239,4 +1239,22 @@ describe('Cortex-M33 Thumb-32 instructions', () => {
       expect(core.regs.pc >>> 0).toBe((SRAM + 2) >>> 0); // not SRAM+3
     });
   });
+
+  describe('PC operand reads as Align(PC,4) (ARMv8-M regression)', () => {
+    // Run at a 2-mod-4 opcode address so the aligned and raw values differ:
+    // Align(opcodePC+4,4) = SRAM+4 vs raw SRAM+6.
+    it('ADDW r0, pc, #4 aligns the PC operand', () => {
+      const { chip, core } = setup(SRAM + 2);
+      putInsn32(chip, SRAM + 2, 0xf20f, 0x0004); // ADDW r0, pc, #4
+      core.executeInstruction();
+      expect(core.regs.r[0]).toBe(0x20000008 >>> 0);
+    });
+
+    it('RSB r0, pc, #0 aligns the PC operand', () => {
+      const { chip, core } = setup(SRAM + 2);
+      putInsn32(chip, SRAM + 2, 0xf1cf, 0x0000); // RSB r0, pc, #0
+      core.executeInstruction();
+      expect(core.regs.r[0]).toBe(0xdffffffc >>> 0);
+    });
+  });
 });

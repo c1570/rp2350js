@@ -4,7 +4,7 @@ import { BasePeripheral, Peripheral } from './peripheral';
 // IO_QSPI pin block (QSPI flash pads + USB PHY debug pads).
 //
 // Only the pin STATUS/CTRL registers (0x00-0x3C) are modelled, as stored
-// values with hardware reset defaults (STATUS=0, CTRL=0x1F/FUNCSEL=XIP).
+// values with hardware reset defaults (STATUS=0, CTRL=0x1F/FUNCSEL=NULL).
 // This is load-bearing for the bootrom's flash routines: they gate
 // erase/program on the SD1 input-override field and bitbang chip-select
 // through these registers, so the previous all-ones reads made every
@@ -21,7 +21,7 @@ export class RPIOQSPI<ChipType extends IRPChip = IRPChip>
     super(rpchip, name);
     for (let i = 0; i < this.regs.length; i += 2) {
       this.regs[i] = 0x0; // STATUS
-      this.regs[i + 1] = 0x1f; // CTRL (FUNCSEL=XIP, no overrides)
+      this.regs[i + 1] = 0x1f; // CTRL (FUNCSEL=NULL, no overrides)
     }
   }
 
