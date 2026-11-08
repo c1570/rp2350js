@@ -34,10 +34,10 @@ export interface IRPChip {
 
   /**
    * Drop cached instruction decodes covering a flash byte range (offsets
-   * into {@link flash}). Optional: chips without a fetch-decode cache omit
-   * it and callers must guard. RP2350 implements it (RISC-V decode cache).
+   * into {@link flash}). RP2350 implements it (fetch-decode cache); RP2040
+   * has no decode cache and implements it as a no-op.
    */
-  invalidateFlashDecode?(address: number, len: number): void;
+  invalidateFlashDecode(address: number, len: number): void;
 
   readonly usbDPRAM: Uint8Array;
   readonly usbDPRAMView: DataView;

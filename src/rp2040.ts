@@ -58,6 +58,10 @@ export class RP2040 implements IRPChip {
   readonly flash = new Uint8Array(16 * MB);
   readonly flash16 = new Uint16Array(this.flash.buffer);
   readonly flashView = new DataView(this.flash.buffer);
+
+  /** RP2040 has no fetch-decode cache, so flash invalidation is a no-op. */
+  // eslint-disable-next-line @typescript-eslint/no-empty-function
+  invalidateFlashDecode(address: number, len: number) {}
   readonly usbDPRAM = new Uint8Array(4 * KB);
   readonly usbDPRAMView = new DataView(this.usbDPRAM.buffer);
 

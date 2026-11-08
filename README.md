@@ -47,6 +47,7 @@ Xh3bextm (h3.bextmi and h3.bextm)
 all Hazard3 opcodes (including RV32C, RV32Zcb, etc.; simplified reservation for lr.w/sc.w)
 basic Cortex M33 support (runs Micropython)
 somewhat correct instruction cycle counts *
+flash erase/write (RP2350)
 ```
 
 #### Missing
@@ -102,4 +103,4 @@ Notes
 - Released under the MIT licence.
 - Copyright (c) 2023-2026, github.com/c1570 (rp2350js)
 - Copyright (c) 2021-2025, Uri Shaked (original rp2040js project)
-- thanks go to https://github.com/0x4D44/picoem (M33 reference), https://github.com/GhostRoboticsLab/rp2350js_emulator (misc), mingpepe (initial dual core support)
+- thanks go to https://github.com/0x4D44/picoem (M33 reference), mingpepe (initial dual core support)

@@ -240,6 +240,9 @@ export class RP2350 implements IRPChip {
 
   public logger: Logger = new ConsoleLogger(LogLevel.Debug, true);
 
+  private readonly ioQspi = new RPIOQSPI(this, 'IO_QSPI_BASE');
+  private readonly xipQmi = new RPXIPQMI(this, 'XIP_QMI_BASE');
+
   readonly peripherals: { [index: number]: Peripheral } = {
     0x40000: new RP2350SysInfo(this, 'SYSINFO_BASE'),
     0x40008: new RP2350SysCfg(this, 'SYSCFG'),
@@ -247,7 +250,7 @@ export class RP2350 implements IRPChip {
     0x40018: new RP2350PSM(this, 'PSM_BASE'),
     0x40020: new RPReset(this, 'RESETS_BASE'),
     0x40028: new RP2350IO(this, 'IO_BANK0_BASE'),
-    0x40030: new RPIOQSPI(this, 'IO_QSPI_BASE'),
+    0x40030: this.ioQspi,
     0x40038: new RP2350PADS(this, 'PADS_BANK0_BASE', 'bank0'),
     0x40040: new RP2350PADS(this, 'PADS_QSPI_BASE', 'qspi'),
     0x40048: new UnimplementedPeripheral(this, 'XOSC_BASE'),
@@ -267,7 +270,7 @@ export class RP2350 implements IRPChip {
     0x400b8: new RPTimer(this, 'TIMER1_BASE', IRQ2350.TIMER1_IRQ_0),
     0x400c0: new UnimplementedPeripheral(this, 'HSTX_CTRL_BASE'),
     0x400c8: new UnimplementedPeripheral(this, 'XIP_CTRL_BASE'),
-    0x400d0: new RPXIPQMI(this, 'XIP_QMI_BASE'),
+    0x400d0: this.xipQmi,
     0x400d8: this.watchdog,
     0x400dc: this.watchdog,
 
@@ -297,6 +300,7 @@ export class RP2350 implements IRPChip {
   public onTrace = (coreNumber: number, pc: number, tag: string) => {};
 
   constructor(options: RP2350Options = {}) {
+    this.xipQmi.ioQspi = this.ioQspi; // QMI tracks the bootrom's bitbanged SS chip-select
     this.coreArch = options.coreArch ?? 'riscv';
     this.isArmCore = this.coreArch === 'arm';
     if (this.isArmCore) {
