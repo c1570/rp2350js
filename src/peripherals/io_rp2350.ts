@@ -6,7 +6,7 @@ const INTR0 = 0x230;
 const PROC0_INTE0 = 0x248;
 const PROC0_INTF0 = 0x260;
 const PROC0_INTS0 = 0x278;
-const PROC0_INTS5 = 0x280;
+const PROC0_INTS5 = 0x28c;
 
 export class RP2350IO<ChipType extends IRPChip = IRPChip>
   extends BasePeripheral<ChipType>
@@ -25,8 +25,12 @@ export class RP2350IO<ChipType extends IRPChip = IRPChip>
       return isCtrl ? gpio.ctrl : gpio.status;
     }
     if (offset >= INTR0 && offset <= PROC0_INTS5) {
-      const startIndex = ((offset - INTR0) % 0x18) * 8;
-      const register = (offset % 0x18) * 0x18;
+      // INTR0..5, PROC0_INTE0..5, PROC0_INTF0..5 and PROC0_INTS0..5 each
+      // occupy 6 consecutive registers (8 pins per register, 4 bits per pin),
+      // and the four groups repeat every 0x18 bytes.
+      const groupOffset = (offset - INTR0) % 0x18;
+      const startIndex = groupOffset * 2;
+      const register = offset - groupOffset;
       const { gpio } = this.rpchip;
       let result = 0;
       for (let index = 7; index >= 0; index--) {
@@ -66,8 +70,9 @@ export class RP2350IO<ChipType extends IRPChip = IRPChip>
       return;
     }
     if (offset >= INTR0 && offset <= PROC0_INTS5) {
-      const startIndex = ((offset - INTR0) % 0x18) * 8;
-      const register = (offset % 0x18) * 0x18;
+      const groupOffset = (offset - INTR0) % 0x18;
+      const startIndex = groupOffset * 2;
+      const register = offset - groupOffset;
       const { gpio } = this.rpchip;
       for (let index = 0; index < 8; index++) {
         const pin = gpio[index + startIndex];
