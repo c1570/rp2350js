@@ -14,6 +14,11 @@ const DIRECT_CSR_RXEMPTY = 1 << 16;
 const DIRECT_CSR_RXFULL = 1 << 17;
 const DIRECT_CSR_EN = 1 << 0;
 
+/** APS6404L JEDEC-style ID: KGD (known good die) 0x5D, EID density code 0x52 = 8MiB. */
+const PSRAM_MFID = 0x0d; // AP Memory
+const PSRAM_KGD = 0x5d;
+const PSRAM_EID = 0x52;
+
 const QMI_CSR_RW_MASK =
   0xc0000000 | // RXDELAY
   0x3fc00000 | // CLKDIV
@@ -82,6 +87,10 @@ export class RPXIPQMI<ChipType extends IRPChip = IRPChip>
     if (offset === QMI_DIRECT_CSR) {
       // BUSY is never set (we complete transfers synchronously); TX FIFO is
       // always empty (we consume pushes immediately). RX status is live.
+      // Seeing the TX FIFO drained is what makes AUTO_CS1N drop chip-select.
+      if (!this.cs1Explicit()) {
+        this.psramFrameOpen = false;
+      }
       const rxEmpty = this.rxFifoCount === 0;
       return (
         ((this.directCsr & QMI_CSR_RW_MASK) |
@@ -109,6 +118,14 @@ export class RPXIPQMI<ChipType extends IRPChip = IRPChip>
     if (offset === QMI_DIRECT_CSR) {
       this.directCsr = value & QMI_CSR_RW_MASK;
       this.directCsrEn = !!(value & DIRECT_CSR_EN);
+      // A PSRAM frame follows the chip-select line: an ASSERT_CS1N edge (either
+      // way) or leaving CS1 selection ends it, while a CSR write that keeps CS1
+      // asserted (e.g. changing CLKDIV) continues it.
+      const explicit = this.cs1Explicit();
+      if (explicit !== this.cs1WasExplicit || !(explicit || this.cs1Auto())) {
+        this.psramFrameOpen = false;
+      }
+      this.cs1WasExplicit = explicit;
       this.syncCs();
       return;
     }
@@ -178,8 +195,64 @@ export class RPXIPQMI<ChipType extends IRPChip = IRPChip>
     return this.wel ? 0x02 : 0x00;
   }
 
+  /** CS1 held by ASSERT_CS1N. The flash path is bitbanged by the bootrom, so CS1 is
+   * only recognised from the QMI's own ASSERT_CS1N / AUTO_CS1N bits (and only
+   * when no CS0 bit is set). */
+  private cs1Explicit(): boolean {
+    const csr = this.directCsr;
+    return this.directCsrEn && (csr & 0x44) === 0 && (csr & 0x08) !== 0;
+  }
+
+  /** CS1 asserted automatically around TX pushes (AUTO_CS1N). */
+  private cs1Auto(): boolean {
+    const csr = this.directCsr;
+    return this.directCsrEn && (csr & 0x44) === 0 && (csr & 0x80) !== 0 && (csr & 0x08) === 0;
+  }
+
+  // --- APS6404L-style PSRAM model (CS1, direct mode) ---
+  // Only the ID read and the mode/reset commands the SDK-style init code
+  // uses are modelled; array accesses go through the XIP window instead.
+  private psramFrameByte = 0;
+  private psramCmd = 0;
+  /** A frame is the span in which CS1 stays asserted; the PSRAM resets its command
+   * parser when CS1 deasserts. With ASSERT_CS1N that is assert edge to deassert
+   * edge. With AUTO_CS1N hardware drops CS when the TX FIFO drains, modelled as
+   * the CPU observing the drained FIFO (a DIRECT_CSR read), so a run of pushes
+   * is one frame. */
+  private psramFrameOpen = false;
+  private cs1WasExplicit = false;
+
+  private psramByte(byte: number, nopush: boolean) {
+    const idx = this.psramFrameByte++;
+    let reply = 0xff;
+    if (idx === 0) {
+      this.psramCmd = byte;
+    } else if (this.psramCmd === 0x9f) {
+      // READ ID: opcode, 3 address bytes, then MFID, KGD, EID.
+      if (idx === 4) {
+        reply = PSRAM_MFID;
+      } else if (idx === 5) {
+        reply = PSRAM_KGD;
+      } else if (idx === 6) {
+        reply = PSRAM_EID;
+      }
+    }
+    if (!nopush) {
+      this.pushRx(reply);
+    }
+  }
+
   private spiByte(byte: number, nopush: boolean) {
     this.syncCs();
+    if (this.cs1Explicit() || this.cs1Auto()) {
+      if (!this.psramFrameOpen) {
+        this.psramFrameByte = 0;
+        this.psramFrameOpen = true;
+      }
+      this.psramByte(byte, nopush);
+      return;
+    }
+    this.psramFrameOpen = false;
     // NOTE: bytes are parsed as a continuous stream regardless of
     // chip-select. The bootrom frames groups with CS edges (which reset the
     // parser via begin/endTransaction) but clocks command bytes outside of

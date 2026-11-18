@@ -65,6 +65,16 @@ const MB = 1024 * KB;
 const MHz = 1_000_000;
 
 const FLASH_SIZE = 16 * MB;
+/** Size of the PSRAM behind QMI chip-select 1 (APS6404L-class 8MiB part). */
+export const PSRAM_SIZE = 8 * MB;
+/** XIP windows are 16MiB each: 0x10xxxxxx = CS0 (flash), 0x11xxxxxx = CS1 (PSRAM).
+ * Bits [25:24] pick the chip-select, bits [27:26] pick the alias: 0x10 cached,
+ * 0x14 uncached, 0x18 cache maintenance (writes only, never memory), 0x1c
+ * uncached + untranslated. */
+const XIP_CS_MASK = 0x03000000;
+const XIP_CS1 = 0x01000000;
+const XIP_ALIAS_MASK = 0x0c000000;
+const XIP_MAINTENANCE = 0x08000000;
 
 /** Architecture selection for the two processor sockets on RP2350. */
 export type CoreArch = 'riscv' | 'arm';
@@ -94,6 +104,9 @@ export class RP2350 implements IRPChip {
   readonly flash = new Uint8Array(FLASH_SIZE);
   readonly flash16 = new Uint16Array(this.flash.buffer);
   readonly flash32 = new Uint32Array(this.flash.buffer);
+  readonly psram = new Uint8Array(PSRAM_SIZE);
+  readonly psram16 = new Uint16Array(this.psram.buffer);
+  readonly psram32 = new Uint32Array(this.psram.buffer);
   readonly usbDPRAM = new Uint8Array(4 * KB);
   readonly usbDPRAMView = new DataView(this.usbDPRAM.buffer);
 
@@ -102,6 +115,7 @@ export class RP2350 implements IRPChip {
   // 0 = not-yet-decoded. Single array load on cache hit.
   readonly sramDecode = new Int53Array(this.sram.length / 2);
   readonly flashDecode = new Int53Array(FLASH_SIZE / 2);
+  readonly psramDecode = new Int53Array(PSRAM_SIZE / 2);
 
   readonly identifier = 'rp2350';
 
@@ -428,6 +442,9 @@ export class RP2350 implements IRPChip {
     if (address >= RAM_START_ADDRESS && address < RAM_START_ADDRESS + this.sram.length) {
       return this.sram32[(address - RAM_START_ADDRESS) >>> 2];
     } else if (address >= FLASH_START_ADDRESS && address < RAM_START_ADDRESS) {
+      if (this.isPsramAddress(address)) {
+        return this.psram32[(address & (PSRAM_SIZE - 1)) >>> 2];
+      }
       // XIP mirrors flash four times. Also, reads from invalid adresses
       // don't seem to trigger exceptions (see Micropython)
       return this.flash32[(address & (FLASH_SIZE - 1)) >>> 2];
@@ -476,6 +493,9 @@ export class RP2350 implements IRPChip {
     if (address >= RAM_START_ADDRESS && address < RAM_START_ADDRESS + this.sram.length) {
       return this.sram16[(address - RAM_START_ADDRESS) >>> 1];
     } else if (address >= FLASH_START_ADDRESS && address < RAM_START_ADDRESS) {
+      if (this.isPsramAddress(address)) {
+        return this.psram16[(address & (PSRAM_SIZE - 1)) >>> 1];
+      }
       return this.flash16[(address & (FLASH_SIZE - 1)) >>> 1];
     }
 
@@ -485,6 +505,9 @@ export class RP2350 implements IRPChip {
 
   readUint8(address: Uint32): Uint32 {
     if (address >= FLASH_START_ADDRESS && address < RAM_START_ADDRESS) {
+      if (this.isPsramAddress(address)) {
+        return this.psram[address & (PSRAM_SIZE - 1)];
+      }
       return this.flash[address & (FLASH_SIZE - 1)];
     } else if (address >= RAM_START_ADDRESS && address < RAM_START_ADDRESS + this.sram.length) {
       return this.sram[address - RAM_START_ADDRESS];
@@ -492,6 +515,21 @@ export class RP2350 implements IRPChip {
 
     const value = this.readUint16(address & 0xfffffffe);
     return (address & 0x1 ? (value & 0xff00) >>> 8 : value & 0xff) >>> 0;
+  }
+
+  /** True for XIP addresses (0x10000000..0x1fffffff) that hit the CS1 PSRAM window
+   * (any alias except the cache-maintenance one). */
+  private isPsramAddress(address: Uint32): boolean {
+    return (address & XIP_CS_MASK) === XIP_CS1 && (address & XIP_ALIAS_MASK) !== XIP_MAINTENANCE;
+  }
+
+  private invalidatePsramDecode(offset: number, len: number) {
+    const startIdx = offset >>> 1;
+    const endIdx = (offset + len - 1) >>> 1;
+    if (startIdx > 0) this.psramDecode[startIdx - 1] = 0;
+    for (let i = startIdx; i <= endIdx; i++) {
+      this.psramDecode[i] = 0;
+    }
   }
 
   private invalidateSramDecode(address: Uint32, len: number) {
@@ -510,6 +548,7 @@ export class RP2350 implements IRPChip {
   invalidateDecodeCache() {
     this.sramDecode.fill(0);
     this.flashDecode.fill(0);
+    this.psramDecode.fill(0);
   }
 
   /** Drops cached flash decodes covering a flash byte range (offset, len).
@@ -555,6 +594,11 @@ export class RP2350 implements IRPChip {
         const offset = address & 0xfff;
         peripheral.writeUint32Atomic(offset, value, atomicType);
       } else if (address >= FLASH_START_ADDRESS && address < RAM_START_ADDRESS) {
+        if (this.isPsramAddress(address)) {
+          const off = address & (PSRAM_SIZE - 1);
+          this.psram32[off >>> 2] = value;
+          this.invalidatePsramDecode(off, 4);
+        }
         return; // "XIP memory is read-only by default" (writes get downgraded to reads)
       } else if (address < this.bootromBytes) {
         return; // Bootrom is mask ROM — real hardware silently ignores writes to it.
@@ -583,6 +627,11 @@ export class RP2350 implements IRPChip {
       return;
     }
     if (address >= FLASH_START_ADDRESS && address < RAM_START_ADDRESS) {
+      if (this.isPsramAddress(address)) {
+        const off = address & (PSRAM_SIZE - 1);
+        this.psram[off] = value;
+        this.invalidatePsramDecode(off, 1);
+      }
       return;
     }
 
@@ -626,6 +675,11 @@ export class RP2350 implements IRPChip {
       return;
     }
     if (address >= FLASH_START_ADDRESS && address < RAM_START_ADDRESS) {
+      if (this.isPsramAddress(address)) {
+        const off = address & (PSRAM_SIZE - 1);
+        this.psram16[off >>> 1] = value;
+        this.invalidatePsramDecode(off, 2);
+      }
       return;
     }
 

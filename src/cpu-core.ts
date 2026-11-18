@@ -38,4 +38,6 @@ export interface ICpuCore {
   reset(): void;
   fireSEV(): void;
   setInterrupt(irq: number, value: boolean): void;
+  /** Drives the machine timer interrupt line (RISC-V mip.MTIP); a no-op on ARM. */
+  setTimerInterrupt(value: boolean): void;
 }

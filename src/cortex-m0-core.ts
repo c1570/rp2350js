@@ -442,6 +442,10 @@ export class CortexM0Core implements ICpuCore {
     return 0;
   }
 
+  setTimerInterrupt(value: boolean) {
+    // Cortex-M has no machine timer interrupt line.
+  }
+
   setInterrupt(irq: number, value: boolean) {
     const irqBit = 1 << irq;
     if (value && !(this.pendingInterrupts & irqBit)) {

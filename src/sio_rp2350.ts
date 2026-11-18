@@ -1,8 +1,8 @@
 import type { RP2350 } from './rp2350';
-import { AlarmCallback } from './clock/clock';
+import { AlarmCallback, IAlarm } from './clock/clock';
 import { RPSIOCore } from './sio-core';
 import { FIFO } from './utils/fifo';
-import { Timer32, Timer32PeriodicAlarm, TimerMode } from './utils/timer32';
+import { Float64 } from './utils/types';
 
 const CPUID = 0x000;
 
@@ -18,6 +18,10 @@ const MTIMECMP = 0x1b8;
 const MTIMECMPH = 0x1bc;
 const MTIME_CTRL_EN = 1 << 0;
 const MTIME_FREQUENCY = 1_000_000; // 1 MHz tick rate (functional approximation)
+const MTIME_NANOS_PER_TICK: Float64 = 1e9 / MTIME_FREQUENCY;
+const TWO32: Float64 = 0x100000000;
+// Beyond this many ticks a compare value is unreachable in practice (and no longer exact as a double).
+const MTIME_MAX_SCHEDULABLE_TICKS: Float64 = 9007199254740992; // 2**53
 
 // GPIO
 const GPIO_IN = 0x004; // Input value for GPIO pins
@@ -51,14 +55,10 @@ const SPINLOCK31 = 0x17c;
 /** Fires the per-core mtimecmp interrupt; a dedicated class (rather than RP2350SIO
  * implementing AlarmCallback itself) since there are two per-core alarms. */
 class MtimecmpAlarmCallback implements AlarmCallback {
-  constructor(
-    private readonly rpchip: RP2350,
-    private readonly sio_mtimecmp_irq: number,
-    private readonly core: number
-  ) {}
+  constructor(private readonly sio: RP2350SIO, private readonly core: number) {}
 
   fire() {
-    this.rpchip.setInterruptCore(this.sio_mtimecmp_irq, true, this.core);
+    this.sio.mtimecmpReached(this.core);
   }
 }
 
@@ -70,12 +70,19 @@ export class RP2350SIO {
   spinLock = 0;
   readonly sioCore: [RPSIOCore, RPSIOCore];
 
-  // mtime: shared 32-bit-approximated free-running counter (mtimeh always
-  // reads 0 here — fine for realistic tick intervals within a ~4295s/1MHz
-  // window). mtimecmp/mtimecmph are core-local per the datasheet.
-  readonly mtimeTimer: Timer32;
+  // mtime: shared free-running 64-bit counter, derived from the simulation clock:
+  // mtime = mtimeBaseValue + whole ticks since mtimeBaseNanos (while enabled).
+  // mtimecmp/mtimecmph are core-local per the datasheet.
+  private mtimeBaseValue: Float64 = 0;
+  private mtimeBaseNanos: Float64 = 0;
+  private mtimeEnabled = true;
   private mtimeCtrl = 0x0000000d; // reset value: DBGPAUSE_CORE1/0=1, FULLSPEED=0, EN=1
-  private readonly mtimecmpAlarm: [Timer32PeriodicAlarm, Timer32PeriodicAlarm];
+  // Two fields rather than a tuple: cts2c cannot build an array literal of interface values.
+  private readonly mtimecmpAlarm0: IAlarm;
+  private readonly mtimecmpAlarm1: IAlarm;
+  private readonly mtimecmpLow: [number, number] = [0xffffffff, 0xffffffff];
+  // The datasheet resets mtimecmph to 0xffffffff too; 0 keeps lo-only writes working and
+  // the compare value (0xffffffff ticks, ~71 minutes) is just as unreachable in practice.
   private readonly mtimecmpHigh: [number, number] = [0, 0];
 
   constructor(
@@ -91,23 +98,58 @@ export class RP2350SIO {
       new RPSIOCore(rpchip, txFIFO, rxFIFO, sio_proc1_irq, sio_proc0_irq, 1, 0),
     ];
 
-    this.mtimeTimer = new Timer32('SIO_mtime', rpchip.clock, MTIME_FREQUENCY);
-    this.mtimeTimer.mode = TimerMode.Increment;
-    this.mtimecmpAlarm = [
-      this.createMtimecmpAlarm(rpchip, sio_mtimecmp_irq, 0),
-      this.createMtimecmpAlarm(rpchip, sio_mtimecmp_irq, 1),
-    ];
+    this.mtimecmpAlarm0 = rpchip.clock.createAlarm(new MtimecmpAlarmCallback(this, 0));
+    this.mtimecmpAlarm1 = rpchip.clock.createAlarm(new MtimecmpAlarmCallback(this, 1));
   }
 
-  private createMtimecmpAlarm(rpchip: RP2350, sio_mtimecmp_irq: number, core: number) {
-    const alarm = new Timer32PeriodicAlarm(
-      `SIO_mtimecmp_core${core}`,
-      this.mtimeTimer,
-      new MtimecmpAlarmCallback(rpchip, sio_mtimecmp_irq, core)
-    );
-    alarm.target = 0xffffffff; // matches MTIMECMP reset value
-    alarm.enable = true;
-    return alarm;
+  private mtimecmpAlarm(cpuCore: number): IAlarm {
+    return cpuCore === 0 ? this.mtimecmpAlarm0 : this.mtimecmpAlarm1;
+  }
+
+  private mtimeNow(): Float64 {
+    if (!this.mtimeEnabled) {
+      return this.mtimeBaseValue;
+    }
+    const elapsed: Float64 = this.rpchip.clock.nanos - this.mtimeBaseNanos;
+    return this.mtimeBaseValue + Math.floor(elapsed / MTIME_NANOS_PER_TICK);
+  }
+
+  private setMtime(value: Float64) {
+    this.mtimeBaseValue = value;
+    this.mtimeBaseNanos = this.rpchip.clock.nanos;
+    this.updateMtimecmp(0);
+    this.updateMtimecmp(1);
+  }
+
+  private mtimecmpValue(cpuCore: number): Float64 {
+    return this.mtimecmpHigh[cpuCore] * TWO32 + this.mtimecmpLow[cpuCore];
+  }
+
+  /** Alarm callback: mtime has reached this core's mtimecmp. */
+  mtimecmpReached(cpuCore: number) {
+    this.rpchip.setInterruptCore(this.sio_mtimecmp_irq, true, cpuCore);
+    this.rpchip.core[cpuCore].setTimerInterrupt(true);
+  }
+
+  /** Re-evaluates the level-sensitive mtime >= mtimecmp condition for a core and
+   * schedules the crossing. Called whenever mtime, mtimecmp or MTIME_CTRL change
+   * (writing mtimecmp is how firmware acknowledges and reschedules the tick). */
+  private updateMtimecmp(cpuCore: number) {
+    const alarm = this.mtimecmpAlarm(cpuCore);
+    alarm.cancel();
+    const compare = this.mtimecmpValue(cpuCore);
+    const reached = this.mtimeNow() >= compare;
+    this.rpchip.setInterruptCore(this.sio_mtimecmp_irq, reached, cpuCore);
+    this.rpchip.core[cpuCore].setTimerInterrupt(reached);
+    if (
+      !reached &&
+      this.mtimeEnabled &&
+      compare - this.mtimeBaseValue < MTIME_MAX_SCHEDULABLE_TICKS
+    ) {
+      const sinceBase: Float64 = this.rpchip.clock.nanos - this.mtimeBaseNanos;
+      const delta: Float64 = (compare - this.mtimeBaseValue) * MTIME_NANOS_PER_TICK - sinceBase;
+      alarm.schedule(delta);
+    }
   }
 
   readUint32(offset: number, cpuCore: number): number {
@@ -165,11 +207,11 @@ export class RP2350SIO {
       case MTIME_CTRL:
         return this.mtimeCtrl;
       case MTIME:
-        return this.mtimeTimer.counter >>> 0;
+        return Math.floor(this.mtimeNow()) % TWO32 >>> 0;
       case MTIMEH:
-        return 0; // approximation: mtime never wraps past 32 bits in practice
+        return Math.floor(this.mtimeNow() / TWO32) >>> 0;
       case MTIMECMP:
-        return this.mtimecmpAlarm[cpuCore].target >>> 0;
+        return this.mtimecmpLow[cpuCore];
       case MTIMECMPH:
         return this.mtimecmpHigh[cpuCore];
     }
@@ -236,24 +278,30 @@ export class RP2350SIO {
       case GPIO_HI_OE_XOR:
         this.gpioHiOutputEnable ^= value & GPIO_MASK;
         break;
-      case MTIME_CTRL:
+      case MTIME_CTRL: {
+        const enable = !!(value & MTIME_CTRL_EN);
+        // Rebase so the count is continuous across the enable change.
+        this.mtimeBaseValue = this.mtimeNow();
+        this.mtimeBaseNanos = this.rpchip.clock.nanos;
+        this.mtimeEnabled = enable;
         this.mtimeCtrl = value;
-        this.mtimeTimer.enable = !!(value & MTIME_CTRL_EN);
+        this.updateMtimecmp(0);
+        this.updateMtimecmp(1);
         break;
+      }
       case MTIME:
-        this.mtimeTimer.set(value >>> 0);
+        this.setMtime(Math.floor(this.mtimeNow() / TWO32) * TWO32 + (value >>> 0));
         break;
       case MTIMEH:
-        break; // approximation: high word not tracked
+        this.setMtime((value >>> 0) * TWO32 + (Math.floor(this.mtimeNow()) % TWO32));
+        break;
       case MTIMECMPH:
         this.mtimecmpHigh[cpuCore] = value >>> 0;
+        this.updateMtimecmp(cpuCore);
         break;
       case MTIMECMP:
-        // Writing mtimecmp clears the (level-sensitive) interrupt condition
-        // until mtime reaches the new target — matches real hardware, and is
-        // how firmware acknowledges/reschedules the tick after each fire.
-        this.rpchip.setInterruptCore(this.sio_mtimecmp_irq, false, cpuCore);
-        this.mtimecmpAlarm[cpuCore].target = value >>> 0;
+        this.mtimecmpLow[cpuCore] = value >>> 0;
+        this.updateMtimecmp(cpuCore);
         break;
       default:
         // Divider, Interpolator, FIFO get handled per core in sio-core

@@ -511,14 +511,35 @@ describe('RISC-V opcode regression', () => {
 
     // mret                -> 0x30200073    ; pc <- mepc, restore MSTATUS.MIE
     cpu.csrs[0x341] = TRAPHANDLER; // mepc
-    cpu.csrs[0x300] = 0x80; // mstatus: MPIE=1, MIE=0
+    cpu.csrs[0x300] = 0x80 | (3 << 11); // mstatus: MPIE=1, MIE=0, MPP=M
     run(cpu, 'mret', {}, 0x30200073, TRAPHANDLER - SCRATCH, {});
+    expect(cpu.privilege).toBe(3);
+    expect((cpu.csrs[0x300] >>> 11) & 3).toBe(0); // MPP drops to U after mret
 
     // ecall               -> 0x00000073    ; M-mode trap, mcause=0xb
     cpu.csrs[0x305] = TRAPHANDLER; // mtvec
     run(cpu, 'ecall', {}, 0x00000073, TRAPHANDLER - SCRATCH, {});
     expect(cpu.csrs[0x342]).toBe(0xb); // mcause
     expect(cpu.csrs[0x341]).toBe(SCRATCH >>> 0); // mepc = faulting pc
+
+    // ecall from U-mode (mret with MPP=U) reports cause 8 and records MPP=U
+    cpu.csrs[0x341] = TRAPHANDLER;
+    cpu.csrs[0x300] = 0x80;
+    run(cpu, 'mret to U', {}, 0x30200073, TRAPHANDLER - SCRATCH, {});
+    expect(cpu.privilege).toBe(0);
+    run(cpu, 'ecall (U)', {}, 0x00000073, TRAPHANDLER - SCRATCH, {});
+    expect(cpu.csrs[0x342]).toBe(8); // mcause
+    expect((cpu.csrs[0x300] >>> 11) & 3).toBe(0); // MPP = U
+    expect(cpu.privilege).toBe(3);
+
+    // Misaligned accesses trap (causes 4/6); Hazard3's MTVAL is hardwired to 0
+    // lw x5, 0(x6) -> 0x00032283 ; sw x5, 0(x6) -> 0x00532023
+    run(cpu, 'lw misaligned', { 6: DATA + 1 }, 0x00032283, TRAPHANDLER - SCRATCH, {});
+    expect(cpu.csrs[0x342]).toBe(4);
+    expect(cpu.csrs[0x343]).toBe(0);
+    run(cpu, 'sw misaligned', { 6: DATA + 2 }, 0x00532023, TRAPHANDLER - SCRATCH, {});
+    expect(cpu.csrs[0x342]).toBe(6);
+    expect(cpu.csrs[0x343]).toBe(0);
 
     // ebreak              -> 0x00100073    ; trap, mcause=3
     run(cpu, 'ebreak', {}, 0x00100073, TRAPHANDLER - SCRATCH, {});

@@ -116,6 +116,7 @@ const T_MRET = 94;
 const T_ECALL = 95;
 const T_EBREAK = 96;
 const T_WFI = 97;
+const MIP_MTIP = 1 << 7;
 const T_CSRRW = 98;
 const T_CSRRS = 99;
 const T_CSRRC = 100;
@@ -219,6 +220,8 @@ export class CPU implements ICpuCore {
   private candidateCount = 0;
 
   did_just_jump = false;
+  /** Current privilege level: 3 = M-mode, 0 = U-mode (Hazard3 has no S-mode). */
+  privilege = 3;
 
   // LR/SC reservation: -1 = no active reservation, otherwise the 16-byte
   // granule-aligned reservation address. lr.w sets it; sc.w checks it;
@@ -291,6 +294,7 @@ export class CPU implements ICpuCore {
 
     this.csrs.fill(0);
     this.csrs[0x300] = 3 << 11;
+    this.privilege = 3;
     this.csrs[0x301] = 0b01000000100100000001000100000101;
     this.csrs[0x305] = 0x00001fff00;
     this.csrs[0x320] = 0x101;
@@ -389,7 +393,8 @@ export class CPU implements ICpuCore {
 
     switch (tag) {
       case T_INVALID:
-        throw Error(`Illegal instruction 0 at 0x${this.pc.toString(16)}`);
+        this.trapEntry(2, true); // illegal instruction
+        break;
       case T_LB:
       case T_LH:
       case T_LW:
@@ -553,8 +558,18 @@ export class CPU implements ICpuCore {
     }
   }
 
+  /** Raises a misaligned load (cause 4) / store-AMO (cause 6) exception when
+   * `addr & mask` is non-zero. Hazard3 traps instead of splitting the access. */
+  private misaligned(addr: number, mask: number, cause: number): boolean {
+    if ((addr & mask) === 0) return false;
+    this.trapEntry(cause, true); // MTVAL is hardwired to 0 on Hazard3
+    return true;
+  }
+
   private execLoad(tag: number, r: number, s1: number, imm: number) {
-    const addr = this.getRegisterU(s1) + imm;
+    const addr = (this.getRegisterU(s1) + imm) >>> 0;
+    if (tag === T_LW && this.misaligned(addr, 3, 4)) return;
+    if ((tag === T_LH || tag === T_LHU) && this.misaligned(addr, 1, 4)) return;
     if (tag === T_LB) this.setRegister(r, signExtend8(this.chip.readUint8(addr)));
     else if (tag === T_LH) this.setRegister(r, signExtend16(this.chip.readUint16(addr)));
     else if (tag === T_LW) this.setRegisterU(r, this.chip.readUint32(addr));
@@ -563,7 +578,9 @@ export class CPU implements ICpuCore {
   }
 
   private execStore(tag: number, s1: number, s2: number, imm: number) {
-    const addr = this.getRegister(s1) + imm;
+    const addr = (this.getRegister(s1) + imm) >>> 0;
+    if (tag === T_SW && this.misaligned(addr, 3, 6)) return;
+    if (tag === T_SH && this.misaligned(addr, 1, 6)) return;
     const v = this.getRegister(s2);
     if (tag === T_SB) this.chip.writeUint8(addr, v & 0xff);
     else if (tag === T_SH) this.chip.writeUint16(addr, v & 0xffff);
@@ -700,6 +717,7 @@ export class CPU implements ICpuCore {
 
   private execAmo(tag: number, r: number, s1: number, s2: number) {
     const addr = this.getRegisterU(s1);
+    if (this.misaligned(addr, 3, tag === T_LR_W ? 4 : 6)) return;
     if (tag === T_LR_W) {
       this.setRegisterU(r, this.chip.readUint32(addr));
       this.lr_addr = addr & ~0xf;
@@ -909,7 +927,8 @@ export class CPU implements ICpuCore {
   private execSystem(tag: number, r: number, s1: number, imm: number) {
     if (tag === T_MRET) {
       let mstatus = this.getCSR(0x300, 0);
-      mstatus &= ~(3 << 11);
+      this.privilege = (mstatus >>> 11) & 3; // return to the privilege saved in MPP
+      mstatus &= ~(3 << 11); // MPP becomes the least-privileged supported mode (U)
       mstatus &= ~0b1000;
       mstatus |= (mstatus >>> 4) & 0b1000;
       mstatus |= 1 << 7;
@@ -918,7 +937,8 @@ export class CPU implements ICpuCore {
       this.cycles++;
       this.updateMEICONTEXT_priority_restore();
       this.interruptsUpdated = true;
-    } else if (tag === T_ECALL) this.trapEntry(0xb, true);
+    } else if (tag === T_ECALL)
+      this.trapEntry(this.privilege === 0 ? 8 : 0xb, true); // ecall from U / M
     else if (tag === T_EBREAK) this.trapEntry(3, true);
     else if (tag === T_WFI) {
       if (this.wakingInterruptPending()) this.interruptsUpdated = true;
@@ -1140,11 +1160,19 @@ export class CPU implements ICpuCore {
     this.csrs[0xbe5] = meicontext;
   }
 
-  /** wfi/h3.block wake condition: an enabled external interrupt at or above
-   * the current preemption level, regardless of MSTATUS.MIE. */
-  wakingInterruptPending(): boolean {
+  /** Drives the machine timer interrupt line (MIP.MTIP, bit 7). */
+  setTimerInterrupt(value: boolean) {
+    if (value) {
+      this.csrs[0x344] |= MIP_MTIP;
+      if (this.csrs[0x304] & MIP_MTIP) this.interruptsUpdated = true;
+    } else {
+      this.csrs[0x344] &= ~MIP_MTIP;
+    }
+  }
+
+  /** An enabled external interrupt at or above the current preemption level. */
+  private externalInterruptPending(): boolean {
     if (!(this.csrs[0x304] & 0b100000000000)) return false;
-    // if MIE.MEIE is set... TODO consider software and timer interrupts as well
     const meinext = this.csrs[0xbe4] >>> 0;
     const meinext_noirq = meinext >> 31;
     const meinext_irq_number = (meinext >>> 2) & 511;
@@ -1154,6 +1182,17 @@ export class CPU implements ICpuCore {
     return !meinext_noirq && meinext_irq_prio >= meicontext_preempt;
   }
 
+  private timerInterruptPending(): boolean {
+    return (this.csrs[0x304] & this.csrs[0x344] & MIP_MTIP) !== 0;
+  }
+
+  /** wfi/h3.block wake condition: an enabled external or timer interrupt
+   * (external ones at or above the current preemption level), regardless of
+   * MSTATUS.MIE. */
+  wakingInterruptPending(): boolean {
+    return this.externalInterruptPending() || this.timerInterruptPending();
+  }
+
   // Called between instructions only (mepc must be the next instruction; a
   // trap from inside step() would also have its target clobbered by the
   // post-step PC update). wfi/h3.block instead fall through on a pending
@@ -1161,11 +1200,16 @@ export class CPU implements ICpuCore {
   // the RISC-V priv spec is exactly "the interrupt trap will be taken on the
   // following instruction".
   resolveWakingInterrupt(): boolean {
-    if (!this.wakingInterruptPending()) return false;
-    if (this.csrs[0x300] & 0b1000) {
-      // ...and MSTATUS.MIE is set...
-      this.updateMEICONTEXT_priority_save(); // this gets called ONLY on external interrupt trap
-      this.trapEntry(((1 << 31) | 11) >>> 0); //TODO hardwired cause MEIP = external interrupt
+    const external = this.externalInterruptPending();
+    if (!external && !this.timerInterruptPending()) return false;
+    if (this.privilege === 0 || this.csrs[0x300] & 0b1000) {
+      // ...and MSTATUS.MIE is set (M-mode interrupts are always enabled below M)...
+      if (external) {
+        this.updateMEICONTEXT_priority_save(); // this gets called ONLY on external interrupt trap
+        this.trapEntry(((1 << 31) | 11) >>> 0); //TODO hardwired cause MEIP = external interrupt
+      } else {
+        this.trapEntry(((1 << 31) | 7) >>> 0); // machine timer interrupt
+      }
     }
     this.waiting = false; // "wfi ignores the global interrupt enable, MSTATUS.MIE"
     return true;
@@ -1184,10 +1228,11 @@ export class CPU implements ICpuCore {
     // 2. Set the MSB of MCAUSE to indicate the cause is an interrupt, or clear it to indicate an exception
     // 3. Write the detailed trap cause to the LSBs of the MCAUSE register
     this.setCSR(0x342, mcause, 0);
-    // TODO 4. Save the current privilege level to MSTATUS.MPP
-    // TODO 5. Set the privilege to M-mode (note Hazard3 does not implement S-mode)
     // 6. Save the current value of MSTATUS.MIE to MSTATUS.MPIE
     let mstatus = this.getCSR(0x300, 0);
+    mstatus &= ~(3 << 11); // 4. Save the current privilege level to MSTATUS.MPP
+    mstatus |= this.privilege << 11;
+    this.privilege = 3; // 5. Trap handlers run in M-mode
     mstatus &= ~0b10000000;
     mstatus |= (mstatus << 4) & 0b10000000;
     // 7. Disable interrupts by clearing MSTATUS.MIE
@@ -1240,6 +1285,8 @@ export class CPU implements ICpuCore {
     raw_write >>>= 0;
     switch (csr) {
       case 0x300: // MSTATUS
+        // Only MPP[1] is implemented on Hazard3 (M or U): MPP reads back as 00 or 11.
+        value = ((value >>> 12) & 1 ? value | (3 << 11) : value & ~(3 << 11)) >>> 0;
         if (value & ~this.csrs[csr] & 0b1000) this.interruptsUpdated = true; // MSTATUS.MIE has been set
         this.csrs[csr] = value;
         return;
@@ -1250,6 +1297,7 @@ export class CPU implements ICpuCore {
         if (value & ~this.csrs[csr]) this.interruptsUpdated = true; // any bit in MIE has been set
         this.csrs[csr] = value;
         return;
+      case 0x344: // MIP: MEIP/MTIP are driven by hardware
       case 0x301:
       case 0x30a:
       case 0x310:
@@ -1345,8 +1393,16 @@ export class CPU implements ICpuCore {
         }
         return;
       }
-      case 0xbe5: // MEICONTEXT - note MTIESAVE/MSIESAVE/CLEARTS writes are a side effect of getCTS here
-        this.csrs[csr] = value;
+      case 0xbe5: // MEICONTEXT
+        this.csrs[csr] = value & ~0b0010; // CLEARTS is write-only
+        // MTIESAVE/MSIESAVE restore MIE.MTIE/MSIE, CLEARTS clears them
+        // (hazard3_csr.v: mie[7] <= (mie[7] || wdata[3]) && !clearts).
+        if (value & 0b0010) {
+          this.csrs[0x304] &= ~0b10001000;
+        } else {
+          if (value & 0b1000) this.csrs[0x304] |= 1 << 7;
+          if (value & 0b0100) this.csrs[0x304] |= 1 << 3;
+        }
         this.updateMEINEXT();
         this.interruptsUpdated = true;
         return;
@@ -1422,14 +1478,10 @@ export class CPU implements ICpuCore {
       case 0xbe5: {
         let meicontext = this.csrs[0xbe5];
         if (raw_write & 0b0010) {
-          // write to CLEARTS
+          // read with CLEARTS: report the MTIE/MSIE state being saved (the clear itself happens in setCSR)
           meicontext &= ~0b1110;
           meicontext |= ((this.csrs[0x304] >>> 7) & 1) << 3; // MTIE
           meicontext |= ((this.csrs[0x304] >>> 3) & 1) << 2; // MSIE
-          this.csrs[0x304] &= ~0b10001000; // clear MIE.MTIE and MSIE
-        } else {
-          if (raw_write & 0b1000) this.csrs[0x304] |= 1 << 7; // write to MTIESAVE: set MIE.MTIE
-          if (raw_write & 0b0100) this.csrs[0x304] |= 1 << 3; // write to MSIESAVE: set MIE.MSIE
         }
         return meicontext;
       }

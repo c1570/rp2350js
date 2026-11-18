@@ -438,6 +438,7 @@ describe('Xh3irq interrupt controller', () => {
       // mtiesave and msiesave reflecting the old mie values.
       // clearts only fires on csrrw/csrrs, simulated by raw_write bit 1 set.
       const val = cpu.getCSR(MEICONTEXT, 0x2) >>> 0; // raw_write bit 1 = clearts
+      cpu.setCSR(MEICONTEXT, 0x2, 0x2); // the clear itself happens on the write
 
       // Spec: mtiesave (bit 3) = old mie.mtie, msiesave (bit 2) = old mie.msie
       expect(val & (1 << 3)).not.toBe(0); // mtiesave = 1
@@ -449,13 +450,13 @@ describe('Xh3irq interrupt controller', () => {
     });
 
     test('mtiesave/msiesave writes restore mie.mtie/msie', () => {
-      // Reverse of clearts: writing meicontext with raw_write bits 3/2 set
+      // Reverse of clearts: writing meicontext with bits 3/2 set
       // (without clearts) ORs those bits into mie.mtie/msie.
       cpu.csrs[MIE] = 0;
       cpu.csrs[MEICONTEXT] = 0;
 
       // raw_write bit 3 = mtiesave, bit 2 = msiesave, no clearts (bit 1)
-      cpu.getCSR(MEICONTEXT, 0b1100);
+      cpu.setCSR(MEICONTEXT, 0b1100, 0b1100);
 
       expect(cpu.csrs[MIE] & (1 << 7)).toBe(1 << 7); // mtie restored
       expect(cpu.csrs[MIE] & (1 << 3)).toBe(1 << 3); // msie restored

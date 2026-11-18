@@ -183,6 +183,10 @@ export class CortexM33Core implements ICpuCore {
     this.regs.pc = (this.chip.readUint32(vtor + 4) >>> 0) & ~1;
   }
 
+  setTimerInterrupt(value: boolean) {
+    // Cortex-M has no machine timer interrupt line.
+  }
+
   /**
    * Assert / deassert a hardware interrupt. Routes into the per-core NVIC
    * pending bit array (held on the PPB peripheral so it's reachable from

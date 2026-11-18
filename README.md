@@ -8,13 +8,14 @@ This is a much improved fork of Uri Shaked's [rp2040js](https://github.com/wokwi
 
 ### Status of rp2350js
 
-- **RISC-V/Hazard3** machine mode support (no user mode support)
+- **RISC-V/Hazard3** support (machine mode; user mode only as a tracked privilege level, no privilege checks)
 - basic **ARM/Cortex M33** support (no secure/insecure mode)
 - runs from bootrom
 - runs both no_flash/RAM binaries and flash binaries
 - runs **pico-examples/blink_simple.c, hello_timer.c, hello_usb.c**
 - runs **[Connomore64](https://github.com/c1570/Connomore64)** main and video mcu (dual core, PIO, DMA)
 - runs **MicroPython** (both RISC-V and ARM variants)
+- boots **[Linux](https://github.com/Mr-Bossman/pi-pico2-linux)** (RISC-V nommu, from flash + 8MB PSRAM)
 - **GDB interface** ("monitor" outputting PIO/GPIO info; memory watch not supported)
 - **MCP server** and **Agent Skill** for interfacing with coding agents (features similar to GDB); register MCP with, e.g., `opencode mcp add` and `npx ts-node demo/mcp-server.ts`; for skill CLI helper see .opencode/.claude
 - built-in cycle profiler using markers in the RP's firmware
@@ -37,7 +38,7 @@ PIO SHIFTCTRL FJOIN_RX/FJOIN_TX
 SYSINFO_BASE
 SYSCFG_BASE *
 TIMER1_BASE
-RISC-V Platform Timer
+RISC-V Platform Timer (64-bit mtime/mtimecmp, drives MIP.MTIP and SIO_IRQ_MTIMECMP)
 PLL_SYS_BASE *
 External interrupts *
 updated IRQ constants
@@ -45,6 +46,8 @@ Xh3irq (MEIEA, MEIPA, MEIFA, MEIPRA, MEINEXT, MEICONTEXT)
 Xh3power (h3.block and h3.unblock)
 Xh3bextm (h3.bextmi and h3.bextm)
 all Hazard3 opcodes (including RV32C, RV32Zcb, etc.; simplified reservation for lr.w/sc.w)
+PSRAM on QMI CS1 (direct-mode ID read, 8MB at XIP window 0x11000000, executable)
+Hazard3 traps: misaligned load/store/AMO, illegal instruction, ecall (U/M), MPP save/restore, MTVAL
 basic Cortex M33 support (runs Micropython)
 somewhat correct instruction cycle counts *
 flash erase/write (RP2350)
@@ -54,7 +57,8 @@ flash erase/write (RP2350)
 
 ```
 Timer and System Interrupts (Xh3irq is there though)
-Exceptions
+Exceptions other than the Hazard3 traps listed above (e.g., bus faults on invalid addresses)
+PSRAM: QMI timing/format registers, XIP_CTRL write-enable, cache policy aliases (all aliases map to the same memory)
 Minor GPIO updates (IRQSUMMARY, USB pins, PROC1_INTxx)
 Minor DMA updates (INCR_READ_REV, etc.)
 DMA contention (on hardware, the whole DMA unit does one transfer per cycle, not each channel)
@@ -87,7 +91,7 @@ OTP_BASE ...
 CORESIGHT_PERIPH_BASE ...
 GLITCH_DETECTOR_BASE
 
-Hazard3: Machine vs. User mode
+Hazard3: User mode privilege checks (CSR access, mret, wfi)
 Xh3pmpm (Physical Memory Protection PMP)
 cycle penalties for dependent register usage, APB access, XIP access
 full lr.w/sc.w reservation semantics would need (expensive) tracking of all SRAM (DMA etc.) writes

@@ -8,6 +8,7 @@ import { Int53, Int53Array, Uint32 } from '../utils/types';
 const FLASH_START_ADDRESS = 0x10000000;
 const RAM_START_ADDRESS = 0x20000000;
 const FLASH_SIZE = 16 * 1024 * 1024;
+const PSRAM_SIZE = 8 * 1024 * 1024;
 
 function decodeUncached(chip: RP2350, address: Uint32): Int53 {
   const inst = chip.readUint16(address);
@@ -28,6 +29,12 @@ export function getDecodeEntry(chip: RP2350, address: Uint32): Int53 {
     return packed !== 0 ? packed : decodeAndCache(chip, chip.sramDecode, idx, address);
   }
   if (address >= FLASH_START_ADDRESS && address < RAM_START_ADDRESS) {
+    // CS1 (PSRAM) window: bits [25:24] == 1, excluding the 0x18.. maintenance alias.
+    if ((address & 0x03000000) === 0x01000000 && (address & 0x0c000000) !== 0x08000000) {
+      const pidx = (address & (PSRAM_SIZE - 1)) >>> 1;
+      const ppacked = chip.psramDecode[pidx];
+      return ppacked !== 0 ? ppacked : decodeAndCache(chip, chip.psramDecode, pidx, address);
+    }
     const idx = (address & (FLASH_SIZE - 1)) >>> 1;
     const packed = chip.flashDecode[idx];
     return packed !== 0 ? packed : decodeAndCache(chip, chip.flashDecode, idx, address);

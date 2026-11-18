@@ -131,6 +131,68 @@ describe('RP2350', () => {
       expect(rp2350.readUint32(SIO_MTIME)).toBe(before);
     });
 
+    it('mtime >= mtimecmp raises MTIP on the core, writing mtimecmp acknowledges it', () => {
+      const rp2350 = new RP2350();
+      const cpu = rp2350.core0;
+      const MTIP = 1 << 7;
+      rp2350.writeUint32(SIO_MTIMECMPH, 0);
+      rp2350.writeUint32(SIO_MTIMECMP, 100);
+      expect(cpu.csrs[0x344] & MTIP).toBe(0);
+      rp2350.clock.tick(200_000); // 200us at 1MHz mtime
+      expect(cpu.csrs[0x344] & MTIP).toBe(MTIP);
+      rp2350.writeUint32(SIO_MTIMECMPH, 1); // far future: Linux writes hi last
+      expect(cpu.csrs[0x344] & MTIP).toBe(0);
+    });
+
+    const SIO_MTIMEH = 0xd00001b4;
+    const MTIP = 1 << 7;
+
+    it('mtimecmph carries across the 32-bit mtime wrap', () => {
+      const rp2350 = new RP2350();
+      const cpu = rp2350.core0;
+      rp2350.writeUint32(SIO_MTIMEH, 0);
+      rp2350.writeUint32(SIO_MTIME, 0xfffffff0);
+      rp2350.writeUint32(SIO_MTIMECMPH, 1);
+      rp2350.writeUint32(SIO_MTIMECMP, 0x10);
+      rp2350.clock.tick(20_000); // +20 ticks: mtime = 0x1_00000004 < 0x1_00000010
+      expect(rp2350.readUint32(SIO_MTIMEH)).toBe(1);
+      expect(cpu.csrs[0x344] & MTIP).toBe(0);
+      rp2350.clock.tick(100_000);
+      expect(cpu.csrs[0x344] & MTIP).toBe(MTIP);
+    });
+
+    it('the SDK update sequence (lo=-1, hi, lo) raises no spurious MTIP', () => {
+      const rp2350 = new RP2350();
+      const cpu = rp2350.core0;
+      rp2350.clock.tick(5_000_000);
+      const target = rp2350.readUint32(SIO_MTIME) + 1000;
+      rp2350.writeUint32(SIO_MTIMECMP, 0xffffffff);
+      expect(cpu.csrs[0x344] & MTIP).toBe(0);
+      rp2350.writeUint32(SIO_MTIMECMPH, 0);
+      expect(cpu.csrs[0x344] & MTIP).toBe(0);
+      rp2350.writeUint32(SIO_MTIMECMP, target);
+      expect(cpu.csrs[0x344] & MTIP).toBe(0);
+      rp2350.clock.tick(1_100_000);
+      expect(cpu.csrs[0x344] & MTIP).toBe(MTIP);
+    });
+
+    it('writing MTIME or toggling MTIME_CTRL.EN re-evaluates MTIP', () => {
+      const rp2350 = new RP2350();
+      const cpu = rp2350.core0;
+      rp2350.writeUint32(SIO_MTIMECMPH, 0);
+      rp2350.writeUint32(SIO_MTIMECMP, 1000);
+      rp2350.writeUint32(SIO_MTIME, 2000);
+      expect(cpu.csrs[0x344] & MTIP).toBe(MTIP);
+      rp2350.writeUint32(SIO_MTIME, 10);
+      expect(cpu.csrs[0x344] & MTIP).toBe(0);
+      rp2350.writeUint32(SIO_MTIME_CTRL, 0); // frozen: never reaches the compare value
+      rp2350.clock.tick(5_000_000);
+      expect(cpu.csrs[0x344] & MTIP).toBe(0);
+      rp2350.writeUint32(SIO_MTIME_CTRL, 1);
+      rp2350.clock.tick(2_000_000);
+      expect(cpu.csrs[0x344] & MTIP).toBe(MTIP);
+    });
+
     it('MTIMECMP reads back what was written and defaults to 0xffffffff', () => {
       const rp2350 = new RP2350();
       expect(rp2350.readUint32(SIO_MTIMECMP)).toBe(0xffffffff);
