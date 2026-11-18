@@ -146,10 +146,13 @@ export class RPTimer<ChipType extends IRPChip = IRPChip>
         // Float64 keeps the uint32 delta exact in the C build (an int32_t local
         // would go negative past 2^31 µs) and keeps the nanosecond multiply in
         // double precision (1000.0 — a delta of 2.5 s is 2.5e9 ns, past INT32_MAX).
-        const deltaMicros: Float64 = (value - this.clock.getNanos() / 1000) >>> 0;
+        const nowNanos: Float64 = this.clock.getNanos();
+        const nowMicros: Float64 = Math.floor(nowNanos / 1000);
+        const deltaMicros: Float64 = (value - nowMicros) >>> 0;
+        const deltaNanos: Float64 = deltaMicros * 1000.0 - (nowNanos - nowMicros * 1000.0);
         alarm.armed = true;
         alarm.targetMicros = value;
-        alarm.clockAlarm.schedule(deltaMicros * 1000.0);
+        alarm.clockAlarm.schedule(deltaNanos > 0 ? deltaNanos : 0);
         return;
       }
       case ARMED:

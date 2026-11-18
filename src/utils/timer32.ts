@@ -47,16 +47,19 @@ export class Timer32 {
       return this.baseValue;
     }
     const zigzag = timerMode == TimerMode.ZigZag;
-    const ticks = ((this.clock.nanos - baseNanos) / 1e9) * (baseFreq / prescalerValue);
+    const ticks: Float64 = ((this.clock.nanos - baseNanos) / 1e9) * (baseFreq / prescalerValue);
     const topModulo = zigzag ? this.topValue * 2 : this.topValue + 1;
-    // Guard against division by zero in the transpiled C build: `topModulo` wraps
-    // to 0 when `topValue === 0xffffffff`, but remains nonzero in JS. This branch
-    // is unreachable in JS execution; it exists only to prevent C division by zero.
-    const delta =
+    // Float64 throughout: an int32_t in the transpiled C build would truncate the
+    // sub-tick fraction that JS rounds, skewing counter reads by one tick.
+    // `Math.floor(ticks) % m` plus the fraction equals `ticks % m`, in a shape cts2c emits as fmod().
+    const delta: Float64 =
       timerMode == TimerMode.Decrement
-        ? topModulo === 0
+        ? // Guard against division by zero in the transpiled C build: `topModulo` wraps
+          // to 0 when `topValue === 0xffffffff`, but remains nonzero in JS. This branch
+          // is unreachable in JS execution; it exists only to prevent C division by zero.
+          topModulo === 0
           ? -ticks
-          : topModulo - (ticks % topModulo)
+          : topModulo - ((Math.floor(ticks) % topModulo) + (ticks - Math.floor(ticks)))
         : ticks;
     let currentValue = Math.round(baseValue + delta);
     if (this.topValue != 0xffffffff) {

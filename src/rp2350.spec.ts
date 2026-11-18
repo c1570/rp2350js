@@ -71,7 +71,10 @@ describe('RP2350', () => {
       };
       for (let i = 0; i < 250000000; i++) rp2350.step();
       expect(output.startsWith('Hello Timer!')).toBeTruthy();
-      expect((output.match(/Repeat at/g) || []).length).equals(19);
+      const repeats = [...output.matchAll(/Repeat at (\d+)/g)].map((m) => Number(m[1]));
+      expect(repeats.length).equals(19);
+      expect(repeats.slice(10).map((t, i) => t - repeats[9 + i])).toEqual(Array(9).fill(50000));
+      expect((output.match(/cancelled\.\.\. 1/g) || []).length).equals(2);
     }, 20000);
   });
 

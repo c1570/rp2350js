@@ -51,6 +51,28 @@ describe('RPTimer', () => {
       expect(rp2040.core0.pendingInterrupts).toBe(0);
     });
 
+    it('fires an alarm when the microsecond counter reaches it, not before', () => {
+      const rp2040 = new RP2040();
+      const TIMERAWL = 0x40054028;
+      // Start in the middle of a microsecond, as with any clkSys whose cycle time
+      // does not divide 1 µs evenly (e.g. 150 MHz → 6.67 ns).
+      rp2040.clock.tick(119_027);
+      expect(rp2040.readUint32(TIMERAWL)).toEqual(119);
+      rp2040.writeUint32(ALARM3, 20117);
+
+      // 0.1 µs before the counter reads 20117: still armed
+      rp2040.clock.tick(20_116_900 - 119_027);
+      expect(rp2040.readUint32(TIMERAWL)).toEqual(20116);
+      expect(rp2040.readUint32(ARMED)).toEqual(0x8);
+      expect(rp2040.readUint32(INTR)).toEqual(0);
+
+      // At 20117.0 µs the alarm fires and the counter already reads the target
+      rp2040.clock.tick(100);
+      expect(rp2040.readUint32(TIMERAWL)).toEqual(20117);
+      expect(rp2040.readUint32(ARMED)).toEqual(0);
+      expect(rp2040.readUint32(INTR)).toEqual(0x8);
+    });
+
     it('fires an alarm scheduled more than INT32_MAX nanoseconds in the future', () => {
       const rp2040 = new RP2040();
       // Target 2.5 s ahead of the fresh clock: the nanosecond delta (2.5e9)

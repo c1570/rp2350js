@@ -153,9 +153,9 @@ export class RP2350 implements IRPChip {
   }
 
   /* Clocks */
-  readonly clock = new SimulationClock();
-  clkSys = 125 * MHz;
-  clkPeri = 125 * MHz;
+  readonly clock = new SimulationClock(150 * MHz);
+  clkSys = 150 * MHz;
+  clkPeri = 150 * MHz;
 
   readonly sio = new RP2350SIO(
     this,
