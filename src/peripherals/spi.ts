@@ -95,13 +95,13 @@ export class RPSPI<ChipType extends IRPChip = IRPChip>
   }
 
   get masterMode() {
-    return !(this.control0 & MS);
+    return !(this.control1 & MS);
   }
 
   get spiMode() {
     const cpol = this.control0 & SPO;
     const cpha = this.control0 & SPH;
-    return cpol ? (cpha ? 2 : 3) : cpha ? 1 : 0;
+    return cpol ? (cpha ? 3 : 2) : cpha ? 1 : 0;
   }
 
   get clockFrequency() {

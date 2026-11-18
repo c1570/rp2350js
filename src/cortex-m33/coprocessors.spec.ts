@@ -50,6 +50,110 @@ describe('Cortex-M33 CP0 GPIOC', () => {
   });
 });
 
+// Encodings below were produced by arm-none-eabi-as from the pico-sdk
+// hardware/gpio_coproc.h forms (RP2350 datasheet §3.6.1).
+describe('Cortex-M33 CP0 GPIOC, pico-sdk encodings', () => {
+  const SIO_GPIO_OUT = 0xd0000010;
+  const SIO_GPIO_OE = 0xd0000030;
+
+  function run(chip: RP2350, core: RP2350['armCore0'], hw0: number, hw1: number) {
+    put32(chip, SRAM, hw0, hw1);
+    core.PC = SRAM;
+    core.executeInstruction();
+  }
+
+  it('gpioc_bit_out_set / _clr (MCR #6/#7) change only the given pin', () => {
+    const { chip, core } = setup();
+    chip.writeUint32(SIO_GPIO_OUT, 0xf0);
+    core.regs.r[0] = 2;
+    run(chip, core, 0xeec0, 0x0010); // mcr p0, #6, r0, c0, c0
+    expect(chip.readUint32(SIO_GPIO_OUT)).toBe(0xf4);
+    core.regs.r[0] = 5;
+    run(chip, core, 0xeee0, 0x0010); // mcr p0, #7, r0, c0, c0
+    expect(chip.readUint32(SIO_GPIO_OUT)).toBe(0xd4);
+  });
+
+  it('gpioc_bit_oe_xor (MCR #5, c4) toggles one output enable', () => {
+    const { chip, core } = setup();
+    chip.writeUint32(SIO_GPIO_OE, 0x1);
+    core.regs.r[0] = 17;
+    run(chip, core, 0xeea0, 0x0014); // mcr p0, #5, r0, c0, c4
+    expect(chip.readUint32(SIO_GPIO_OE)).toBe(0x20001);
+  });
+
+  it('gpioc_lo_oe_set (MCR #2, c4) sets output enables', () => {
+    const { chip, core } = setup();
+    chip.writeUint32(SIO_GPIO_OE, 0x1);
+    core.regs.r[0] = 0x30;
+    run(chip, core, 0xee40, 0x0014); // mcr p0, #2, r0, c0, c4
+    expect(chip.readUint32(SIO_GPIO_OE)).toBe(0x31);
+  });
+
+  it('gpioc_lo_oe_get / gpioc_lo_in_get (MRC c4 / c8) read OE and IN', () => {
+    const { chip, core } = setup();
+    chip.writeUint32(SIO_GPIO_OE, 0x4321);
+    run(chip, core, 0xee10, 0x0014); // mrc p0, #0, r0, c0, c4
+    expect(core.regs.r[0]).toBe(0x4321);
+
+    chip.gpio[7].padValue |= 0x40; // input enable
+    chip.gpio[7].setInputValue(true);
+    run(chip, core, 0xee10, 0x0018); // mrc p0, #0, r0, c0, c8
+    expect(core.regs.r[0] & 0x80).toBe(0x80);
+  });
+
+  it('gpio_put / gpio_set_dir (MCRR #4, c0 / c4) write a single pin', () => {
+    const { chip, core } = setup();
+    chip.writeUint32(SIO_GPIO_OUT, 0xff);
+    core.regs.r[3] = 3;
+    core.regs.r[2] = 0;
+    run(chip, core, 0xec42, 0x3040); // mcrr p0, #4, r3, r2, c0
+    expect(chip.readUint32(SIO_GPIO_OUT)).toBe(0xf7);
+
+    chip.gpio[17].ctrl = 5; // FUNCSEL = SIO
+    core.regs.r[3] = 17;
+    core.regs.r[2] = 1;
+    run(chip, core, 0xec42, 0x3044); // mcrr p0, #4, r3, r2, c4
+    expect(chip.readUint32(SIO_GPIO_OE)).toBe(1 << 17);
+    expect(chip.gpio[17].outputEnable).toBe(true);
+  });
+
+  it('gpioc_bit_out_set2 (MCRR #6) only acts when the condition is set', () => {
+    const { chip, core } = setup();
+    chip.writeUint32(SIO_GPIO_OUT, 0);
+    core.regs.r[0] = 9;
+    core.regs.r[1] = 0;
+    run(chip, core, 0xec41, 0x0060); // mcrr p0, #6, r0, r1, c0
+    expect(chip.readUint32(SIO_GPIO_OUT)).toBe(0);
+    core.regs.r[1] = 1;
+    run(chip, core, 0xec41, 0x0060);
+    expect(chip.readUint32(SIO_GPIO_OUT)).toBe(1 << 9);
+  });
+
+  it('gpioc_hilo_oe_put (MCRR #0, c4) writes the lo register from Rt', () => {
+    const { chip, core } = setup();
+    core.regs.r[0] = 0x1234;
+    core.regs.r[1] = 0;
+    run(chip, core, 0xec41, 0x0004); // mcrr p0, #0, r0, r1, c4
+    expect(chip.readUint32(SIO_GPIO_OE)).toBe(0x1234);
+  });
+
+  it('gpioc_index_oe_set (MCRR #10) uses Rt as value and Rt2 as register index', () => {
+    const { chip, core } = setup();
+    chip.writeUint32(SIO_GPIO_OE, 0x1);
+    core.regs.r[1] = 0x100; // value
+    core.regs.r[0] = 0; // lo register
+    run(chip, core, 0xec40, 0x10a4); // mcrr p0, #10, r1, r0, c4
+    expect(chip.readUint32(SIO_GPIO_OE)).toBe(0x101);
+  });
+
+  it('gpioc_hilo_out_get (MRRC #0, c0) reads lo into Rt', () => {
+    const { chip, core } = setup();
+    chip.writeUint32(SIO_GPIO_OUT, 0xabc);
+    run(chip, core, 0xec51, 0x0000); // mrrc p0, #0, r0, r1, c0
+    expect(core.regs.r[0]).toBe(0xabc);
+  });
+});
+
 describe('Cortex-M33 CP4/5 DCP', () => {
   it('MCR/MRC transfers load/store DCP halves', () => {
     const { chip, core } = setup();
@@ -219,32 +323,6 @@ function getDcpDouble(st: { dcpHalves: Uint32Array }, idx: number): number {
 }
 
 describe('Cortex-M33 coprocessor edge cases', () => {
-  it('CP0 per-bit GPIO put (op2=4) preserves other pins', () => {
-    const { chip, core } = setup();
-    // Pre-set GPIO OUT to 0xFF.
-    chip.writeUint32(0xd0000010, 0xff);
-    // Per-bit put pin 3 = 1: CRn=0,CRm=3 → pin=3, op2=4, Rt=1 (set).
-    // MCR p0, 0, r0, c0, c3, 4: hw1=(0<<12)|(0<<8)|(4<<5)|(1<<4)|3 = 0x93.
-    core.regs.r[0] = 1;
-    put32(chip, SRAM, 0xee00, 0x0093);
-    core.PC = SRAM;
-    core.executeInstruction();
-    // Must be 0xFF (unchanged) | (1<<3) = 0xFF, NOT 0x08 (bulk write bug).
-    expect(chip.readUint32(0xd0000010)).toBe(0xff);
-  });
-
-  it('CP0 per-bit GPIO put pin=1 clears only that pin', () => {
-    const { chip, core } = setup();
-    chip.writeUint32(0xd0000010, 0xff);
-    // Per-bit put pin 1 = 0: CRn=0,CRm=1 → pin=1, op2=4, Rt=0 (clear).
-    // hw1 = (4<<5)|(1<<4)|1 = 0x91.
-    put32(chip, SRAM, 0xee00, 0x0091);
-    core.regs.r[0] = 0;
-    core.PC = SRAM;
-    core.executeInstruction();
-    expect(chip.readUint32(0xd0000010)).toBe(0xfd); // only pin 1 cleared
-  });
-
   it('DCP d2i saturates for out-of-range positive (3e9 → 0x7FFFFFFF)', () => {
     const { chip, core } = setup();
     const st = chip.ppb!.coreState[0];

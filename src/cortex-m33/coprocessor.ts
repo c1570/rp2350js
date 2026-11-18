@@ -7,7 +7,6 @@ import { M33CoreState } from '../peripherals/ppb_rp2350';
 import { floatToBits, bitsToFloat } from './execute-fpu';
 import { Float64 } from '../utils/types';
 
-const PIN_MASK = 0x3fffffff; // 30 GPIO pins.
 
 /** Coprocessor dispatch entry point. */
 export function coprocessorExecute(core: CortexM33Core, hw0: number, hw1: number): number {
@@ -62,105 +61,124 @@ function writeMrcResult(core: CortexM33Core, Rt: number, value: number) {
 // CP0 — GPIO Coprocessor (GPIOC)
 // ============================================================================
 
+// Encoding (RP2350 datasheet §3.6.1, pico-sdk hardware/gpio_coproc.h):
+//   CRm selects the SIO register: c0/c1 OUT lo/hi, c4/c5 OE lo/hi, c8/c9 IN lo/hi.
+//   MCR  p0, #op, Rt, c0, CRm       op 0-3: put/xor/set/clr Rt into the register,
+//                                   op 5-7: xor/set/clr the single pin Rt.
+//   MRC  p0, #0, Rt, c0, CRm        read the register.
+//   MCRR p0, #op, Rt, Rt2, CRm      op 0-3: put/xor/set/clr, Rt=lo, Rt2=hi,
+//                                   op 4: write Rt2[0] to pin Rt,
+//                                   op 5-7: xor/set/clr pin Rt if Rt2[0] is set,
+//                                   op 8-11: put/xor/set/clr Rt into register Rt2 (0=lo, 1=hi).
+//   MRRC p0, #0, Rt, Rt2, CRm       read lo into Rt and hi into Rt2.
+// The SIO keeps each hi register 4 bytes above its lo register.
+
+const GPIOC_SIO_IN = 0x004;
+const GPIOC_SIO_OUT = 0x010;
+const GPIOC_SIO_OE = 0x030;
+// Offsets of the SET/CLR/XOR aliases relative to the plain register
+const GPIOC_SIO_SET = 0x008;
+const GPIOC_SIO_CLR = 0x010;
+const GPIOC_SIO_XOR = 0x018;
+
+// Operation codes shared by the MCR/MCRR forms
+const GPIOC_OP_PUT = 0;
+const GPIOC_OP_XOR = 1;
+const GPIOC_OP_SET = 2;
+const GPIOC_OP_CLR = 3;
+
+/** SIO offset of the lo register selected by CRm, or -1 if CRm is not a GPIOC register. */
+function gpiocBaseOffset(CRm: number): number {
+  switch (CRm & 0xe) {
+    case 0:
+      return GPIOC_SIO_OUT;
+    case 4:
+      return GPIOC_SIO_OE;
+    case 8:
+      return GPIOC_SIO_IN;
+    default:
+      return -1;
+  }
+}
+
+function gpiocRead(core: CortexM33Core, base: number, hi: boolean): number {
+  if (base < 0) return 0;
+  return core.chip.sio.readUint32(base + (hi ? 4 : 0), core.coreIndex) >>> 0;
+}
+
+/** Apply @op with @value to the OUT or OE register at @base (inputs are read-only). */
+function gpiocWrite(core: CortexM33Core, base: number, hi: boolean, op: number, value: number) {
+  if (base !== GPIOC_SIO_OUT && base !== GPIOC_SIO_OE) return;
+  let offset = base + (hi ? 4 : 0);
+  switch (op) {
+    case GPIOC_OP_XOR:
+      offset += GPIOC_SIO_XOR;
+      break;
+    case GPIOC_OP_SET:
+      offset += GPIOC_SIO_SET;
+      break;
+    case GPIOC_OP_CLR:
+      offset += GPIOC_SIO_CLR;
+      break;
+    default:
+      break;
+  }
+  core.chip.sio.writeUint32(offset, value >>> 0, core.coreIndex);
+}
+
+/** Apply @op to a single pin (0..63) of the OUT or OE register at @base. */
+function gpiocWriteBit(core: CortexM33Core, base: number, pin: number, op: number) {
+  const index = pin & 0x3f;
+  const hi = index >= 32;
+  gpiocWrite(core, base, hi, op, (1 << (index & 31)) >>> 0);
+}
+
 function cp0Gpioc(core: CortexM33Core, hw0: number, hw1: number): number {
+  const regs = core.regs;
+  const hw0Hi = (hw0 >>> 8) & 0xff;
+  const CRm = hw1 & 0xf;
+  const Rt = (hw1 >>> 12) & 0xf;
+  const base = gpiocBaseOffset(CRm);
+  const isRead = ((hw0 >>> 4) & 1) !== 0; // L bit
+
+  if (hw0Hi === 0xec || hw0Hi === 0xfc) {
+    // MCRR / MRRC
+    const opc1 = (hw1 >>> 4) & 0xf;
+    const Rt2 = hw0 & 0xf;
+    if (isRead) {
+      regs.r[Rt] = gpiocRead(core, base, false);
+      regs.r[Rt2] = gpiocRead(core, base, true);
+      return 1;
+    }
+    const lo = regs.r[Rt] >>> 0;
+    const hi = regs.r[Rt2] >>> 0;
+    if (opc1 <= 3) {
+      gpiocWrite(core, base, false, opc1, lo);
+      gpiocWrite(core, base, true, opc1, hi);
+    } else if (opc1 === 4) {
+      gpiocWriteBit(core, base, lo, hi & 1 ? GPIOC_OP_SET : GPIOC_OP_CLR);
+    } else if (opc1 <= 7) {
+      if (hi & 1) gpiocWriteBit(core, base, lo, opc1 - 4);
+    } else if (opc1 <= 11) {
+      // Rt2 selects the register; other indices are undefined
+      if (hi <= 1) gpiocWrite(core, base, hi === 1, opc1 - 8, lo);
+    }
+    return 1;
+  }
+
   if (!isMrcMcr(hw0, hw1)) return 1; // CDP → NOP
 
   const opc1 = (hw0 >>> 5) & 0x7;
-  const CRn = hw0 & 0xf;
-  const opc2 = (hw1 >>> 5) & 0x7;
-  const CRm = hw1 & 0xf;
-  const Rt = (hw1 >>> 12) & 0xf;
-  const isRead = ((hw0 >>> 4) & 1) !== 0; // L bit: 1=MRC (read), 0=MCR (write)
-  const regs = core.regs;
-
-  // Bank select: 0=LO OUT, 1=LO OE, 2=LO IN, 4=HI OUT, 5=HI OE, 6=HI IN.
-  const isInput = opc1 === 2 || opc1 === 6;
-  const isOe = opc1 === 1 || opc1 === 5;
-  const isHi = opc1 >= 4;
-  void isHi; // HI bank is RAZ/WI on RP2350.
-
-  const sio = core.chip.sio;
-
-  // SIO GPIO register offsets (RP2350 layout — differs from RP2040).
-  const GPIO_OUT = 0x010;
-  const GPIO_OUT_SET = 0x018;
-  const GPIO_OUT_CLR = 0x020;
-  const GPIO_OUT_XOR = 0x028;
-  const GPIO_OE = 0x030;
-  const GPIO_OE_SET = 0x038;
-  const GPIO_OE_CLR = 0x040;
-  const GPIO_OE_XOR = 0x048;
-  const GPIO_IN = 0x004;
-
-  const baseOffset = isInput ? GPIO_IN : isOe ? GPIO_OE : GPIO_OUT;
-
-  const isBulk = CRn === 0 && CRm === 0;
-  if (isBulk) {
-    if (isRead) {
-      if (isInput) {
-        writeMrcResult(core, Rt, sio.readUint32(GPIO_IN, core.coreIndex) & PIN_MASK);
-      } else if (!isHi) {
-        writeMrcResult(core, Rt, sio.readUint32(baseOffset, core.coreIndex) & PIN_MASK);
-      } else {
-        writeMrcResult(core, Rt, 0); // HI bank RAZ
-      }
-    } else {
-      const val = regs.r[Rt] & PIN_MASK;
-      if (!isInput && !isHi) {
-        switch (opc2) {
-          case 0:
-            sio.writeUint32(baseOffset, val, core.coreIndex);
-            break;
-          case 1:
-            sio.writeUint32(isOe ? GPIO_OE_SET : GPIO_OUT_SET, val, core.coreIndex);
-            break;
-          case 2:
-            sio.writeUint32(isOe ? GPIO_OE_CLR : GPIO_OUT_CLR, val, core.coreIndex);
-            break;
-          case 3:
-            sio.writeUint32(isOe ? GPIO_OE_XOR : GPIO_OUT_XOR, val, core.coreIndex);
-            break;
-        }
-      }
-    }
-  } else {
-    // Per-bit operation.
-    const pin = (CRn << 4) | CRm;
-    if (pin >= 30) {
-      if (isRead) writeMrcResult(core, Rt, 0);
-      return 1;
-    }
-    const bitMask = 1 << pin;
-    if (isRead) {
-      if (isInput) {
-        writeMrcResult(core, Rt, (sio.readUint32(GPIO_IN, core.coreIndex) >> pin) & 1);
-      } else {
-        writeMrcResult(core, Rt, (sio.readUint32(baseOffset, core.coreIndex) >> pin) & 1);
-      }
-    } else {
-      if (!isInput && !isHi) {
-        switch (opc2) {
-          case 4:
-            // Per-bit "put": Rt[0]=1 → set only this pin; Rt[0]=0 → clear only
-            // this pin. Must NOT do a bulk write (which zeroes every other pin).
-            if (regs.r[Rt] & 1) {
-              sio.writeUint32(isOe ? GPIO_OE_SET : GPIO_OUT_SET, bitMask, core.coreIndex);
-            } else {
-              sio.writeUint32(isOe ? GPIO_OE_CLR : GPIO_OUT_CLR, bitMask, core.coreIndex);
-            }
-            break;
-          case 5:
-            sio.writeUint32(isOe ? GPIO_OE_SET : GPIO_OUT_SET, bitMask, core.coreIndex);
-            break;
-          case 6:
-            sio.writeUint32(isOe ? GPIO_OE_CLR : GPIO_OUT_CLR, bitMask, core.coreIndex);
-            break;
-          case 7:
-            sio.writeUint32(isOe ? GPIO_OE_XOR : GPIO_OUT_XOR, bitMask, core.coreIndex);
-            break;
-        }
-      }
-    }
+  const hiBank = (CRm & 1) !== 0;
+  if (isRead) {
+    writeMrcResult(core, Rt, gpiocRead(core, base, hiBank));
+    return 1;
+  }
+  const value = regs.r[Rt] >>> 0;
+  if (opc1 <= 3) {
+    gpiocWrite(core, base, hiBank, opc1, value);
+  } else if (opc1 >= 5) {
+    gpiocWriteBit(core, base, value, opc1 - 4);
   }
   return 1;
 }
