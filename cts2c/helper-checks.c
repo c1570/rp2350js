@@ -362,6 +362,20 @@ static void check_timer_alarm_overflow(void) {
   checkU32("timer >2.1s alarm fired", RP2350_readUint32(mcu, timer + 0x3c) & 1u, 1);
 }
 
+// ─── mtimecmp halves must be unsigned ────────────────────────────────────
+// cts2c used to infer number[] as int32_t[], so 0xffffffff (and any low word
+// with bit 31 set) became negative; mtime >= mtimecmp then looked already
+// true, leaving MTIP asserted as a permanent interrupt storm. FULLSPEED hits
+// bit 31 in ~14 s at 150 MHz instead of ~36 min at 1 MHz.
+static void check_mtimecmp_unsigned(void) {
+  RP2350Options options = {.coreArch = "riscv", .loadFirmware = NULL};
+  RP2350* mcu = RP2350_new(&options);
+  checkF64("mtimecmp reset is 0xffffffff", RP2350SIO_mtimecmpValue(mcu->sio, 0), 4294967295.0);
+  RP2350_writeUint32(mcu, 0xd00001bc, 1); // MTIMECMPH
+  RP2350_writeUint32(mcu, 0xd00001b8, 0x80000000u); // MTIMECMP
+  checkF64("mtimecmp keeps bit 31", RP2350SIO_mtimecmpValue(mcu->sio, 0), 6442450944.0);
+}
+
 int main(void) {
   // floatToBits/bitsToFloat: 3.14159f's real IEEE-754 bits are 0x40490FD0 — NOT the
   // bit pattern for 3.0f (0x40400000), which is what the pre-fix
@@ -623,6 +637,7 @@ int main(void) {
 
   // ─── Timer alarm scheduling past INT32_MAX ns ──────────────────────────
   check_timer_alarm_overflow();
+  check_mtimecmp_unsigned();
 
   if (failures > 0) {
     fprintf(stderr, "\n%d check(s) FAILED\n", failures);

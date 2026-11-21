@@ -193,6 +193,42 @@ describe('RP2350', () => {
       expect(cpu.csrs[0x344] & MTIP).toBe(MTIP);
     });
 
+    it('MTIME_CTRL.FULLSPEED advances mtime at the system clock rate', () => {
+      const rp2350 = new RP2350();
+      rp2350.writeUint32(SIO_MTIME, 0);
+      rp2350.writeUint32(SIO_MTIME_CTRL, 0x3); // EN | FULLSPEED
+      expect(rp2350.readUint32(SIO_MTIME_CTRL)).toBe(0x3);
+
+      rp2350.clock.tick(1_000_000); // 1 ms at 150 MHz
+      expect(rp2350.readUint32(SIO_MTIME)).toBeGreaterThanOrEqual(149_999);
+      expect(rp2350.readUint32(SIO_MTIME)).toBeLessThanOrEqual(150_000);
+    });
+
+    it('clearing FULLSPEED keeps mtime continuous and returns to 1 MHz', () => {
+      const rp2350 = new RP2350();
+      rp2350.writeUint32(SIO_MTIME, 0);
+      rp2350.writeUint32(SIO_MTIME_CTRL, 0x3);
+      rp2350.clock.tick(1_000_000); // ~150000 mtime ticks at 150 MHz
+      const atSwitch = rp2350.readUint32(SIO_MTIME);
+
+      rp2350.writeUint32(SIO_MTIME_CTRL, 0x1); // EN only
+      rp2350.clock.tick(1_000_000); // 1000 mtime ticks at 1 MHz
+      expect(rp2350.readUint32(SIO_MTIME) - atSwitch).toBe(1000);
+    });
+
+    it('reschedules a pending mtimecmp alarm when FULLSPEED is enabled', () => {
+      const rp2350 = new RP2350();
+      const cpu = rp2350.core0;
+      rp2350.writeUint32(SIO_MTIME, 0);
+      rp2350.writeUint32(SIO_MTIMECMP, 1000); // would fire after 1 ms at 1 MHz
+
+      rp2350.writeUint32(SIO_MTIME_CTRL, 0x3); // EN | FULLSPEED
+      expect(cpu.csrs[0x344] & MTIP).toBe(0);
+
+      rp2350.clock.tick(10_000); // > 1000 mtime ticks at 150 MHz
+      expect(cpu.csrs[0x344] & MTIP).toBe(MTIP);
+    });
+
     it('MTIMECMP reads back what was written and defaults to 0xffffffff', () => {
       const rp2350 = new RP2350();
       expect(rp2350.readUint32(SIO_MTIMECMP)).toBe(0xffffffff);
@@ -200,6 +236,16 @@ describe('RP2350', () => {
       expect(rp2350.readUint32(SIO_MTIMECMP)).toBe(12345);
       rp2350.writeUint32(SIO_MTIMECMPH, 42);
       expect(rp2350.readUint32(SIO_MTIMECMPH)).toBe(42);
+    });
+
+    it('treats both mtimecmp halves as unsigned', () => {
+      const rp2350 = new RP2350();
+      rp2350.writeUint32(SIO_MTIMECMPH, 1);
+      rp2350.writeUint32(SIO_MTIMECMP, 0x80000000);
+      expect(rp2350.readUint32(SIO_MTIMECMPH)).toBe(1);
+      expect(rp2350.readUint32(SIO_MTIMECMP)).toBe(0x80000000);
+      // Still far in the future, so no spurious MTIP.
+      expect(rp2350.core0.csrs[0x344] & MTIP).toBe(0);
     });
 
     it('fires SIO_IRQ_MTIMECMP on the writing core once mtime reaches mtimecmp', () => {

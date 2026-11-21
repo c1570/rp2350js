@@ -2,7 +2,7 @@ import type { RP2350 } from './rp2350';
 import { AlarmCallback, IAlarm } from './clock/clock';
 import { RPSIOCore } from './sio-core';
 import { FIFO } from './utils/fifo';
-import { Float64 } from './utils/types';
+import { Float64, Uint32 } from './utils/types';
 
 const CPUID = 0x000;
 
@@ -17,6 +17,7 @@ const MTIMEH = 0x1b4;
 const MTIMECMP = 0x1b8;
 const MTIMECMPH = 0x1bc;
 const MTIME_CTRL_EN = 1 << 0;
+const MTIME_CTRL_FULLSPEED = 1 << 1;
 const MTIME_FREQUENCY = 1_000_000; // 1 MHz tick rate (functional approximation)
 const MTIME_NANOS_PER_TICK: Float64 = 1e9 / MTIME_FREQUENCY;
 const TWO32: Float64 = 0x100000000;
@@ -76,14 +77,20 @@ export class RP2350SIO {
   private mtimeBaseValue: Float64 = 0;
   private mtimeBaseNanos: Float64 = 0;
   private mtimeEnabled = true;
+  // Length of one mtime tick, in nanoseconds: 1000 at 1 MHz, or 1e9/clkSys
+  // when MTIME_CTRL.FULLSPEED runs the timer directly from the system clock.
+  private mtimeNanosPerTick: Float64 = MTIME_NANOS_PER_TICK;
   private mtimeCtrl = 0x0000000d; // reset value: DBGPAUSE_CORE1/0=1, FULLSPEED=0, EN=1
   // Two fields rather than a tuple: cts2c cannot build an array literal of interface values.
   private readonly mtimecmpAlarm0: IAlarm;
   private readonly mtimecmpAlarm1: IAlarm;
-  private readonly mtimecmpLow: [number, number] = [0xffffffff, 0xffffffff];
+  // Uint32 (not number): cts2c infers number[] as int32_t[], so a compare with
+  // bit 31 set (or the 0xffffffff reset value) became negative in the C build
+  // and made mtimecmp look already-reached — an MTIP interrupt storm.
+  private readonly mtimecmpLow: [Uint32, Uint32] = [0xffffffff, 0xffffffff];
   // The datasheet resets mtimecmph to 0xffffffff too; 0 keeps lo-only writes working and
   // the compare value (0xffffffff ticks, ~71 minutes) is just as unreachable in practice.
-  private readonly mtimecmpHigh: [number, number] = [0, 0];
+  private readonly mtimecmpHigh: [Uint32, Uint32] = [0, 0];
 
   constructor(
     private readonly rpchip: RP2350,
@@ -111,7 +118,7 @@ export class RP2350SIO {
       return this.mtimeBaseValue;
     }
     const elapsed: Float64 = this.rpchip.clock.nanos - this.mtimeBaseNanos;
-    return this.mtimeBaseValue + Math.floor(elapsed / MTIME_NANOS_PER_TICK);
+    return this.mtimeBaseValue + Math.floor(elapsed / this.mtimeNanosPerTick);
   }
 
   private setMtime(value: Float64) {
@@ -122,7 +129,9 @@ export class RP2350SIO {
   }
 
   private mtimecmpValue(cpuCore: number): Float64 {
-    return this.mtimecmpHigh[cpuCore] * TWO32 + this.mtimecmpLow[cpuCore];
+    // The explicit >>> 0 keeps the halves unsigned even if a caller/transpile
+    // path narrows them to int32_t.
+    return (this.mtimecmpHigh[cpuCore] >>> 0) * TWO32 + (this.mtimecmpLow[cpuCore] >>> 0);
   }
 
   /** Alarm callback: mtime has reached this core's mtimecmp. */
@@ -147,7 +156,7 @@ export class RP2350SIO {
       compare - this.mtimeBaseValue < MTIME_MAX_SCHEDULABLE_TICKS
     ) {
       const sinceBase: Float64 = this.rpchip.clock.nanos - this.mtimeBaseNanos;
-      const delta: Float64 = (compare - this.mtimeBaseValue) * MTIME_NANOS_PER_TICK - sinceBase;
+      const delta: Float64 = (compare - this.mtimeBaseValue) * this.mtimeNanosPerTick - sinceBase;
       alarm.schedule(delta);
     }
   }
@@ -279,12 +288,24 @@ export class RP2350SIO {
         this.gpioHiOutputEnable ^= value & GPIO_MASK;
         break;
       case MTIME_CTRL: {
+        const timingMask = MTIME_CTRL_EN | MTIME_CTRL_FULLSPEED;
+        const timingChanged = (value & timingMask) !== (this.mtimeCtrl & timingMask);
+        this.mtimeCtrl = value;
+        // Redundant writes (or DBGPAUSE-only changes) must not cancel and
+        // reschedule both mtimecmp alarms — some firmware does this in a loop.
+        if (!timingChanged) {
+          break;
+        }
         const enable = !!(value & MTIME_CTRL_EN);
         // Rebase so the count is continuous across the enable change.
         this.mtimeBaseValue = this.mtimeNow();
         this.mtimeBaseNanos = this.rpchip.clock.nanos;
         this.mtimeEnabled = enable;
-        this.mtimeCtrl = value;
+        // FULLSPEED runs mtime from the system clock instead of the 1 MHz
+        // system-level timer tick. The rebase above captured the count at the
+        // old rate, so changing the tick length here leaves mtime continuous.
+        this.mtimeNanosPerTick =
+          value & MTIME_CTRL_FULLSPEED ? 1e9 / this.rpchip.clkSys : MTIME_NANOS_PER_TICK;
         this.updateMtimecmp(0);
         this.updateMtimecmp(1);
         break;
