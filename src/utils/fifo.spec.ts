@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { FIFO } from './fifo';
+import { SaveStateStream } from './save-state';
 
 describe('FIFO', () => {
   it('should successfully push and pull 4 items', () => {
@@ -48,5 +49,42 @@ describe('FIFO', () => {
       fifo.pull();
       expect(fifo.items).toEqual([20, 30]);
     });
+  });
+});
+
+describe('transferState', () => {
+  it('should round-trip the content and the read position', () => {
+    const fifo = new FIFO(4);
+    fifo.push(1);
+    fifo.push(2);
+    fifo.push(3);
+    fifo.pull();
+    const data = new Uint8Array(64);
+    const out = new SaveStateStream(true, false).attach(data, data.length);
+    fifo.transferState(out);
+    expect(out.ok).toBe(true);
+
+    fifo.reset();
+    fifo.push(9);
+    const input = new SaveStateStream(false, false).attach(data, data.length);
+    fifo.transferState(input);
+    expect(input.ok).toBe(true);
+    expect(fifo.items).toEqual([2, 3]);
+    expect(fifo.itemCount).toBe(2);
+    fifo.push(4);
+    fifo.push(5);
+    expect(fifo.full).toBe(true);
+  });
+
+  it('should reject inconsistent indices', () => {
+    const fifo = new FIFO(4);
+    fifo.push(7);
+    const data = new Uint8Array(64);
+    const out = new SaveStateStream(true, false).attach(data, data.length);
+    fifo.transferState(out);
+    new Uint32Array(data.buffer)[0] = 4;
+    const input = new SaveStateStream(false, false).attach(data, data.length);
+    fifo.transferState(input);
+    expect(input.ok).toBe(false);
   });
 });

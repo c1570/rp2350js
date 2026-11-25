@@ -4,6 +4,7 @@ import { IRPChip } from '../rpchip';
 import { Timer32, Timer32PeriodicAlarm, TimerMode } from '../utils/timer32';
 import { BasePeripheral, Peripheral } from './peripheral';
 import { Uint32 } from '../utils/types';
+import { SaveStateStream } from '../utils/save-state';
 
 /** Control and status register */
 const CHn_CSR = 0x00;
@@ -289,6 +290,23 @@ class PWMChannel {
     }
     this.updateEnable();
   }
+
+  transferState(s: SaveStateStream) {
+    this.csr = s.i32(this.csr);
+    this.div = s.i32(this.div);
+    this.cc = s.i32(this.cc);
+    this.top = s.i32(this.top);
+    this.lastBValue = s.bool(this.lastBValue);
+    this.countingUp = s.bool(this.countingUp);
+    this.ccUpdated = s.bool(this.ccUpdated);
+    this.topUpdated = s.bool(this.topUpdated);
+    this.tickCounter = s.i32(this.tickCounter);
+    this.divMode = s.i32(this.divMode) as PWMDivMode;
+    this.timer.transferState(s);
+    this.alarmA.transferState(s);
+    this.alarmB.transferState(s);
+    this.alarmBottom.transferState(s);
+  }
 }
 
 export class RPPWM<ChipType extends IRPChip = IRPChip>
@@ -447,6 +465,17 @@ export class RPPWM<ChipType extends IRPChip = IRPChip>
     this.gpioDirection = 0xffffffff;
     for (const channel of this.channels) {
       channel.reset();
+    }
+  }
+
+  transferState(s: SaveStateStream) {
+    this.intRaw = s.i32(this.intRaw);
+    this.intEnable = s.i32(this.intEnable);
+    this.intForce = s.i32(this.intForce);
+    this.gpioValue = s.i32(this.gpioValue);
+    this.gpioDirection = s.u32(this.gpioDirection);
+    for (const channel of this.channels) {
+      channel.transferState(s);
     }
   }
 }

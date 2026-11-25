@@ -26,6 +26,7 @@ import type { RP2350 } from '../rp2350';
 import { Timer32, Timer32PeriodicAlarm, TimerMode } from '../utils/timer32';
 import { BasePeripheral } from './peripheral';
 import { SimulationClock } from '../clock/simulation-clock';
+import { SaveStateStream } from '../utils/save-state';
 
 // SCS (System Control Space) offsets within PPB.
 // Offsets are address bits [23:0] (mask 0xffffff) — i.e. the full offset
@@ -665,5 +666,64 @@ export class RPPPB2350<ChipType extends IRPChip = IRPChip> extends BasePeriphera
       }
     }
     return 0;
+  }
+
+  transferState(s: SaveStateStream) {
+    this.transferCoreState(s, this.coreState[0]);
+    this.transferCoreState(s, this.coreState[1]);
+  }
+
+  private transferCoreState(s: SaveStateStream, st: M33CoreState) {
+    st.nvicPending[0] = s.i32(st.nvicPending[0]);
+    st.nvicPending[1] = s.i32(st.nvicPending[1]);
+    st.nvicEnabled[0] = s.i32(st.nvicEnabled[0]);
+    st.nvicEnabled[1] = s.i32(st.nvicEnabled[1]);
+    st.nvicActive[0] = s.i32(st.nvicActive[0]);
+    st.nvicActive[1] = s.i32(st.nvicActive[1]);
+    s.u8array(st.nvicPriority, NUM_EXTERNAL_IRQS);
+    st.pendingNMI = s.bool(st.pendingNMI);
+    st.pendingPendSV = s.bool(st.pendingPendSV);
+    st.pendingSystick = s.bool(st.pendingSystick);
+    st.vtor = s.i32(st.vtor);
+    st.aircr = s.i32(st.aircr);
+    st.scr = s.i32(st.scr);
+    st.ccr = s.i32(st.ccr);
+    st.shcsr = s.i32(st.shcsr);
+    st.cfsr = s.i32(st.cfsr);
+    st.hfsr = s.i32(st.hfsr);
+    st.cpacr = s.i32(st.cpacr);
+    st.shpr2 = s.i32(st.shpr2);
+    st.shpr3 = s.i32(st.shpr3);
+    st.fpccr = s.i32(st.fpccr);
+    st.fpcar = s.i32(st.fpcar);
+    st.fpdscr = s.i32(st.fpdscr);
+    s.u32array(st.dcpHalves, 16);
+    st.dcpStatus = s.i32(st.dcpStatus);
+    // Only ever assigned from the register array, so its live form is unsigned.
+    st.rcpSalt = s.u32(st.rcpSalt);
+    st.rcpSaltValid = s.bool(st.rcpSaltValid);
+    st.rcpCount = s.i32(st.rcpCount);
+    st.mpuCtrl = s.i32(st.mpuCtrl);
+    st.mpuRnr = s.i32(st.mpuRnr);
+    for (let i = 0; i < 8; i++) {
+      st.mpuRegions[i].rbar = s.i32(st.mpuRegions[i].rbar);
+      st.mpuRegions[i].rlar = s.i32(st.mpuRegions[i].rlar);
+    }
+    st.mpuMair[0] = s.i32(st.mpuMair[0]);
+    st.mpuMair[1] = s.i32(st.mpuMair[1]);
+    st.sauCtrl = s.i32(st.sauCtrl);
+    st.sauRnr = s.i32(st.sauRnr);
+    for (let i = 0; i < 8; i++) {
+      st.sauRegions[i].rbar = s.i32(st.sauRegions[i].rbar);
+      st.sauRegions[i].rlar = s.i32(st.sauRegions[i].rlar);
+    }
+    st.sfsr = s.i32(st.sfsr);
+    st.sfar = s.i32(st.sfar);
+    st.systickCountFlag = s.bool(st.systickCountFlag);
+    st.systickClkSource = s.bool(st.systickClkSource);
+    st.systickIntEnable = s.bool(st.systickIntEnable);
+    st.systickReload = s.i32(st.systickReload);
+    st.systickTimer.transferState(s);
+    st.systickAlarm.transferState(s);
   }
 }

@@ -8,14 +8,20 @@
 //   c) Compare — if all match, PASS
 //   d) If mismatch: bisect with 100-step blocks to find the divergence window
 //   e) Dump PC + all registers per step for both Node and C in that window
+//   f) With a restoreAtStep: at that step, leave USB/DMA/ADC work in flight, serialize
+//      the chip, run on to the target, unserialize and run to the target again. The
+//      state's CRC32 must be identical on Node and C (the same bytes for the same
+//      state), and the second run must replay the first — on both sides.
 //
-// Usage: npx tsx cts2c/cts2c-ensure-parity.ts [firmware.hex] [targetCycles] [coreArch]
-//   Default: demo/cnm64_main.hex, 50000000 cycles, riscv
+// Usage: npx tsx cts2c/cts2c-ensure-parity.ts [firmware.hex] [targetCycles] [coreArch] [restoreAtStep]
+//   Default: demo/cnm64_main.hex, 50000000 cycles, riscv, no save/restore
 //   coreArch: "riscv" or "arm" (both RP2350, default "riscv") or "rp2040" (RP2040 chip)
+//   restoreAtStep: a positive multiple of the 1M-step block size
 
 import { RP2040, RP2350 } from '../src';
 import { execSync, spawnSync } from 'child_process';
 import { join } from 'path';
+import { SAVE_STATE_HEADER_WORDS } from '../src/utils/save-state';
 
 const ROOT = join(import.meta.dirname, '..');
 const HARNESS_BIN = join(ROOT, 'build/transpile/rp2350-harness');
@@ -43,12 +49,41 @@ function crc32UpdateU32LE(crc: number, value: number): number {
   return crc;
 }
 
+function crc32UpdateByte(crc: number, byte: number): number {
+  return (CRC32_TABLE[(crc ^ byte) & 0xff] ^ (crc >>> 8)) >>> 0;
+}
+
+function crc32Bytes(bytes: Uint8Array): string {
+  let crc = 0xffffffff;
+  for (let i = 0; i < bytes.length; i++) crc = crc32UpdateByte(crc, bytes[i]);
+  return ((crc ^ 0xffffffff) >>> 0).toString(16).padStart(8, '0');
+}
+
 // ─── Types ────────────────────────────────────────────────────────────
 interface BlockCrc {
   index: number;
   crc: string;
   steps: number;
   cycles: number;
+  // 0 for the first run, 1 for the run after unserialize() (see restoreAtStep).
+  phase: number;
+}
+
+interface StateCrc {
+  step: number;
+  ok: boolean;
+  size: number;
+  totalWords: number;
+  bytes: number;
+  crc: string;
+}
+
+interface SaveRestoreRun {
+  /** The state with flash and PSRAM left out, as they are until something writes them. */
+  state: StateCrc;
+  /** The state with both images in, taken one step later. */
+  fullState: StateCrc;
+  blocks: BlockCrc[];
 }
 
 interface RegDump {
@@ -100,6 +135,7 @@ function runNode(
           crc: ((blockCrc ^ 0xffffffff) >>> 0).toString(16).padStart(8, '0'),
           steps: blockSteps,
           cycles: mcu.cycles,
+          phase: 0,
         });
       blockIndex++;
       blockSteps = 0;
@@ -112,8 +148,139 @@ function runNode(
       crc: ((blockCrc ^ 0xffffffff) >>> 0).toString(16).padStart(8, '0'),
       steps: blockSteps,
       cycles: mcu.cycles,
+      phase: 0,
     });
   return results;
+}
+
+// ─── Node save/restore runner ─────────────────────────────────────────
+// Must match rp2350_start_inflight()/rp2040_start_inflight() in cts2c/inflight-work.h.
+// Ends with flash (and, on the RP2350, PSRAM) marked written, so the state carries the
+// images and every byte of them gets compared.
+function startInflight(mcu: RP2350 | RP2040) {
+  if (mcu instanceof RP2350) {
+    mcu.flash[0x110000] = 0x5a;
+    mcu.invalidateFlashDecode(0x100, 4);
+    mcu.writeUint32(0x15000000, 0x1234); // an ordinary store into PSRAM
+  } else {
+    mcu.writeUint32(0x10150000, 0x5a5a5a5a); // 0x150000 bytes into the flash window
+  }
+  const src = mcu instanceof RP2350 ? 0x20060000 : 0x20030000; // in SRAM on either chip
+  const dst = mcu instanceof RP2350 ? 0x20061000 : 0x20038000;
+  for (let i = 0; i < 4; i++) mcu.usbDPRAM[0x40 + i] = 0xa0 + i;
+  mcu.writeUint32(0x50100008, 0x40); // USB EP1 IN control: buffer at 0x40
+  mcu.writeUint32(0x50100088, 4 | (1 << 10)); // EP1 IN buffer control: 4 bytes, available
+  const words = [0x11, 0x2233, 0x445566, 0x778899aa];
+  for (let i = 0; i < 4; i++) mcu.writeUint32(src + 4 * i, words[i]);
+  mcu.writeUint32(0x50000000, src); // DMA ch0 READ_ADDR
+  mcu.writeUint32(0x50000004, dst); // WRITE_ADDR
+  mcu.writeUint32(0x50000008, 4); // TRANS_COUNT
+  // CTRL_TRIG: on the RP2350 TREQ_SEL is bits 17..22 and INCR_WRITE bit 6; on the RP2040
+  // bits 15..20 and bit 5.
+  mcu.writeUint32(
+    0x5000000c,
+    mcu instanceof RP2350
+      ? 1 | (1 << 6) | (1 << 4) | (0x3f << 17) | (2 << 2)
+      : 1 | (1 << 5) | (1 << 4) | (0x3f << 15) | (2 << 2)
+  );
+  mcu.adc.channelValues[2] = 0x9ab;
+  mcu.writeUint32(mcu instanceof RP2350 ? 0x400a0000 : 0x4004c000, 1 | (1 << 2) | (2 << 12));
+}
+
+/** Identifies a state buffer by the CRC32 of exactly the bytes it uses. */
+function stateOf(data: Uint8Array): StateCrc {
+  const totalWords = new Uint32Array(data.buffer, 0, SAVE_STATE_HEADER_WORDS)[5];
+  const bytes = (SAVE_STATE_HEADER_WORDS + totalWords) * 4;
+  return {
+    step: 0,
+    ok: true,
+    size: data.length,
+    totalWords,
+    bytes,
+    crc: crc32Bytes(data.subarray(0, bytes)),
+  };
+}
+
+function blockResult(
+  index: number,
+  phase: number,
+  blockCrc: number,
+  steps: number,
+  cycles: number
+): BlockCrc {
+  return {
+    index,
+    crc: ((blockCrc ^ 0xffffffff) >>> 0).toString(16).padStart(8, '0'),
+    steps,
+    cycles,
+    phase,
+  };
+}
+
+function runNodeSaveRestore(
+  hexFile: string,
+  cycles: number,
+  blockSize: number,
+  restoreAt: number,
+  coreArch: CoreArch
+): SaveRestoreRun {
+  const mcu =
+    coreArch === 'rp2040'
+      ? new RP2040({ loadFirmware: hexFile })
+      : new RP2350({ loadFirmware: hexFile, coreArch });
+  silenceHostIO(mcu);
+
+  const blocks: BlockCrc[] = [];
+  let state: StateCrc | undefined;
+  let fullState: StateCrc | undefined;
+  let saved: Uint8Array | undefined;
+  let steps = 0;
+
+  // The first run (phase 0) doubles as the reference for the run after the rewind
+  // (phase 1). `steps` is reset to the rewind point, so blocks line up between the two.
+  for (let phase = 0; ; phase++) {
+    let blockCrc = 0xffffffff;
+    let blockSteps = 0;
+    let blockIndex = Math.floor(steps / blockSize);
+
+    while (mcu.cycles < cycles) {
+      mcu.step();
+      steps++;
+      if (phase === 0 && steps === restoreAt) {
+        // First the state as firmware that never writes flash or PSRAM gets it: the
+        // in-flight setup marks both images written, which puts them in `saved`.
+        const smallSize = mcu.serializeSize();
+        const smallSaved = new Uint8Array(smallSize);
+        const smallOk = mcu.serialize(smallSaved, smallSize);
+        state = { ...stateOf(smallSaved), step: steps, ok: smallOk, size: smallSize };
+
+        startInflight(mcu);
+        const size = mcu.serializeSize();
+        saved = new Uint8Array(size);
+        const ok = mcu.serialize(saved, size);
+        fullState = { ...stateOf(saved), step: steps, ok, size };
+      }
+      blockCrc = crc32UpdateU32LE(blockCrc, mcu.core[0].PC >>> 0);
+      blockSteps++;
+      if (blockSteps === blockSize) {
+        blocks.push(blockResult(blockIndex, phase, blockCrc, blockSteps, mcu.cycles));
+        blockIndex++;
+        blockSteps = 0;
+        blockCrc = 0xffffffff;
+      }
+    }
+    if (blockSteps > 0)
+      blocks.push(blockResult(blockIndex, phase, blockCrc, blockSteps, mcu.cycles));
+
+    if (phase === 0) {
+      if (!mcu.unserialize(saved!, state!.size))
+        throw new Error('Node unserialize() refused its own state');
+      steps = restoreAt; // the emulator is back there; number its blocks from there too
+      continue;
+    }
+    break;
+  }
+  return { state: state!, fullState: fullState!, blocks };
 }
 
 // ─── Node register dump ──────────────────────────────────────────────
@@ -155,18 +322,12 @@ function dumpNodeRegs(
 }
 
 // ─── C harness runner ─────────────────────────────────────────────────
-function runC(
-  hexFile: string,
-  cycles: number,
-  blockSize: number,
-  quietUntil: number,
-  coreArch: CoreArch
-): BlockCrc[] {
-  const result = spawnSync(
-    HARNESS_BIN,
-    [hexFile, String(cycles), String(blockSize), String(quietUntil), '0', '100', coreArch],
-    { cwd: ROOT, encoding: 'utf8', maxBuffer: 100 * 1024 * 1024 }
-  );
+function runHarness(args: string[]): string {
+  const result = spawnSync(HARNESS_BIN, args, {
+    cwd: ROOT,
+    encoding: 'utf8',
+    maxBuffer: 100 * 1024 * 1024,
+  });
   // A crash (e.g. SIGSEGV) makes the harness produce fewer/zero pc_trace lines than a
   // real run would — without this check, that silently looks like "no mismatch found"
   // to findFirstMismatch (which only ever compares indices both sides actually have),
@@ -193,20 +354,96 @@ function runC(
         .join('\n')}`
     );
   }
-  const lines = (result.stderr || '').split('\n');
+  return result.stderr || '';
+}
+
+function parseBlocks(stderr: string): BlockCrc[] {
   const blocks: BlockCrc[] = [];
-  for (const line of lines) {
-    const m = line.match(/pc_trace block=(\d+) steps=(\d+) cycles=(\d+) crc32=(0x[0-9a-f]+)/);
+  for (const line of stderr.split('\n')) {
+    const m = line.match(
+      /pc_trace (?:phase=(\d+) )?block=(\d+) steps=(\d+) cycles=(\d+) crc32=(0x[0-9a-f]+)/
+    );
     if (m) {
       blocks.push({
-        index: +m[1],
-        crc: m[4].slice(2),
-        steps: +m[2],
-        cycles: +m[3],
+        index: +m[2],
+        crc: m[5].slice(2),
+        steps: +m[3],
+        cycles: +m[4],
+        phase: m[1] ? +m[1] : 0,
       });
     }
   }
   return blocks;
+}
+
+function runC(
+  hexFile: string,
+  cycles: number,
+  blockSize: number,
+  quietUntil: number,
+  coreArch: CoreArch
+): BlockCrc[] {
+  return parseBlocks(
+    runHarness([
+      hexFile,
+      String(cycles),
+      String(blockSize),
+      String(quietUntil),
+      '0',
+      '100',
+      coreArch,
+    ])
+  );
+}
+
+// ─── C save/restore runner ─────────────────────────────────────────────
+function runCSaveRestore(
+  hexFile: string,
+  cycles: number,
+  blockSize: number,
+  restoreAt: number,
+  coreArch: CoreArch
+): SaveRestoreRun {
+  const stderr = runHarness([
+    hexFile,
+    String(cycles),
+    String(blockSize),
+    '0',
+    '0',
+    '100',
+    coreArch,
+    String(restoreAt),
+  ]);
+  // Matches `<kind> step=... ok=... size=... total_words=... crc32=0x...` for either state.
+  const parse = (kind: string): StateCrc => {
+    const m = stderr.match(
+      // Anchored to a line start: `state step=` is also the tail of `small_state step=`.
+      new RegExp(
+        `(?:^|\\n)${kind} step=(\\d+) ok=(\\d) size=(\\d+) total_words=(\\d+) crc32=(0x[0-9a-f]+)`
+      )
+    );
+    if (!m) {
+      throw new Error(
+        `C harness printed no ${kind} line. stderr tail:\n${stderr
+          .split('\n')
+          .slice(-5)
+          .join('\n')}`
+      );
+    }
+    const totalWords = +m[4];
+    return {
+      step: +m[1],
+      ok: m[2] === '1',
+      size: +m[3],
+      totalWords,
+      bytes: (SAVE_STATE_HEADER_WORDS + totalWords) * 4,
+      crc: m[5].slice(2),
+    };
+  };
+  if (!/rewind step=\d+ ok=1/.test(stderr)) {
+    throw new Error('C harness failed to unserialize its own state');
+  }
+  return { state: parse('small_state'), fullState: parse('state'), blocks: parseBlocks(stderr) };
 }
 
 // ─── C register dump ─────────────────────────────────────────────────
@@ -371,6 +608,107 @@ function fmtReg(v: number): string {
   return '0x' + (v >>> 0).toString(16).padStart(8, '0');
 }
 
+// ─── Save/restore ──────────────────────────────────────────────────────
+// Three things must hold. The state Node serializes and the state C serializes are
+// the same bytes. Every block, before and after the rewind, matches between Node and
+// C. And on each side the blocks after unserialize() replay the first run's, which is
+// what makes rewinding sound at all. (Phase 1 has already compared the first run.)
+function firstReplayMismatch(blocks: BlockCrc[], rewindBlock: number): BlockCrc | null {
+  const first = blocks.filter((b) => b.phase === 0 && b.index >= rewindBlock);
+  const second = blocks.filter((b) => b.phase === 1);
+  for (let i = 0; i < Math.min(first.length, second.length); i++) {
+    if (first[i].index !== second[i].index || first[i].crc !== second[i].crc) return second[i];
+  }
+  return null;
+}
+
+function checkSaveRestore(
+  hexFile: string,
+  cycles: number,
+  blockSize: number,
+  restoreAt: number,
+  coreArch: CoreArch
+) {
+  console.log('');
+  console.log(`[phase 4] save/restore at step ${restoreAt}: Node...`);
+  const t0 = Date.now();
+  const node = runNodeSaveRestore(hexFile, cycles, blockSize, restoreAt, coreArch);
+  console.log(
+    `[phase 4] Node done: small state 0x${node.state.crc} (${
+      node.state.bytes
+    } bytes), full state 0x${node.fullState.crc} (${node.fullState.bytes} bytes), ${
+      node.blocks.length
+    } blocks, ${Date.now() - t0}ms`
+  );
+
+  console.log('[phase 4] save/restore: C...');
+  const c = runCSaveRestore(hexFile, cycles, blockSize, restoreAt, coreArch);
+  console.log(
+    `[phase 4] C done: small state 0x${c.state.crc} (${c.state.bytes} bytes), full state 0x${
+      c.fullState.crc
+    } (${c.fullState.bytes} bytes), ${c.blocks.length} blocks, ${Date.now() - t0}ms`
+  );
+  console.log('');
+
+  let failed = false;
+  const fail = (message: string) => {
+    console.log(`FAIL: ${message}`);
+    failed = true;
+  };
+
+  const comparisons: [string, StateCrc, StateCrc][] = [
+    ['with flash and PSRAM left out', node.state, c.state],
+    ['with both images in', node.fullState, c.fullState],
+  ];
+  for (const [what, a, b] of comparisons) {
+    if (a.crc !== b.crc) {
+      fail(
+        `the state taken at step ${restoreAt}, ${what}, is not the same on both sides:
+  Node: 0x${a.crc} (${a.bytes} bytes, ${a.totalWords} words)
+  C:    0x${b.crc} (${b.bytes} bytes, ${b.totalWords} words)`
+      );
+    }
+  }
+  const rewindBlock = restoreAt / blockSize;
+  const common = Math.min(node.blocks.length, c.blocks.length);
+  for (let i = 0; i < common; i++) {
+    const a = node.blocks[i];
+    const b = c.blocks[i];
+    if (a.crc !== b.crc || a.index !== b.index || a.phase !== b.phase) {
+      fail(
+        `${a.phase ? 'after unserialize(), ' : ''}block ${a.index} differs: Node ${a.crc}, C ${
+          b.crc
+        }`
+      );
+      break;
+    }
+  }
+  if (node.blocks.length !== c.blocks.length) {
+    fail(`Node produced ${node.blocks.length} blocks, C ${c.blocks.length}`);
+  }
+  const runs: [string, SaveRestoreRun][] = [
+    ['Node', node],
+    ['C', c],
+  ];
+  for (const [side, run] of runs) {
+    if (!run.blocks.some((b) => b.phase === 1)) {
+      fail(`${side}: no block starts after step ${restoreAt}; raise the cycle count`);
+    }
+    const bad = firstReplayMismatch(run.blocks, rewindBlock);
+    if (bad) {
+      fail(
+        `${side}: block ${bad.index} after unserialize() (${bad.crc}) does not replay the first run`
+      );
+    }
+  }
+  if (failed) process.exit(1);
+
+  const replayed = c.blocks.filter((b) => b.phase === 1).length;
+  console.log(
+    `PASS: states 0x${c.state.crc} (${c.state.bytes} bytes, images left out) and 0x${c.fullState.crc} (${c.fullState.bytes} bytes) identical on Node and C; ${replayed} blocks after unserialize() match and replay the first run on both sides`
+  );
+}
+
 // ─── Main ─────────────────────────────────────────────────────────────
 async function main() {
   const hexFile = process.argv[2] || 'demo/cnm64_main.hex';
@@ -384,7 +722,16 @@ async function main() {
   const COARSE_BLOCK = 1_000_000;
   const FINE_BLOCK = 100;
 
-  console.log(`cts2c-ensure-parity: ${hexFile}, ${targetCycles} cycles, coreArch=${coreArch}`);
+  const restoreAtStep = Number(process.argv[5] || 0);
+  if (restoreAtStep < 0 || restoreAtStep % COARSE_BLOCK !== 0) {
+    console.error(`restoreAtStep must be a positive multiple of ${COARSE_BLOCK} (the block size)`);
+    process.exit(1);
+  }
+
+  console.log(
+    `cts2c-ensure-parity: ${hexFile}, ${targetCycles} cycles, coreArch=${coreArch}` +
+      (restoreAtStep ? `, save/restore at step ${restoreAtStep}` : '')
+  );
   console.log('');
 
   // ── Build C harness ──────────────────────────────────────────────
@@ -502,6 +849,8 @@ async function main() {
   if (mismatch === -1) {
     console.log('');
     console.log(`PASS: all ${nodeBlocks.length} CRC32 blocks match`);
+    if (restoreAtStep > 0)
+      checkSaveRestore(hexFile, targetCycles, COARSE_BLOCK, restoreAtStep, coreArch);
     return;
   }
 

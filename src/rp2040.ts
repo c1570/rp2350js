@@ -31,6 +31,19 @@ import { RPWatchdog } from './peripherals/watchdog';
 import { ConsoleLogger, Logger, LogLevel } from './utils/logging';
 import { bootromB1 } from './bootroms';
 import { loadFirmware, LoadFirmwareOptions, LoadFirmwareResult } from './utils/load-firmware';
+import {
+  SaveStateStream,
+  SAVE_STATE_ARCH_ARM,
+  SAVE_STATE_CHIP_RP2040,
+  SAVE_STATE_FLAG_FLASH,
+  SAVE_STATE_FLAG_FLASH_WRITTEN,
+  SAVE_STATE_HEADER_WORDS,
+  SAVE_STATE_OMIT_FLASH,
+  SERIALIZATION_QUIRK_ENDIAN_DEPENDENT,
+  SERIALIZATION_QUIRK_SINGLE_SESSION,
+  readSaveStateHeader,
+  writeSaveStateHeader,
+} from './utils/save-state';
 
 export const FLASH_START_ADDRESS = 0x10000000;
 export const FLASH_END_ADDRESS = 0x14000000;
@@ -45,6 +58,12 @@ const KB = 1024;
 const MB = 1024 * KB;
 const MHz = 1_000_000;
 
+// Used by transferState(). The `sram` and `flash` initializers keep the equivalent
+// literals on purpose: cts2c expands `this.sram.length` to the initializer expression
+// verbatim, and a named const there becomes an undeclared C identifier.
+const SRAM_SIZE = 264 * KB;
+const FLASH_SIZE = 16 * MB;
+
 /** Constructor options for {@link RP2040}. */
 export interface RP2040Options {
   /** Path to a HEX/UF2 firmware image to load after initial reset. */
@@ -55,9 +74,17 @@ export class RP2040 implements IRPChip {
   readonly bootrom = new Uint32Array(4 * KB);
   readonly sram = new Uint8Array(264 * KB);
   readonly sramView = new DataView(this.sram.buffer);
+  readonly sram32 = new Uint32Array(this.sram.buffer);
   readonly flash = new Uint8Array(16 * MB);
   readonly flash16 = new Uint16Array(this.flash.buffer);
+  readonly flash32 = new Uint32Array(this.flash.buffer);
   readonly flashView = new DataView(this.flash.buffer);
+
+  // Whether anything has written flash through the emulator, and how often (wrapping,
+  // like the int32 the C build holds). A save state carries the flash image only once
+  // it has been written; see serialize().
+  private flashWritten = false;
+  private flashChanges = 0;
 
   /** RP2040 has no fetch-decode cache, so flash invalidation is a no-op. */
   // eslint-disable-next-line @typescript-eslint/no-empty-function
@@ -133,23 +160,35 @@ export class RP2040 implements IRPChip {
     }),
   ];
 
+  // Built as fields rather than inside the address map, so transferState() can name them.
+  private readonly ssi = new RPSSI(this, 'SSI');
+  private readonly clocks = new RPClocks(this, 'CLOCKS_BASE');
+  private readonly resets = new RPReset(this, 'RESETS_BASE');
+  private readonly padsBank0 = new RPPADS(this, 'PADS_BANK0_BASE', 'bank0');
+  private readonly padsQspi = new RPPADS(this, 'PADS_QSPI_BASE', 'qspi');
+  private readonly busctrl = new RPBUSCTRL(this, 'BUSCTRL_BASE');
+  private readonly timer0 = new RPTimer(this, 'TIMER_BASE', IRQ.TIMER_0);
+  private readonly watchdog = new RPWatchdog(this, 'WATCHDOG_BASE');
+  private readonly rtc = new RP2040RTC(this, 'RTC_BASE');
+  private readonly vreg = new RP2040VregAndChipReset(this, 'VREG_AND_CHIP_RESET_BASE');
+
   public logger: Logger = new ConsoleLogger(LogLevel.Debug, true);
 
   readonly peripherals: { [index: number]: Peripheral } = {
-    0x18000: new RPSSI(this, 'SSI'),
+    0x18000: this.ssi,
     0x40000: new RP2040SysInfo(this, 'SYSINFO_BASE'),
     0x40004: new RP2040SysCfg(this, 'SYSCFG'),
-    0x40008: new RPClocks(this, 'CLOCKS_BASE'),
-    0x4000c: new RPReset(this, 'RESETS_BASE'),
+    0x40008: this.clocks,
+    0x4000c: this.resets,
     0x40010: new UnimplementedPeripheral(this, 'PSM_BASE'),
     0x40014: new RPIO(this, 'IO_BANK0_BASE'),
     0x40018: new UnimplementedPeripheral(this, 'IO_QSPI_BASE'),
-    0x4001c: new RPPADS(this, 'PADS_BANK0_BASE', 'bank0'),
-    0x40020: new RPPADS(this, 'PADS_QSPI_BASE', 'qspi'),
+    0x4001c: this.padsBank0,
+    0x40020: this.padsQspi,
     0x40024: new UnimplementedPeripheral(this, 'XOSC_BASE'),
     0x40028: new UnimplementedPeripheral(this, 'PLL_SYS_BASE'),
     0x4002c: new UnimplementedPeripheral(this, 'PLL_USB_BASE'),
-    0x40030: new RPBUSCTRL(this, 'BUSCTRL_BASE'),
+    0x40030: this.busctrl,
     0x40034: this.uart[0],
     0x40038: this.uart[1],
     0x4003c: this.spi[0],
@@ -158,11 +197,11 @@ export class RP2040 implements IRPChip {
     0x40048: this.i2c[1],
     0x4004c: this.adc,
     0x40050: this.pwm,
-    0x40054: new RPTimer(this, 'TIMER_BASE', IRQ.TIMER_0),
-    0x40058: new RPWatchdog(this, 'WATCHDOG_BASE'),
-    0x4005c: new RP2040RTC(this, 'RTC_BASE'),
+    0x40054: this.timer0,
+    0x40058: this.watchdog,
+    0x4005c: this.rtc,
     0x40060: new UnimplementedPeripheral(this, 'ROSC_BASE'),
-    0x40064: new RP2040VregAndChipReset(this, 'VREG_AND_CHIP_RESET_BASE'),
+    0x40064: this.vreg,
     0x4006c: new RPTBMAN(this, 'TBMAN_BASE'),
     0x50000: this.dma,
     0x50110: this.usbCtrl,
@@ -187,6 +226,8 @@ export class RP2040 implements IRPChip {
     if (options.loadFirmware) {
       this.loadFirmware(options.loadFirmware);
     }
+    // All of the chip's alarms now exist; anything created later is host-owned.
+    this.clock.seal();
   }
 
   currentCore = 0;
@@ -206,7 +247,12 @@ export class RP2040 implements IRPChip {
    * `src/utils/load-firmware.ts` for option details.
    */
   loadFirmware(path: string, options?: LoadFirmwareOptions): LoadFirmwareResult {
-    return loadFirmware(this, path, options);
+    const result = loadFirmware(this, path, options);
+    // A new image, as yet unwritten. It still counts as a change: a state taken before
+    // the reload left flash out, and must not restore onto this image.
+    this.flashWritten = false;
+    this.flashChanges = (this.flashChanges + 1) | 0;
+    return result;
   }
 
   reset() {
@@ -303,6 +349,10 @@ export class RP2040 implements IRPChip {
       address < FLASH_START_ADDRESS + this.flash.length
     ) {
       this.flashView.setUint32(address - FLASH_START_ADDRESS, value, true);
+      // Every flash write funnels through here (the 8- and 16-bit stores read-modify-
+      // write via writeUint32), so this is where the image starts counting as written.
+      this.flashWritten = true;
+      this.flashChanges = (this.flashChanges + 1) | 0;
     } else if (address >= RAM_START_ADDRESS && address < RAM_START_ADDRESS + this.sram.length) {
       this.sramView.setUint32(address - RAM_START_ADDRESS, value, true);
     } else if (
@@ -544,6 +594,121 @@ export class RP2040 implements IRPChip {
 
   step() {
     this.stepThings(this.stepCores());
+  }
+
+  // Nothing is left out; savestate-coverage.spec.ts holds the chip to that.
+  getSerializationQuirks(): number {
+    return SERIALIZATION_QUIRK_ENDIAN_DEPENDENT | SERIALIZATION_QUIRK_SINGLE_SESSION;
+  }
+
+  serializeSize(omit: number = 0): number {
+    // Measured by a dry run rather than a formula, so it cannot drift from the layout.
+    // Flash counts as present unless omitted, so the bound can never grow later.
+    const s = new SaveStateStream(true, true);
+    s.flags =
+      SAVE_STATE_FLAG_FLASH_WRITTEN | (omit & SAVE_STATE_OMIT_FLASH ? 0 : SAVE_STATE_FLAG_FLASH);
+    this.transferState(s);
+    return (SAVE_STATE_HEADER_WORDS + s.pos) * 4;
+  }
+
+  // Flash is 16 MiB of firmware that rarely writes itself, so a state carries the image
+  // only once something has: until then leaving it out is exact, and makes the state
+  // about 0.3 MiB. `omit` (SAVE_STATE_OMIT_FLASH) leaves it out even afterwards, on the
+  // caller's assurance that nothing will write it again: unserialize() then refuses the
+  // state if something did.
+  serialize(data: Uint8Array, size: number, omit: number = 0): boolean {
+    const s = new SaveStateStream(true, false).attach(data, size);
+    const flash = this.flashWritten
+      ? SAVE_STATE_FLAG_FLASH_WRITTEN | (omit & SAVE_STATE_OMIT_FLASH ? 0 : SAVE_STATE_FLAG_FLASH)
+      : 0;
+    // The RP2040 has no PSRAM: that image's change count is always 0.
+    writeSaveStateHeader(
+      s,
+      SAVE_STATE_CHIP_RP2040,
+      SAVE_STATE_ARCH_ARM,
+      flash,
+      this.flashChanges,
+      0
+    );
+    this.transferState(s);
+    s.finish();
+    return s.ok;
+  }
+
+  unserialize(data: Uint8Array, size: number): boolean {
+    const s = new SaveStateStream(false, false).attach(data, size);
+    const totalWords = readSaveStateHeader(s, SAVE_STATE_CHIP_RP2040, SAVE_STATE_ARCH_ARM);
+    if (totalWords < 0) {
+      return false;
+    }
+    // An image the state left out is left alone, which is exact only while nothing has
+    // written it since the snapshot: the header's change count says, before anything is
+    // restored.
+    if (!(s.flags & SAVE_STATE_FLAG_FLASH) && s.flashChanges !== this.flashChanges) {
+      return false;
+    }
+    this.transferState(s);
+    // The size announced in the header must be exactly what the body turned out to use.
+    if (!s.ok || s.pos - SAVE_STATE_HEADER_WORDS !== totalWords) {
+      return false;
+    }
+    this.flashWritten = (s.flags & SAVE_STATE_FLAG_FLASH_WRITTEN) !== 0;
+    this.flashChanges = s.flashChanges;
+    // The PIO active lists are derived from the state machines' enable bits. (The RP2040
+    // has no fetch-decode caches to drop.)
+    this.updatePioActiveLists();
+    return true;
+  }
+
+  // Order defines the state layout: append new sections at the end, before the memory
+  // images. Everything mutable is saved except construction wiring, host hooks and the
+  // derived PIO active lists rebuilt above (savestate-coverage.spec.ts checks).
+  transferState(s: SaveStateStream) {
+    this.clkSys = s.i32(this.clkSys);
+    this.clkPeri = s.i32(this.clkPeri);
+    this.currentCore = s.i32(this.currentCore);
+    this.clock.transferState(s);
+    // One system-control block: its SysTick is shared, and each core's NVIC bits live
+    // in the core.
+    this.ppb.transferState(s);
+    this.core[0].transferState(s);
+    this.core[1].transferState(s);
+    this.sio.transferState(s);
+    this.watchdog.transferState(s);
+    this.uart[0].transferState(s);
+    this.uart[1].transferState(s);
+    this.i2c[0].transferState(s);
+    this.i2c[1].transferState(s);
+    this.pwm.transferState(s);
+    this.adc.transferState(s);
+    for (let i = 0; i < 30; i++) {
+      this.gpio[i].transferState(s);
+    }
+    for (let i = 0; i < 6; i++) {
+      this.qspi[i].transferState(s);
+    }
+    this.dma.transferState(s);
+    for (const pio of this.pio) {
+      pio.transferState(s);
+    }
+    this.usbCtrl.transferState(s);
+    this.spi[0].transferState(s);
+    this.spi[1].transferState(s);
+    this.ssi.transferState(s);
+    this.clocks.transferState(s);
+    this.resets.transferState(s);
+    this.padsBank0.transferState(s);
+    this.padsQspi.transferState(s);
+    this.busctrl.transferState(s);
+    this.timer0.transferState(s);
+    this.rtc.transferState(s);
+    this.vreg.transferState(s);
+    // Explicit lengths: typed-array length is erased in C.
+    s.u32array(this.sram32, SRAM_SIZE / 4);
+    s.u8array(this.usbDPRAM, 4 * KB);
+    if (s.flags & SAVE_STATE_FLAG_FLASH) {
+      s.u32array(this.flash32, FLASH_SIZE / 4);
+    }
   }
 
   // eslint-disable-next-line @typescript-eslint/no-empty-function

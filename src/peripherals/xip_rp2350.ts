@@ -1,5 +1,6 @@
 import { IRPChip } from '../rpchip';
 import { BasePeripheral, Peripheral } from './peripheral';
+import { SaveStateStream } from '../utils/save-state';
 import { RPIOQSPI } from './io_qspi_rp2350';
 
 const QMI_DIRECT_CSR = 0x00;
@@ -13,6 +14,16 @@ const DIRECT_CSR_TXFULL = 1 << 10;
 const DIRECT_CSR_RXEMPTY = 1 << 16;
 const DIRECT_CSR_RXFULL = 1 << 17;
 const DIRECT_CSR_EN = 1 << 0;
+
+// Numeric rather than `number | null` / a string union, so the parser state is a plain
+// int32 in the C build and can go through SaveStateStream.
+const QMI_NO_COMMAND = -1;
+
+enum QmiReadKind {
+  None,
+  Status,
+  ReadId,
+}
 
 /** APS6404L JEDEC-style ID: KGD (known good die) 0x5D, EID density code 0x52 = 8MiB. */
 const PSRAM_MFID = 0x0d; // AP Memory
@@ -68,13 +79,13 @@ export class RPXIPQMI<ChipType extends IRPChip = IRPChip>
       this.endTransaction();
     }
   }
-  private cmd: number | null = null;
+  private cmd = QMI_NO_COMMAND;
   private addrBytes = new Uint8Array(3);
   private addrBytesCount = 0;
   private addr = 0;
   private progBytes = new Uint8Array(256);
   private progBytesCount = 0;
-  private readKind: 'none' | 'status' | 'rdid' = 'none';
+  private readKind = QmiReadKind.None;
   private rdidIdx = 0;
   private readAddr = 0;
   private dummySkip = 0;
@@ -179,8 +190,8 @@ export class RPXIPQMI<ChipType extends IRPChip = IRPChip>
       }
       this.invalidateFlash(pageBase, 0x100);
     }
-    this.cmd = null;
-    this.readKind = 'none';
+    this.cmd = QMI_NO_COMMAND;
+    this.readKind = QmiReadKind.None;
   }
 
   private pushRx(byte: number) {
@@ -259,7 +270,7 @@ export class RPXIPQMI<ChipType extends IRPChip = IRPChip>
     // them; gating on CS would drop every command. RX pushes still follow
     // the hardware rule (one push per non-NOPUSH record) so the bootrom's
     // count-exact drain loops terminate with the right depth.
-    if (this.cmd === null) {
+    if (this.cmd === QMI_NO_COMMAND) {
       this.cmd = byte;
       this.addrBytesCount = 0;
       this.progBytesCount = 0;
@@ -267,17 +278,17 @@ export class RPXIPQMI<ChipType extends IRPChip = IRPChip>
       switch (byte) {
         case 0x06: // WREN
           this.wel = true;
-          this.cmd = null;
+          this.cmd = QMI_NO_COMMAND;
           break;
         case 0x04: // WRDI
           this.wel = false;
-          this.cmd = null;
+          this.cmd = QMI_NO_COMMAND;
           break;
         case 0x05: // RDSR
-          this.readKind = 'status';
+          this.readKind = QmiReadKind.Status;
           break;
         case 0x9f: // RDID (W25Q128 JEDEC ID: EF 40 18, repeating)
-          this.readKind = 'rdid';
+          this.readKind = QmiReadKind.ReadId;
           this.rdidIdx = 0;
           break;
         case 0x20: // SECTOR_ERASE
@@ -287,11 +298,11 @@ export class RPXIPQMI<ChipType extends IRPChip = IRPChip>
           if (byte === 0x0b) {
             this.dummySkip = 1;
           }
-          this.readKind = 'none';
+          this.readKind = QmiReadKind.None;
           break;
         default:
           // Unknown single-byte opcode (or wire noise): ignore.
-          this.cmd = null;
+          this.cmd = QMI_NO_COMMAND;
           break;
       }
       if (!nopush) {
@@ -301,13 +312,13 @@ export class RPXIPQMI<ChipType extends IRPChip = IRPChip>
       }
       return;
     }
-    if (this.readKind === 'status') {
+    if (this.readKind === QmiReadKind.Status) {
       if (!nopush) {
         this.pushRx(this.statusByte());
       }
       return;
     }
-    if (this.readKind === 'rdid') {
+    if (this.readKind === QmiReadKind.ReadId) {
       // W25Q128 JEDEC ID, repeating. Index advances on every clock (pushed
       // or not) so NOPUSH clocks stay in step, mirroring the READ path.
       const slot = this.rdidIdx % 3;
@@ -345,7 +356,7 @@ export class RPXIPQMI<ChipType extends IRPChip = IRPChip>
               this.rpchip.flash[i] = 0xff;
             }
             this.invalidateFlash(base, 0x1000);
-            this.cmd = null;
+            this.cmd = QMI_NO_COMMAND;
           }
         }
       } else if (this.cmd === 0x02) {
@@ -359,7 +370,7 @@ export class RPXIPQMI<ChipType extends IRPChip = IRPChip>
         this.progBytes[this.progBytesCount++] = byte;
         if (this.progBytesCount >= 256) {
           this.invalidateFlash(pageBase, 0x100);
-          this.cmd = null;
+          this.cmd = QMI_NO_COMMAND;
         }
       }
       if (!nopush) {
@@ -370,6 +381,30 @@ export class RPXIPQMI<ChipType extends IRPChip = IRPChip>
     if (!nopush) {
       this.pushRx(0xff);
     }
+  }
+
+  transferState(s: SaveStateStream) {
+    this.directCsr = s.i32(this.directCsr);
+    this.directCsrEn = s.bool(this.directCsrEn);
+    this.csActive = s.bool(this.csActive);
+    this.cmd = s.i32(this.cmd);
+    s.u8array(this.addrBytes, 3);
+    this.addrBytesCount = s.i32(this.addrBytesCount);
+    this.addr = s.i32(this.addr);
+    s.u8array(this.progBytes, 256);
+    this.progBytesCount = s.i32(this.progBytesCount);
+    this.readKind = s.i32(this.readKind) as QmiReadKind;
+    this.rdidIdx = s.i32(this.rdidIdx);
+    this.readAddr = s.i32(this.readAddr);
+    this.dummySkip = s.i32(this.dummySkip);
+    this.wel = s.bool(this.wel);
+    s.u8array(this.rxFifo, 32);
+    this.rxFifoHead = s.i32(this.rxFifoHead);
+    this.rxFifoCount = s.i32(this.rxFifoCount);
+    this.psramFrameByte = s.i32(this.psramFrameByte);
+    this.psramCmd = s.i32(this.psramCmd);
+    this.psramFrameOpen = s.bool(this.psramFrameOpen);
+    this.cs1WasExplicit = s.bool(this.cs1WasExplicit);
   }
 }
 
@@ -388,5 +423,9 @@ export class RPXIP<ChipType extends IRPChip = IRPChip>
   writeUint32(offset: number, value: number) {
     super.writeUint32(offset, value);
     this.regs[offset] = value;
+  }
+
+  transferState(s: SaveStateStream) {
+    s.u32array(this.regs, 1024);
   }
 }

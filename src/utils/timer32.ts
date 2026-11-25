@@ -1,6 +1,7 @@
 import { SimulationClock } from '../clock/simulation-clock';
 import { AlarmCallback, IAlarm } from '../clock/clock';
 import { Uint32, Float64 } from './types';
+import { SaveStateStream } from './save-state';
 
 export enum TimerMode {
   Increment,
@@ -154,6 +155,16 @@ export class Timer32 {
       listener.fire();
     }
   }
+
+  transferState(s: SaveStateStream) {
+    this.baseValue = s.i32(this.baseValue);
+    this.baseNanos = s.f64(this.baseNanos);
+    this.topValue = s.u32(this.topValue);
+    this.prescalerValue = s.i32(this.prescalerValue);
+    this.timerMode = s.i32(this.timerMode) as TimerMode;
+    this.enabled = s.bool(this.enabled);
+    this.baseFreq = s.i32(this.baseFreq);
+  }
 }
 
 /** Re-schedules a Timer32PeriodicAlarm when its underlying Timer32 changes (reset,
@@ -283,5 +294,11 @@ export class Timer32PeriodicAlarm implements AlarmCallback {
 
   private cancel() {
     this.clockAlarm.cancel();
+  }
+
+  transferState(s: SaveStateStream) {
+    this.targetValue = s.i32(this.targetValue);
+    this.enabled = s.bool(this.enabled);
+    this.warnedZeroInterval = s.bool(this.warnedZeroInterval);
   }
 }

@@ -2,6 +2,7 @@ import { IRPChip } from '../rpchip';
 import { BasePeripheral } from './peripheral';
 import { AlarmCallback, IAlarm } from '../clock/clock.js';
 import { Float64 } from '../utils/types';
+import { SaveStateStream } from '../utils/save-state';
 
 const ENDPOINT_COUNT = 16;
 
@@ -158,6 +159,31 @@ class USBEndpointAlarm implements AlarmCallback {
       this.buffers[this.bufferCount] = buffer;
       this.lengths[this.bufferCount] = length;
       this.usb.finishRead(this.endpoint, buffer, length);
+    }
+  }
+
+  // Only the queued buffers are state; the rest of each slot, and the slots behind
+  // the queue, are scratch left over from earlier transfers.
+  transferState(s: SaveStateStream) {
+    if (s.measuring) {
+      // Variable-size section: reserve the worst case so serializeSize() stays constant.
+      s.skip(MAX_PENDING_BUFFERS * (1 + MAX_BUFFER_SIZE / 4));
+      return;
+    }
+    this.bufferCount = s.i32(this.bufferCount);
+    s.i32array(this.lengths, MAX_PENDING_BUFFERS);
+    for (let i = 0; i < this.bufferCount && i < MAX_PENDING_BUFFERS; i++) {
+      const length = this.lengths[i];
+      if (length < 0) {
+        s.ok = false;
+        return;
+      }
+      // A length past the slot can only come from the host overrunning it, which
+      // schedule() already truncates silently: only what the slot holds is state.
+      s.u8array(this.bufferSlot(i), Math.min(length, MAX_BUFFER_SIZE));
+    }
+    if (this.bufferCount < 0 || this.bufferCount > MAX_PENDING_BUFFERS) {
+      s.ok = false;
     }
   }
 }
@@ -432,5 +458,20 @@ export class RPUSBController<ChipType extends IRPChip = IRPChip>
     this.mirrorSieBit(SIE_RX_TIMEOUT, 1 << 6);
     this.mirrorSieBit(SIE_DATA_SEQ_ERROR, 1 << 5);
     this.checkInterrupts();
+  }
+
+  transferState(s: SaveStateStream) {
+    this.mainCtrl = s.i32(this.mainCtrl);
+    this.intRaw = s.i32(this.intRaw);
+    this.intEnable = s.i32(this.intEnable);
+    this.intForce = s.i32(this.intForce);
+    this.sieStatus = s.i32(this.sieStatus);
+    this.buffStatus = s.i32(this.buffStatus);
+    this.readDelayMicroseconds = s.i32(this.readDelayMicroseconds);
+    this.writeDelayMicroseconds = s.i32(this.writeDelayMicroseconds);
+    for (let i = 0; i < ENDPOINT_COUNT; i++) {
+      this.endpointReadAlarms[i].transferState(s);
+      this.endpointWriteAlarms[i].transferState(s);
+    }
   }
 }

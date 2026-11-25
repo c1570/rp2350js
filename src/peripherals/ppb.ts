@@ -4,6 +4,7 @@ import { MAX_HARDWARE_IRQ } from '../irq';
 import { RP2040 } from '../rp2040';
 import { SimulationClock } from '../clock/simulation-clock';
 import { Timer32, Timer32PeriodicAlarm, TimerMode } from '../utils/timer32';
+import { SaveStateStream } from '../utils/save-state';
 import { BasePeripheral, Peripheral } from './peripheral';
 
 export const CPUID = 0xd00;
@@ -268,5 +269,15 @@ export class RPPPB<ChipType extends IRPChip = IRPChip>
       default:
         super.writeUint32ViaCore(offset, value, _core);
     }
+  }
+
+  // The NVIC's enable/pending bits live in the CortexM0Core; this is SysTick only.
+  transferState(s: SaveStateStream) {
+    this.systickCountFlag = s.bool(this.systickCountFlag);
+    this.systickClkSource = s.bool(this.systickClkSource);
+    this.systickIntEnable = s.bool(this.systickIntEnable);
+    this.systickReload = s.i32(this.systickReload);
+    this.systickTimer.transferState(s);
+    this.systickAlarm.transferState(s);
   }
 }

@@ -7,6 +7,7 @@ import { executeThumb32, isThumb32, ImmCarry, Mul64Result } from './execute-thum
 import type { M33CoreState } from '../peripherals/ppb_rp2350';
 import { FpResult } from './fpu-helpers';
 import { Int53 } from '../utils/types';
+import { SaveStateStream } from '../utils/save-state';
 
 /** Exception numbers per ARMv8-M. */
 export const EXC_RESET = 1;
@@ -38,6 +39,11 @@ export enum Fault {
   BusFault,
   Nmi,
 }
+
+// `pendingFault` when no fault is pending. A `null` used to play this role, which the
+// C build turned into 0: the same value as Fault.UsageFault, so a pending UsageFault
+// read as "none" there.
+export const NO_PENDING_FAULT = -1;
 
 enum ExecutionModeM33 {
   Thread,
@@ -74,7 +80,7 @@ export class CortexM33Core implements ICpuCore {
 
   // System exception pending flags.
   pendingSVCall = false;
-  pendingFault: Fault | null = null;
+  pendingFault: number = NO_PENDING_FAULT;
 
   /** Current execution mode (Thread vs Handler). */
   currentMode: ExecutionModeM33 = ExecutionModeM33.Thread;
@@ -164,7 +170,7 @@ export class CortexM33Core implements ICpuCore {
     this.eventRegistered = false;
     this.interruptsUpdated = false;
     this.pendingSVCall = false;
-    this.pendingFault = null;
+    this.pendingFault = NO_PENDING_FAULT;
     this.currentMode = ExecutionModeM33.Thread;
     this.secure = true;
 
@@ -185,6 +191,21 @@ export class CortexM33Core implements ICpuCore {
 
   setTimerInterrupt(value: boolean) {
     // Cortex-M has no machine timer interrupt line.
+  }
+
+  // fpResultScratch and friends are out-parameters refilled before every use.
+  transferState(s: SaveStateStream) {
+    this.regs.transferState(s);
+    this.cycles = s.i53(this.cycles);
+    this.waiting = s.bool(this.waiting);
+    this.eventRegistered = s.bool(this.eventRegistered);
+    this.interruptsUpdated = s.bool(this.interruptsUpdated);
+    this.breakRewind = s.i32(this.breakRewind);
+    this.currentInstrAddr = s.i32(this.currentInstrAddr);
+    this.pendingSVCall = s.bool(this.pendingSVCall);
+    this.pendingFault = s.i32(this.pendingFault);
+    this.currentMode = s.i32(this.currentMode) as ExecutionModeM33;
+    this.secure = s.bool(this.secure);
   }
 
   /**
@@ -501,19 +522,33 @@ export class CortexM33Core implements ICpuCore {
   /** Deliver a synchronous fault, escalating to HardFault if handler disabled. */
   deliverFault(fault: Fault) {
     const st = this.ppb();
+    // No comma expressions here: cts2c turns a SequenceExpression into an abort()
+    // stub, which killed the C build whenever a fault escalated to HardFault.
     let excNum: number;
     switch (fault) {
       case Fault.UsageFault:
-        excNum =
-          st.shcsr & SHCSR_USGFAULTENA ? EXC_USAGEFAULT : ((st.hfsr |= HFSR_FORCED), EXC_HARDFAULT);
+        if (st.shcsr & SHCSR_USGFAULTENA) {
+          excNum = EXC_USAGEFAULT;
+        } else {
+          st.hfsr |= HFSR_FORCED;
+          excNum = EXC_HARDFAULT;
+        }
         break;
       case Fault.MemManage:
-        excNum =
-          st.shcsr & SHCSR_MEMFAULTENA ? EXC_MEMMANAGE : ((st.hfsr |= HFSR_FORCED), EXC_HARDFAULT);
+        if (st.shcsr & SHCSR_MEMFAULTENA) {
+          excNum = EXC_MEMMANAGE;
+        } else {
+          st.hfsr |= HFSR_FORCED;
+          excNum = EXC_HARDFAULT;
+        }
         break;
       case Fault.BusFault:
-        excNum =
-          st.shcsr & SHCSR_BUSFAULTENA ? EXC_BUSFAULT : ((st.hfsr |= HFSR_FORCED), EXC_HARDFAULT);
+        if (st.shcsr & SHCSR_BUSFAULTENA) {
+          excNum = EXC_BUSFAULT;
+        } else {
+          st.hfsr |= HFSR_FORCED;
+          excNum = EXC_HARDFAULT;
+        }
         break;
       case Fault.Nmi:
         excNum = EXC_NMI;
@@ -613,10 +648,10 @@ export class CortexM33Core implements ICpuCore {
     }
     if (this.interruptsUpdated) {
       if (this.checkForInterrupts()) {
-        if (this.pendingFault !== null) {
+        if (this.pendingFault !== NO_PENDING_FAULT) {
           const f = this.pendingFault;
-          this.pendingFault = null;
-          this.deliverFault(f);
+          this.pendingFault = NO_PENDING_FAULT;
+          this.deliverFault(f as Fault);
         }
         this.cycles += 12;
         return 12;
@@ -663,7 +698,7 @@ export class CortexM33Core implements ICpuCore {
           // An unimplemented opcode is almost certainly an emulator bug.
           // Skip the throw when a fault is already pending (e.g. NOCP from a
           // disabled CP10/11): the fault path below is gated on `!stopped`.
-          if (this.pendingFault === null) {
+          if (this.pendingFault === NO_PENDING_FAULT) {
             throw new Error(
               `Unimplemented Thumb-32 instruction at 0x${opcodePC.toString(
                 16
@@ -675,7 +710,7 @@ export class CortexM33Core implements ICpuCore {
         const result = executeThumb16(this, opcodePC, opcode);
         if (result === -1) {
           // Should have been caught by isThumb32 — treat as unimplemented.
-          if (this.pendingFault === null) {
+          if (this.pendingFault === NO_PENDING_FAULT) {
             throw new Error(
               `Unimplemented Thumb-16 instruction at 0x${opcodePC.toString(
                 16
@@ -697,10 +732,10 @@ export class CortexM33Core implements ICpuCore {
     }
 
     // Deliver pending synchronous fault.
-    if (this.pendingFault !== null) {
+    if (this.pendingFault !== NO_PENDING_FAULT) {
       const f = this.pendingFault;
-      this.pendingFault = null;
-      this.deliverFault(f);
+      this.pendingFault = NO_PENDING_FAULT;
+      this.deliverFault(f as Fault);
       this.cycles += 12;
       return 12 + deltaCycles;
     }

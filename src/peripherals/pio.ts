@@ -1,6 +1,7 @@
 import { IRPChip } from '../rpchip';
 import { FIFO } from '../utils/fifo';
 import { BasePeripheral, Peripheral } from './peripheral';
+import { SaveStateStream } from '../utils/save-state';
 
 // Generic registers
 const CTRL = 0x000;
@@ -143,7 +144,7 @@ export class StateMachine<ChipType extends IRPChip = IRPChip> {
 
   // Reused scratch output for resolveIrqTarget() (see its own comment) — no inline
   // initializer (would run before the `pio` param property is assigned); set from
-  // the constructor's `pio` parameter instead.
+  // the constructor's `pio` parameter instead. Scratch: not saved.
   private readonly irqTargetScratch: IrqTarget;
 
   constructor(readonly rpchip: ChipType, readonly pio: RPPIO, readonly index: number) {
@@ -1015,6 +1016,40 @@ export class StateMachine<ChipType extends IRPChip = IRPChip> {
       this.execCtrl &= ~EXECCTRL_EXEC_STALLED;
     }
   }
+
+  transferState(s: SaveStateStream) {
+    this._enabled = s.bool(this._enabled);
+    this.x = s.i32(this.x);
+    this.y = s.i32(this.y);
+    this.pc = s.i32(this.pc);
+    this.inputShiftReg = s.i32(this.inputShiftReg);
+    this.inputShiftCount = s.i32(this.inputShiftCount);
+    this.outputShiftReg = s.i32(this.outputShiftReg);
+    this.outputShiftCount = s.i32(this.outputShiftCount);
+    this.cycles = s.i32(this.cycles);
+    this.execOpcode = s.i32(this.execOpcode);
+    this.execValid = s.bool(this.execValid);
+    this.nextPC = s.i32(this.nextPC);
+    this.clockDiv = s.i32(this.clockDiv);
+    this.curClockPhase = s.i32(this.curClockPhase);
+    this.remainingDelay = s.i32(this.remainingDelay);
+    this.execCtrl = s.i32(this.execCtrl);
+    this.shiftCtrl = s.i32(this.shiftCtrl);
+    this.pinCtrl = s.i32(this.pinCtrl);
+    this.outPinValues = s.i32(this.outPinValues);
+    this.outPinDirection = s.i32(this.outPinDirection);
+    this.waiting = s.bool(this.waiting);
+    this.waitType = s.i32(this.waitType) as WaitType;
+    this.waitIndex = s.i32(this.waitIndex);
+    this.waitPolarity = s.bool(this.waitPolarity);
+    this.waitDelay = s.i32(this.waitDelay);
+    // A pointer to a PIO block (its own, or a neighbour's for a relative IRQ): saved as
+    // that block's index, since the index is fixed by construction.
+    this.waitTargetPio = this.rpchip.pio[s.i32(this.waitTargetPio.index)];
+    this.fifoStat = s.i32(this.fifoStat);
+    this.rxFIFO.transferState(s);
+    this.txFIFO.transferState(s);
+  }
 }
 
 export class RPPIO<ChipType extends IRPChip = IRPChip>
@@ -1033,15 +1068,17 @@ export class RPPIO<ChipType extends IRPChip = IRPChip>
   fdebug = 0;
   inputSyncBypass = 0;
   irq = 0;
-  isRp2040 = this.rpchip.identifier == 'rp2040';
+  // Both fixed by the chip type. readonly, so the save-state coverage test can tell.
+  readonly isRp2040 = this.rpchip.identifier == 'rp2040';
   gpiobase = 0;
   pinValues = 0;
   pinDirections = 0;
   oldPinValues = 0;
   oldPinDirections = 0;
+  // Left over from the old run() API; nothing assigns a timer any more. Not saved.
   private runTimer: NodeJS.Timeout | null = null;
 
-  irq_reg_offset = 0;
+  readonly irq_reg_offset: number = 0;
 
   irq0IntEnable = 0;
   irq0IntForce = 0;
@@ -1371,6 +1408,26 @@ export class RPPIO<ChipType extends IRPChip = IRPChip>
     if (this.runTimer) {
       clearTimeout(this.runTimer);
       this.runTimer = null;
+    }
+  }
+
+  transferState(s: SaveStateStream) {
+    s.u32array(this.instructions, 32);
+    this.machinesRunning = s.i32(this.machinesRunning);
+    this.fdebug = s.i32(this.fdebug);
+    this.inputSyncBypass = s.i32(this.inputSyncBypass);
+    this.irq = s.i32(this.irq);
+    this.gpiobase = s.i32(this.gpiobase);
+    this.pinValues = s.i32(this.pinValues);
+    this.pinDirections = s.i32(this.pinDirections);
+    this.oldPinValues = s.i32(this.oldPinValues);
+    this.oldPinDirections = s.i32(this.oldPinDirections);
+    this.irq0IntEnable = s.i32(this.irq0IntEnable);
+    this.irq0IntForce = s.i32(this.irq0IntForce);
+    this.irq1IntEnable = s.i32(this.irq1IntEnable);
+    this.irq1IntForce = s.i32(this.irq1IntForce);
+    for (const machine of this.machines) {
+      machine.transferState(s);
     }
   }
 }

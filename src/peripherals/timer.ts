@@ -2,6 +2,7 @@ import { AlarmCallback, IClock, IAlarm } from '../clock/clock';
 import { IRPChip } from '../rpchip';
 import { BasePeripheral, Peripheral } from './peripheral';
 import { Float64 } from '../utils/types';
+import { SaveStateStream } from '../utils/save-state';
 
 const TIMEHR = 0x08;
 const TIMELR = 0x0c;
@@ -33,6 +34,11 @@ class RPTimerAlarm implements AlarmCallback {
 
   fire() {
     this.timer.fireAlarm(this.index);
+  }
+
+  transferState(s: SaveStateStream) {
+    this.armed = s.bool(this.armed);
+    this.targetMicros = s.i32(this.targetMicros);
   }
 }
 
@@ -204,5 +210,16 @@ export class RPTimer<ChipType extends IRPChip = IRPChip>
   private disarmAlarm(alarm: RPTimerAlarm) {
     alarm.clockAlarm.cancel();
     alarm.armed = false;
+  }
+
+  transferState(s: SaveStateStream) {
+    this.latchedTimeHigh = s.i32(this.latchedTimeHigh);
+    for (const alarm of this.alarms) {
+      alarm.transferState(s);
+    }
+    this.intRaw = s.i32(this.intRaw);
+    this.intEnable = s.i32(this.intEnable);
+    this.intForce = s.i32(this.intForce);
+    this.paused = s.bool(this.paused);
   }
 }

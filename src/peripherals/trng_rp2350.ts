@@ -1,5 +1,6 @@
 import { IRPChip } from '../rpchip';
 import { BasePeripheral, Peripheral } from './peripheral';
+import { SaveStateStream } from '../utils/save-state';
 
 const RNG_ISR_OFFSET = 0x104;
 const RNG_ICR_OFFSET = 0x108;
@@ -11,6 +12,9 @@ const RND_SOURCE_ENABLE_OFFSET = 0x12c;
 const TRNG_SW_RESET_OFFSET = 0x140;
 
 const SEED = 0x2350c0de;
+// A fixed register file, rather than the sparse object this used to be: that was
+// keyed by byte offset, which indexed far past its allocation in the C build.
+const REG_BYTES = 0x200;
 
 /**
  * RP2350 TRNG (True Random Number Generator) peripheral.
@@ -29,7 +33,7 @@ export class RP2350TRNG<ChipType extends IRPChip = IRPChip>
   private readonly ehr = new Uint32Array(6);
   private valid = false;
   private enabled = false;
-  private regs: { [offset: number]: number } = {};
+  private readonly regs = new Uint32Array(REG_BYTES >> 2);
 
   private nextWord(): number {
     let x = this.state;
@@ -68,7 +72,8 @@ export class RP2350TRNG<ChipType extends IRPChip = IRPChip>
       // Write-only strobe: reads as 0.
       return 0;
     }
-    return this.regs[offset] ?? 0;
+    if (offset < REG_BYTES) return this.regs[offset >> 2];
+    return 0;
   }
 
   writeUint32(offset: number, value: number) {
@@ -90,6 +95,14 @@ export class RP2350TRNG<ChipType extends IRPChip = IRPChip>
       default:
         break;
     }
-    this.regs[offset] = value >>> 0;
+    if (offset < REG_BYTES) this.regs[offset >> 2] = value >>> 0;
+  }
+
+  transferState(s: SaveStateStream) {
+    this.state = s.u32(this.state);
+    s.u32array(this.ehr, 6);
+    this.valid = s.bool(this.valid);
+    this.enabled = s.bool(this.enabled);
+    s.u32array(this.regs, REG_BYTES >> 2);
   }
 }

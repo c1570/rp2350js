@@ -1,5 +1,6 @@
 import { IRPChip } from '../rpchip';
 import { BasePeripheral, Peripheral } from './peripheral';
+import { SaveStateStream } from '../utils/save-state';
 
 const FREF = 12000000;
 
@@ -8,6 +9,7 @@ export class RP2350PLL<ChipType extends IRPChip = IRPChip>
   implements Peripheral
 {
   reg = [1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, (1 << 12) + (1 << 16), 0];
+  // Recomputed from reg[] by every write below: derived, so not saved.
   foutpostdiv = 1;
 
   readUint32(offset: number) {
@@ -39,5 +41,9 @@ export class RP2350PLL<ChipType extends IRPChip = IRPChip>
       return;
     }
     return super.writeUint32(offset, value);
+  }
+
+  transferState(s: SaveStateStream) {
+    s.i32array(this.reg, 14);
   }
 }

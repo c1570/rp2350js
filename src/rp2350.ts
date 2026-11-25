@@ -20,7 +20,7 @@ import { RP2350SHA256 } from './peripherals/sha256_rp2350';
 import { RP2350TRNG } from './peripherals/trng_rp2350';
 import { RP2350OTP, RP2350OTPData } from './peripherals/otp_data_rp2350';
 import { RPClocks } from './peripherals/clocks';
-import { DREQChannel, RP2350DMA } from './peripherals/dma_rp2350';
+import { DREQChannel2350, RP2350DMA } from './peripherals/dma_rp2350';
 import { RPI2C } from './peripherals/i2c';
 import { RP2350IO } from './peripherals/io_rp2350';
 import { RP2350PADS } from './peripherals/pads_rp2350';
@@ -47,6 +47,24 @@ import { RPPPB2350 } from './peripherals/ppb_rp2350';
 import { bootrom_rp2350_A2 } from './bootroms';
 import { loadFirmware, LoadFirmwareOptions, LoadFirmwareResult } from './utils/load-firmware';
 import { Uint32, Float64, Int53, Int53Array } from './utils/types';
+import {
+  SaveStateStream,
+  SAVE_STATE_ARCH_ARM,
+  SAVE_STATE_ARCH_RISCV,
+  SAVE_STATE_CHIP_RP2350,
+  SAVE_STATE_FLAG_FLASH,
+  SAVE_STATE_FLAG_FLASH_WRITTEN,
+  SAVE_STATE_FLAG_PSRAM,
+  SAVE_STATE_FLAG_PSRAM_WRITTEN,
+  SAVE_STATE_HEADER_WORDS,
+  SAVE_STATE_OMIT_FLASH,
+  SAVE_STATE_OMIT_PSRAM,
+  SERIALIZATION_QUIRK_ENDIAN_DEPENDENT,
+  SERIALIZATION_QUIRK_INCOMPLETE,
+  SERIALIZATION_QUIRK_SINGLE_SESSION,
+  readSaveStateHeader,
+  writeSaveStateHeader,
+} from './utils/save-state';
 
 export const FLASH_START_ADDRESS = 0x10000000;
 export const RAM_START_ADDRESS = 0x20000000;
@@ -65,6 +83,10 @@ const MB = 1024 * KB;
 const MHz = 1_000_000;
 
 const FLASH_SIZE = 16 * MB;
+// Used by transferState(). The `sram` initializer keeps the equivalent literal on
+// purpose: cts2c expands `this.sram.length` to that initializer expression verbatim,
+// and a named const there becomes an undeclared C identifier.
+const SRAM_SIZE = (256 * 2 + 8) * 1024;
 /** Size of the PSRAM behind QMI chip-select 1 (APS6404L-class 8MiB part). */
 export const PSRAM_SIZE = 8 * MB;
 /** XIP windows are 16MiB each: 0x10xxxxxx = CS0 (flash), 0x11xxxxxx = CS1 (PSRAM).
@@ -116,6 +138,14 @@ export class RP2350 implements IRPChip {
   readonly sramDecode = new Int53Array(this.sram.length / 2);
   readonly flashDecode = new Int53Array(FLASH_SIZE / 2);
   readonly psramDecode = new Int53Array(PSRAM_SIZE / 2);
+
+  // Whether anything has written flash / PSRAM through the emulator, and how often
+  // (wrapping, like the int32 the C build holds). A save state carries an image only
+  // once it has been written; see serialize().
+  private flashWritten = false;
+  private psramWritten = false;
+  private flashChanges = 0;
+  private psramChanges = 0;
 
   readonly identifier = 'rp2350';
 
@@ -185,20 +215,25 @@ export class RP2350 implements IRPChip {
 
   readonly uart = [
     new RPUART(this, 'UART0', IRQ2350.UART0_IRQ, {
-      rx: DREQChannel.DREQ_UART0_RX,
-      tx: DREQChannel.DREQ_UART0_TX,
+      rx: DREQChannel2350.DREQ_UART0_RX,
+      tx: DREQChannel2350.DREQ_UART0_TX,
     }),
     new RPUART(this, 'UART1', IRQ2350.UART1_IRQ, {
-      rx: DREQChannel.DREQ_UART1_RX,
-      tx: DREQChannel.DREQ_UART1_TX,
+      rx: DREQChannel2350.DREQ_UART1_RX,
+      tx: DREQChannel2350.DREQ_UART1_TX,
     }),
   ];
   readonly i2c = [
     new RPI2C(this, 'I2C0', IRQ2350.I2C0_IRQ),
     new RPI2C(this, 'I2C1', IRQ2350.I2C1_IRQ),
   ];
-  readonly pwm = new RPPWM(this, 'PWM_BASE', IRQ2350.PWM_IRQ_WRAP_0, DREQChannel.DREQ_PWM_WRAP0);
-  readonly adc = new RPADC(this, 'ADC', IRQ2350.ADC_IRQ_FIFO, DREQChannel.DREQ_ADC);
+  readonly pwm = new RPPWM(
+    this,
+    'PWM_BASE',
+    IRQ2350.PWM_IRQ_WRAP_0,
+    DREQChannel2350.DREQ_PWM_WRAP0
+  );
+  readonly adc = new RPADC(this, 'ADC', IRQ2350.ADC_IRQ_FIFO, DREQChannel2350.DREQ_ADC);
 
   readonly gpio: Array<GPIOPin> = Array(48)
     .fill(0)
@@ -220,35 +255,35 @@ export class RP2350 implements IRPChip {
       'PIO0',
       IRQ2350.PIO0_IRQ_0,
       0,
-      DREQChannel.DREQ_PIO0_RX0,
-      DREQChannel.DREQ_PIO0_TX0
+      DREQChannel2350.DREQ_PIO0_RX0,
+      DREQChannel2350.DREQ_PIO0_TX0
     ),
     new RPPIO(
       this,
       'PIO1',
       IRQ2350.PIO1_IRQ_0,
       1,
-      DREQChannel.DREQ_PIO1_RX0,
-      DREQChannel.DREQ_PIO1_TX0
+      DREQChannel2350.DREQ_PIO1_RX0,
+      DREQChannel2350.DREQ_PIO1_TX0
     ),
     new RPPIO(
       this,
       'PIO2',
       IRQ2350.PIO2_IRQ_0,
       2,
-      DREQChannel.DREQ_PIO2_RX0,
-      DREQChannel.DREQ_PIO2_TX0
+      DREQChannel2350.DREQ_PIO2_RX0,
+      DREQChannel2350.DREQ_PIO2_TX0
     ),
   ];
   readonly usbCtrl = new RPUSBController(this, 'USB', IRQ2350.USBCTRL_IRQ);
   readonly spi = [
     new RPSPI(this, 'SPI0', IRQ2350.SPI0_IRQ, {
-      rx: DREQChannel.DREQ_SPI0_RX,
-      tx: DREQChannel.DREQ_SPI0_TX,
+      rx: DREQChannel2350.DREQ_SPI0_RX,
+      tx: DREQChannel2350.DREQ_SPI0_TX,
     }),
     new RPSPI(this, 'SPI1', IRQ2350.SPI1_IRQ, {
-      rx: DREQChannel.DREQ_SPI1_RX,
-      tx: DREQChannel.DREQ_SPI1_TX,
+      rx: DREQChannel2350.DREQ_SPI1_RX,
+      tx: DREQChannel2350.DREQ_SPI1_TX,
     }),
   ];
 
@@ -256,19 +291,31 @@ export class RP2350 implements IRPChip {
 
   private readonly ioQspi = new RPIOQSPI(this, 'IO_QSPI_BASE');
   private readonly xipQmi = new RPXIPQMI(this, 'XIP_QMI_BASE');
+  private readonly timer0 = new RPTimer(this, 'TIMER0_BASE', IRQ2350.TIMER0_IRQ_0);
+  private readonly timer1 = new RPTimer(this, 'TIMER1_BASE', IRQ2350.TIMER1_IRQ_0);
+  private readonly clocks = new RPClocks(this, 'CLOCKS_BASE');
+  private readonly psm = new RP2350PSM(this, 'PSM_BASE');
+  private readonly resets = new RPReset(this, 'RESETS_BASE');
+  private readonly padsBank0 = new RP2350PADS(this, 'PADS_BANK0_BASE', 'bank0');
+  private readonly padsQspi = new RP2350PADS(this, 'PADS_QSPI_BASE', 'qspi');
+  private readonly pllSys = new RP2350PLL(this, 'PLL_SYS_BASE');
+  private readonly bootRam = new RPBootRAM(this, 'BOOTRAM_BASE');
+  private readonly trng = new RP2350TRNG(this, 'TRNG_BASE');
+  private readonly sha256 = new RP2350SHA256(this, 'SHA256_BASE');
+  private readonly powman = new RP2350POWMAN(this, 'POWMAN_BASE');
 
   readonly peripherals: { [index: number]: Peripheral } = {
     0x40000: new RP2350SysInfo(this, 'SYSINFO_BASE'),
     0x40008: new RP2350SysCfg(this, 'SYSCFG'),
-    0x40010: new RPClocks(this, 'CLOCKS_BASE'),
-    0x40018: new RP2350PSM(this, 'PSM_BASE'),
-    0x40020: new RPReset(this, 'RESETS_BASE'),
+    0x40010: this.clocks,
+    0x40018: this.psm,
+    0x40020: this.resets,
     0x40028: new RP2350IO(this, 'IO_BANK0_BASE'),
     0x40030: this.ioQspi,
-    0x40038: new RP2350PADS(this, 'PADS_BANK0_BASE', 'bank0'),
-    0x40040: new RP2350PADS(this, 'PADS_QSPI_BASE', 'qspi'),
+    0x40038: this.padsBank0,
+    0x40040: this.padsQspi,
     0x40048: new UnimplementedPeripheral(this, 'XOSC_BASE'),
-    0x40050: new RP2350PLL(this, 'PLL_SYS_BASE'),
+    0x40050: this.pllSys,
     0x40058: new UnimplementedPeripheral(this, 'PLL_USB_BASE'),
     0x40060: new UnimplementedPeripheral(this, 'ACCESSCTRL_BASE'),
     0x40068: new UnimplementedPeripheral(this, 'BUSCTRL_BASE'), //TODO new RPBUSCTRL(this, 'BUSCTRL_BASE'),
@@ -280,8 +327,8 @@ export class RP2350 implements IRPChip {
     0x40098: this.i2c[1],
     0x400a0: this.adc,
     0x400a8: this.pwm,
-    0x400b0: new RPTimer(this, 'TIMER0_BASE', IRQ2350.TIMER0_IRQ_0),
-    0x400b8: new RPTimer(this, 'TIMER1_BASE', IRQ2350.TIMER1_IRQ_0),
+    0x400b0: this.timer0,
+    0x400b8: this.timer1,
     0x400c0: new UnimplementedPeripheral(this, 'HSTX_CTRL_BASE'),
     0x400c8: new UnimplementedPeripheral(this, 'XIP_CTRL_BASE'),
     0x400d0: this.xipQmi,
@@ -289,11 +336,11 @@ export class RP2350 implements IRPChip {
     0x400dc: this.watchdog,
 
     //0x400xx: new RP2040RTC(this, 'RTC_BASE'),
-    0x400e0: new RPBootRAM(this, 'BOOTRAM_BASE'),
+    0x400e0: this.bootRam,
     0x400e8: new UnimplementedPeripheral(this, 'ROSC_BASE'),
-    0x400f0: new RP2350TRNG(this, 'TRNG_BASE'),
-    0x400f8: new RP2350SHA256(this, 'SHA256_BASE'),
-    0x40100: new RP2350POWMAN(this, 'POWMAN_BASE'),
+    0x400f0: this.trng,
+    0x400f8: this.sha256,
+    0x40100: this.powman,
     0x40108: new UnimplementedPeripheral(this, 'TICKS_BASE'),
     0x40120: this.otp,
     // OTP_DATA window (16KB at 0x40130000). Spans 4 x 16KB APB blocks.
@@ -366,6 +413,8 @@ export class RP2350 implements IRPChip {
     if (options.loadFirmware) {
       this.loadFirmware(options.loadFirmware);
     }
+    // All of the chip's alarms now exist; anything created later is host-owned.
+    this.clock.seal();
   }
 
   currentCore = 0;
@@ -397,7 +446,12 @@ export class RP2350 implements IRPChip {
     // invalidates the decode caches for it. Matters when loading onto an instance
     // that has already run.
     this.invalidateDecodeCache();
-    return loadFirmware(this, path, options);
+    const result = loadFirmware(this, path, options);
+    // A new image, as yet unwritten. It still counts as a change: a state taken before
+    // the reload left flash out, and must not restore onto this image.
+    this.flashWritten = false;
+    this.flashChanges = (this.flashChanges + 1) | 0;
+    return result;
   }
 
   /**
@@ -524,6 +578,8 @@ export class RP2350 implements IRPChip {
   }
 
   private invalidatePsramDecode(offset: number, len: number) {
+    this.psramWritten = true;
+    this.psramChanges = (this.psramChanges + 1) | 0;
     const startIdx = offset >>> 1;
     const endIdx = (offset + len - 1) >>> 1;
     if (startIdx > 0) this.psramDecode[startIdx - 1] = 0;
@@ -556,6 +612,8 @@ export class RP2350 implements IRPChip {
    * chip.flash behind the caches' back (XIP writes bypass writeUint*).
    * Mirrors invalidateSramDecode, including the preceding-halfword overlap. */
   invalidateFlashDecode(address: Uint32, len: number) {
+    this.flashWritten = true;
+    this.flashChanges = (this.flashChanges + 1) | 0;
     const startIdx = (address & (FLASH_SIZE - 1)) >>> 1;
     const endIdx = ((address + len - 1) & (FLASH_SIZE - 1)) >>> 1;
     // Entries are keyed on an instruction's FIRST halfword, so a 32-bit instruction
@@ -887,6 +945,166 @@ export class RP2350 implements IRPChip {
 
   step() {
     this.stepThings(this.stepCores());
+  }
+
+  // A state is only valid for the core architecture it was taken on: the header says
+  // which, so a RISC-V state is refused by an ARM chip and the other way round.
+  private coreArchInState(): number {
+    return this.isArmCore ? SAVE_STATE_ARCH_ARM : SAVE_STATE_ARCH_RISCV;
+  }
+
+  // Nothing is left out for either core architecture; savestate-coverage.spec.ts holds
+  // the chip to that.
+  getSerializationQuirks(): number {
+    return SERIALIZATION_QUIRK_ENDIAN_DEPENDENT | SERIALIZATION_QUIRK_SINGLE_SESSION;
+  }
+
+  serializeSize(omit: number = 0): number {
+    // Measured by a dry run rather than a formula, so it cannot drift from the layout.
+    // An image that is not omitted counts as present even before anything has written
+    // it, so the bound never grows later.
+    const s = new SaveStateStream(true, true);
+    s.flags =
+      SAVE_STATE_FLAG_FLASH_WRITTEN |
+      SAVE_STATE_FLAG_PSRAM_WRITTEN |
+      (omit & SAVE_STATE_OMIT_FLASH ? 0 : SAVE_STATE_FLAG_FLASH) |
+      (omit & SAVE_STATE_OMIT_PSRAM ? 0 : SAVE_STATE_FLAG_PSRAM);
+    this.transferState(s);
+    return (SAVE_STATE_HEADER_WORDS + s.pos) * 4;
+  }
+
+  // Flash and PSRAM are 24 MiB that firmware rarely writes, so a state carries an
+  // image only once something has: until then leaving it out is exact, and makes the
+  // state about 0.6 MiB. `omit` (SAVE_STATE_OMIT_*) leaves an image out even after it
+  // has been written, on the caller's assurance that nothing will write it again:
+  // unserialize() then refuses the state if something did.
+  serialize(data: Uint8Array, size: number, omit: number = 0): boolean {
+    const s = new SaveStateStream(true, false).attach(data, size);
+    const flash = this.flashWritten
+      ? SAVE_STATE_FLAG_FLASH_WRITTEN | (omit & SAVE_STATE_OMIT_FLASH ? 0 : SAVE_STATE_FLAG_FLASH)
+      : 0;
+    const psram = this.psramWritten
+      ? SAVE_STATE_FLAG_PSRAM_WRITTEN | (omit & SAVE_STATE_OMIT_PSRAM ? 0 : SAVE_STATE_FLAG_PSRAM)
+      : 0;
+    writeSaveStateHeader(
+      s,
+      SAVE_STATE_CHIP_RP2350,
+      this.coreArchInState(),
+      flash | psram,
+      this.flashChanges,
+      this.psramChanges
+    );
+    this.transferState(s);
+    s.finish();
+    return s.ok;
+  }
+
+  unserialize(data: Uint8Array, size: number): boolean {
+    const s = new SaveStateStream(false, false).attach(data, size);
+    const totalWords = readSaveStateHeader(s, SAVE_STATE_CHIP_RP2350, this.coreArchInState());
+    if (totalWords < 0 || !this.leftOutImagesStillHold(s)) {
+      return false;
+    }
+    this.transferState(s);
+    // The size announced in the header must be exactly what the body turned out to use.
+    if (!s.ok || s.pos - SAVE_STATE_HEADER_WORDS !== totalWords) {
+      return false;
+    }
+    this.flashWritten = (s.flags & SAVE_STATE_FLAG_FLASH_WRITTEN) !== 0;
+    this.psramWritten = (s.flags & SAVE_STATE_FLAG_PSRAM_WRITTEN) !== 0;
+    this.flashChanges = s.flashChanges;
+    this.psramChanges = s.psramChanges;
+    // Decode caches are keyed on memory content, so only an image the state rewrote
+    // needs its cache dropped: one left out still matches it. (Clearing all three is
+    // 96 MiB, most of a restore's cost.) The PIO active lists are derived from the
+    // state machines' enable bits.
+    this.sramDecode.fill(0);
+    if (s.flags & SAVE_STATE_FLAG_FLASH) {
+      this.flashDecode.fill(0);
+    }
+    if (s.flags & SAVE_STATE_FLAG_PSRAM) {
+      this.psramDecode.fill(0);
+    }
+    this.updatePioActiveLists();
+    return true;
+  }
+
+  // An image the state left out is left alone by unserialize(). That is exact only
+  // while nothing has written it since the snapshot: the header carries each image's
+  // change count for this check, before anything is restored.
+  private leftOutImagesStillHold(s: SaveStateStream): boolean {
+    if (!(s.flags & SAVE_STATE_FLAG_FLASH) && s.flashChanges !== this.flashChanges) {
+      return false;
+    }
+    if (!(s.flags & SAVE_STATE_FLAG_PSRAM) && s.psramChanges !== this.psramChanges) {
+      return false;
+    }
+    return true;
+  }
+
+  // Order defines the state layout: append new sections at the end, before the
+  // memory images. Everything mutable is saved except construction wiring, host
+  // hooks and the two derived caches rebuilt above (savestate-coverage.spec.ts checks).
+  transferState(s: SaveStateStream) {
+    this.clkSys = s.i32(this.clkSys);
+    this.clkPeri = s.i32(this.clkPeri);
+    this.currentCore = s.i32(this.currentCore);
+    this.clock.transferState(s);
+    // Concrete accessors, not this.core[i]: cts2c cannot emit an interface method
+    // that takes a class-typed parameter, so transferState() is not on ICpuCore.
+    if (this.isArmCore) {
+      this.ppb!.transferState(s);
+      this.armCore0.transferState(s);
+      this.armCore1.transferState(s);
+    } else {
+      this.riscvCore0.transferState(s);
+      this.riscvCore1.transferState(s);
+    }
+    this.sio.transferState(s);
+    this.otp.transferState(s);
+    this.watchdog.transferState(s);
+    this.uart[0].transferState(s);
+    this.uart[1].transferState(s);
+    this.i2c[0].transferState(s);
+    this.i2c[1].transferState(s);
+    this.pwm.transferState(s);
+    this.adc.transferState(s);
+    for (let i = 0; i < 48; i++) {
+      this.gpio[i].transferState(s);
+    }
+    for (let i = 0; i < 6; i++) {
+      this.qspi[i].transferState(s);
+    }
+    this.dma.transferState(s);
+    for (const pio of this.pio) {
+      pio.transferState(s);
+    }
+    this.usbCtrl.transferState(s);
+    this.spi[0].transferState(s);
+    this.spi[1].transferState(s);
+    this.ioQspi.transferState(s);
+    this.xipQmi.transferState(s);
+    this.timer0.transferState(s);
+    this.timer1.transferState(s);
+    this.clocks.transferState(s);
+    this.psm.transferState(s);
+    this.resets.transferState(s);
+    this.padsBank0.transferState(s);
+    this.padsQspi.transferState(s);
+    this.pllSys.transferState(s);
+    this.bootRam.transferState(s);
+    this.trng.transferState(s);
+    this.sha256.transferState(s);
+    this.powman.transferState(s);
+    // Explicit lengths: typed-array length is erased in C.
+    s.u32array(this.sram32, SRAM_SIZE / 4);
+    s.u8array(this.usbDPRAM, 4 * KB);
+    if (s.flags & SAVE_STATE_FLAG_FLASH) {
+      s.u32array(this.flash32, FLASH_SIZE / 4);
+    }
+    if (s.flags & SAVE_STATE_FLAG_PSRAM) {
+      s.u32array(this.psram32, PSRAM_SIZE / 4);
+    }
   }
 
   // eslint-disable-next-line @typescript-eslint/no-empty-function

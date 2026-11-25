@@ -1,6 +1,7 @@
 import { IRPChip } from '../rpchip';
 import { RP2040 } from '../rp2040';
 import { BasePeripheral, Peripheral } from './peripheral';
+import { SaveStateStream } from '../utils/save-state';
 
 /** Bus priority acknowledge */
 const BUS_PRIORITY_ACK = 0x004;
@@ -90,5 +91,11 @@ export class RPBUSCTRL<ChipType extends IRPChip = IRPChip>
       default:
         super.writeUint32(offset, value);
     }
+  }
+
+  transferState(s: SaveStateStream) {
+    this.voltageSelect = s.i32(this.voltageSelect);
+    s.i32array(this.perfCtr, 4);
+    s.i32array(this.perfSel, 4);
   }
 }

@@ -1,5 +1,6 @@
 import { IRPChip } from '../rpchip';
 import { BasePeripheral, Peripheral } from './peripheral';
+import { SaveStateStream } from '../utils/save-state';
 
 // IO_QSPI pin block (QSPI flash pads + USB PHY debug pads).
 //
@@ -43,5 +44,9 @@ export class RPIOQSPI<ChipType extends IRPChip = IRPChip>
       return;
     }
     super.writeUint32(offset, value);
+  }
+
+  transferState(s: SaveStateStream) {
+    s.u32array(this.regs, PIN_REGS_BYTES >>> 2);
   }
 }

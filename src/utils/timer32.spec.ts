@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { SimulationClock } from '../clock/simulation-clock';
 import { Timer32, Timer32PeriodicAlarm, TimerMode } from './timer32';
+import { SaveStateStream } from './save-state';
 
 // 1 MHz timer: 1 cycle = 1 µs = 1000 ns.
 const FREQ = 1e6;
@@ -196,5 +197,57 @@ describe('Timer32PeriodicAlarm.schedule', () => {
     expect(fireCount()).toBe(0);
     clock.tick(2 * US);
     expect(fireCount()).toBe(1);
+  });
+});
+
+describe('Timer32.transferState', () => {
+  test('round-trips the timer, its periodic alarm and the clock it is scheduled on', () => {
+    const clock = new SimulationClock();
+    const timer = new Timer32('t', clock, FREQ);
+    timer.top = 1000;
+    let fires = 0;
+    const alarm = new Timer32PeriodicAlarm('a', timer, { fire: () => fires++ });
+    alarm.target = 150;
+    alarm.enable = true;
+    timer.set(100);
+    clock.tick(20 * US);
+    expect(timer.counter).toBe(120);
+
+    const data = new Uint8Array(256);
+    const out = new SaveStateStream(true, false).attach(data, data.length);
+    clock.transferState(out);
+    timer.transferState(out);
+    alarm.transferState(out);
+    expect(out.ok).toBe(true);
+
+    timer.top = 7;
+    timer.mode = TimerMode.Decrement;
+    timer.prescaler = 4;
+    timer.set(3);
+    timer.enable = false;
+    alarm.target = 1;
+    alarm.enable = false;
+    clock.tick(500 * US);
+    expect(fires).toBe(0);
+
+    const input = new SaveStateStream(false, false).attach(data, data.length);
+    clock.transferState(input);
+    timer.transferState(input);
+    alarm.transferState(input);
+    expect(input.ok).toBe(true);
+    expect(clock.nanos).toBe(20 * US);
+    expect(timer.counter).toBe(120);
+    expect(timer.top).toBe(1000);
+    expect(timer.prescaler).toBe(1);
+    expect(timer.mode).toBe(TimerMode.Increment);
+    expect(timer.enable).toBe(true);
+    expect(timer.frequency).toBe(FREQ);
+    expect(alarm.target).toBe(150);
+    expect(alarm.enable).toBe(true);
+
+    clock.tick(29 * US);
+    expect(fires).toBe(0);
+    clock.tick(1 * US);
+    expect(fires).toBe(1);
   });
 });

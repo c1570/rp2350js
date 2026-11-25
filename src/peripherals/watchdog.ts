@@ -3,6 +3,7 @@ import { Timer32, Timer32PeriodicAlarm, TimerMode } from '../utils/timer32';
 import { BasePeripheral, Peripheral } from './peripheral';
 import { SimulationClock } from '../clock/simulation-clock';
 import { AlarmCallback } from '../clock/clock';
+import { SaveStateStream } from '../utils/save-state';
 
 const CTRL = 0x00; // Control register
 const LOAD = 0x04; // Load the watchdog timer.
@@ -172,5 +173,17 @@ export class RPWatchdog<ChipType extends IRPChip = IRPChip>
       default:
         super.writeUint32(offset, value);
     }
+  }
+
+  transferState(s: SaveStateStream) {
+    this.timer.transferState(s);
+    this.alarm.transferState(s);
+    s.u32array(this.scratchData, 8);
+    this.enable = s.bool(this.enable);
+    this.tickEnable = s.bool(this.tickEnable);
+    this.reason = s.i32(this.reason);
+    this.pauseDbg0 = s.bool(this.pauseDbg0);
+    this.pauseDbg1 = s.bool(this.pauseDbg1);
+    this.pauseJtag = s.bool(this.pauseJtag);
   }
 }

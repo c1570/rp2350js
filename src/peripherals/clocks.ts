@@ -1,5 +1,6 @@
 import { IRPChip } from '../rpchip';
 import { BasePeripheral, Peripheral } from './peripheral';
+import { SaveStateStream } from '../utils/save-state';
 
 const CLK_REF_CTRL = 0x30;
 const CLK_REF_SELECTED = 0x38;
@@ -12,7 +13,8 @@ export class RPClocks<ChipType extends IRPChip = IRPChip>
 {
   refCtrl = 0;
   sysCtrl = 0;
-  clkFc0StatusOffset = 0;
+  // Fixed by the chip type; readonly so the save-state coverage test can tell.
+  readonly clkFc0StatusOffset: number = 0;
 
   constructor(rpchip: ChipType, name: string) {
     super(rpchip, name);
@@ -53,5 +55,10 @@ export class RPClocks<ChipType extends IRPChip = IRPChip>
         super.writeUint32(offset, value);
         break;
     }
+  }
+
+  transferState(s: SaveStateStream) {
+    this.refCtrl = s.i32(this.refCtrl);
+    this.sysCtrl = s.i32(this.sysCtrl);
   }
 }

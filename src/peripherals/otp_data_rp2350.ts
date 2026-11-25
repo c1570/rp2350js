@@ -1,5 +1,6 @@
 import { IRPChip } from '../rpchip';
 import { BasePeripheral, Peripheral } from './peripheral';
+import { SaveStateStream } from '../utils/save-state';
 
 const OTP_ROWS = 4096;
 
@@ -34,6 +35,11 @@ export class RP2350OTP<ChipType extends IRPChip = IRPChip>
       return;
     }
     super.writeUint32(offset, value);
+  }
+
+  transferState(s: SaveStateStream) {
+    s.u16array(this.fuse, OTP_ROWS);
+    s.u32array(this.regs, 0x200 >> 2);
   }
 }
 

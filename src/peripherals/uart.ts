@@ -1,5 +1,6 @@
 import { IRPChip } from '../rpchip';
 import { FIFO } from '../utils/fifo';
+import { SaveStateStream } from '../utils/save-state';
 import { BasePeripheral, Peripheral } from './peripheral';
 
 const UARTDR = 0x0;
@@ -214,5 +215,15 @@ export class RPUART<ChipType extends IRPChip = IRPChip>
       default:
         super.writeUint32(offset, value);
     }
+  }
+
+  transferState(s: SaveStateStream) {
+    this.ctrlRegister = s.i32(this.ctrlRegister);
+    this.lineCtrlRegister = s.i32(this.lineCtrlRegister);
+    this.rxFIFO.transferState(s);
+    this.interruptMask = s.i32(this.interruptMask);
+    this.interruptStatus = s.i32(this.interruptStatus);
+    this.intDivisor = s.i32(this.intDivisor);
+    this.fracDivisor = s.i32(this.fracDivisor);
   }
 }

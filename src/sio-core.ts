@@ -1,6 +1,7 @@
 import { IRPChip } from './rpchip';
 import { Interpolator } from './interpolator';
 import { FIFO } from './utils/fifo';
+import { SaveStateStream } from './utils/save-state';
 
 //HARDWARE DIVIDER
 const DIV_UDIVIDEND = 0x060; //  Divider unsigned dividend
@@ -351,5 +352,19 @@ export class RPSIOCore<ChipType extends IRPChip = IRPChip> {
     }
     this.divCSR = 0b11;
     this.rpchip.core[this.cpuCore].addCycles(8);
+  }
+
+  // The FIFOs are not saved here: they are shared between cores and saved once by the
+  // SIO block that owns them.
+  transferState(s: SaveStateStream) {
+    this.divDividend = s.i32(this.divDividend);
+    this.divDivisor = s.i32(this.divDivisor);
+    this.divQuotient = s.i32(this.divQuotient);
+    this.divRemainder = s.i32(this.divRemainder);
+    this.divCSR = s.i32(this.divCSR);
+    this.interp0.transferState(s);
+    this.interp1.transferState(s);
+    this.ROE = s.bool(this.ROE);
+    this.WOF = s.bool(this.WOF);
   }
 }

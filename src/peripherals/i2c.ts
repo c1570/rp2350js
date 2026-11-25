@@ -1,6 +1,7 @@
 import { IRPChip } from '../rpchip';
 import { FIFO } from '../utils/fifo';
 import { BasePeripheral, Peripheral } from './peripheral';
+import { SaveStateStream } from '../utils/save-state';
 
 const IC_CON = 0x00; // I2C Control Register
 const IC_TAR = 0x04; // I2C Target Address Register
@@ -524,5 +525,28 @@ export class RPI2C<ChipType extends IRPChip = IRPChip>
       default:
         super.writeUint32(offset, value);
     }
+  }
+
+  transferState(s: SaveStateStream) {
+    this.state = s.i32(this.state) as I2CState;
+    this.busy = s.bool(this.busy);
+    this.stop = s.bool(this.stop);
+    this.pendingRestart = s.bool(this.pendingRestart);
+    this.firstByte = s.bool(this.firstByte);
+    this.enable = s.i32(this.enable);
+    this.rxThreshold = s.i32(this.rxThreshold);
+    this.txThreshold = s.i32(this.txThreshold);
+    this.control = s.i32(this.control);
+    this.ssClockHighPeriod = s.i32(this.ssClockHighPeriod);
+    this.ssClockLowPeriod = s.i32(this.ssClockLowPeriod);
+    this.fsClockHighPeriod = s.i32(this.fsClockHighPeriod);
+    this.fsClockLowPeriod = s.i32(this.fsClockLowPeriod);
+    this.targetAddress = s.i32(this.targetAddress);
+    this.slaveAddress = s.i32(this.slaveAddress);
+    this.abortSource = s.i32(this.abortSource);
+    this.intRaw = s.i32(this.intRaw);
+    this.intEnable = s.i32(this.intEnable);
+    this.rxFIFO.transferState(s);
+    this.txFIFO.transferState(s);
   }
 }

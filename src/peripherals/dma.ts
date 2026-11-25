@@ -1,6 +1,7 @@
 import { IRPChip } from '../rpchip';
 import { BasePeripheral, Peripheral } from './peripheral';
 import { AlarmCallback, IAlarm } from '../clock/clock';
+import { SaveStateStream } from '../utils/save-state';
 
 export enum DREQChannel {
   DREQ_PIO0_TX0,
@@ -252,7 +253,12 @@ export class RPDMAChannel<ChipType extends IRPChip = IRPChip> implements AlarmCa
   }
 
   scheduleTransfer() {
-    if (this.dma.dreq[this.treqValue] || this.treqValue === TREQ.Permanent) {
+    // treqValue can also name a timer or the permanent request: no DREQ channel, and
+    // past the end of dreq[] (a harmless undefined in JS, an overread in C).
+    if (
+      (this.treqValue < DREQChannel.DREQ_MAX && this.dma.dreq[this.treqValue]) ||
+      this.treqValue === TREQ.Permanent
+    ) {
       this.transferAlarm.schedule(0);
     } else {
       const delay = this.dma.getTimer(this.treqValue);
@@ -382,6 +388,20 @@ export class RPDMAChannel<ChipType extends IRPChip = IRPChip> implements AlarmCa
 
   reset() {
     this.writeUint32(CHn_CTRL_TRIG, this.index << CHAIN_TO_SHIFT);
+  }
+
+  transferState(s: SaveStateStream) {
+    this.ctrl = s.i32(this.ctrl);
+    this.readAddr = s.i32(this.readAddr);
+    this.writeAddr = s.i32(this.writeAddr);
+    this.transCount = s.i32(this.transCount);
+    this.dreqCounter = s.i32(this.dreqCounter);
+    this.transCountReload = s.i32(this.transCountReload);
+    this.treqValue = s.i32(this.treqValue);
+    this.dataSize = s.i32(this.dataSize);
+    this.transferKind = s.i32(this.transferKind) as TransferKind;
+    this.chainTo = s.i32(this.chainTo);
+    this.ringMask = s.i32(this.ringMask);
   }
 }
 
@@ -577,5 +597,23 @@ export class RPDMA<ChipType extends IRPChip = IRPChip>
   checkInterrupts() {
     this.rpchip.setInterrupt(this.dma_irq_base + 0, !!this.intStatus0);
     this.rpchip.setInterrupt(this.dma_irq_base + 1, !!this.intStatus1);
+  }
+
+  transferState(s: SaveStateStream) {
+    this.intRaw = s.i32(this.intRaw);
+    this.intEnable0 = s.i32(this.intEnable0);
+    this.intForce0 = s.i32(this.intForce0);
+    this.intEnable1 = s.i32(this.intEnable1);
+    this.intForce1 = s.i32(this.intForce1);
+    this.timer0 = s.i32(this.timer0);
+    this.timer1 = s.i32(this.timer1);
+    this.timer2 = s.i32(this.timer2);
+    this.timer3 = s.i32(this.timer3);
+    for (let i = 0; i < DREQChannel.DREQ_MAX; i++) {
+      this.dreq[i] = s.bool(this.dreq[i]);
+    }
+    for (const channel of this.channels) {
+      channel.transferState(s);
+    }
   }
 }

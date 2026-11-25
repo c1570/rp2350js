@@ -73,6 +73,7 @@
     "format:check": "prettier --check **/*.{ts,js} !**/dist/** !**/node_modules/**",
     "lint": "eslint . --ext .ts",
     "cts2c:full": "node cts2c/transpile-check.mjs full",
+    "cts2c:checks": "node cts2c/run-c-checks.mjs",
     "start:demo": "ts-node demo/emulator-run.ts",
     "start": "ts-node demo/ntc-run.ts",
     "start:debug": "node --inspect-brk -r ts-node/register demo/emulator-run.ts",

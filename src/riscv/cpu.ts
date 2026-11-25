@@ -3,6 +3,7 @@ import type { RP2350 } from '../rp2350';
 import { decodeWord } from './decode';
 import { getDecodeEntry } from './decode-cache';
 import { Uint32, Int53 } from '../utils/types';
+import { SaveStateStream } from '../utils/save-state';
 
 // ─── Deliberately local, do not import these ───────────────────────
 // Every module format this ships in (tsc CJS, tsc ESM, esbuild) compiles an
@@ -304,6 +305,32 @@ export class CPU implements ICpuCore {
     this.csrs[0xf11] = (0x9 << 7) | 0x13;
     this.csrs[0xf12] = 0x1b;
     this.csrs[0xf13] = 0x86fc4e3f;
+  }
+
+  transferState(s: SaveStateStream) {
+    this.waiting = s.bool(this.waiting);
+    this.waitingOnBlock = s.bool(this.waitingOnBlock);
+    this.eventRegistered = s.bool(this.eventRegistered);
+    s.i32array(this.regs, 32);
+    s.u32array(this.csrs, 0x1000);
+    this.pc = s.i32(this.pc);
+    this.next_pc = s.i32(this.next_pc);
+    this.cycles = s.i53(this.cycles);
+    this.currentMode = s.i32(this.currentMode) as ExecutionModeRiscv;
+    this.interruptsUpdated = s.bool(this.interruptsUpdated);
+    s.i32array(this.meiea, 512);
+    s.i32array(this.meipa, 512);
+    s.i32array(this.meifa, 512);
+    s.i32array(this.meipra, 512);
+    s.i32array(this.candidateIrq, 512);
+    s.i32array(this.candidatePriority, 512);
+    this.candidateCount = s.i32(this.candidateCount);
+    this.did_just_jump = s.bool(this.did_just_jump);
+    this.privilege = s.i32(this.privilege);
+    this.lr_addr = s.i32(this.lr_addr);
+    this.inst_length = s.i32(this.inst_length);
+    this.curPacked = s.i53(this.curPacked);
+    this.btb = s.i32(this.btb);
   }
 
   inst_length = 0;

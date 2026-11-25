@@ -1,5 +1,6 @@
 import { IRPChip } from '../rpchip';
 import { BasePeripheral, Peripheral } from './peripheral';
+import { SaveStateStream } from '../utils/save-state';
 
 const CHIP_RESET = 0x08;
 
@@ -35,5 +36,9 @@ export class RP2040VregAndChipReset<ChipType extends IRPChip = IRPChip>
       default:
         super.writeUint32(offset, value);
     }
+  }
+
+  transferState(s: SaveStateStream) {
+    this.chipReset = s.i32(this.chipReset);
   }
 }

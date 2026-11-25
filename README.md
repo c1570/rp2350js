@@ -21,6 +21,8 @@ This is a much improved fork of Uri Shaked's [rp2040js](https://github.com/wokwi
 - built-in cycle profiler using markers in the RP's firmware
 - on recent PCs, expect about **70M cycles per second** (with one RP2040/2350 core busy, all else idle; see `npm run bench:cpu`)
 - can get **transpiled to C** for ~3x speed ([cts2c](/cts2c/README.md), also see releases)
+- **save states**: `chip.serialize()` / `chip.unserialize()`, `chip.serializeSize()`; flash (and PSRAM) in state only if dirty; minimal state is about 0.3-0.6 MiB
+- a restored state replays the original run exactly, with the same state bytes in the C build
 
 #### Implemented
 

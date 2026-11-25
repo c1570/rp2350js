@@ -1,4 +1,5 @@
 import { IRPChip } from './rpchip';
+import { SaveStateStream } from './utils/save-state';
 
 export enum GPIOPinState {
   Low,
@@ -199,5 +200,15 @@ export class GPIOPin<ChipType extends IRPChip = IRPChip> {
   // caller, and both it and the nullable slots it needed were untranslatable to C.
   addListener(callback: GPIOPinListener) {
     this.listeners.push(callback);
+  }
+
+  transferState(s: SaveStateStream) {
+    this.rawInputValue = s.bool(this.rawInputValue);
+    this.lastValue = s.i32(this.lastValue) as GPIOPinState;
+    this.ctrl = s.i32(this.ctrl);
+    this.padValue = s.i32(this.padValue);
+    this.irqEnableMask = s.i32(this.irqEnableMask);
+    this.irqForceMask = s.i32(this.irqForceMask);
+    this.irqStatus = s.i32(this.irqStatus);
   }
 }

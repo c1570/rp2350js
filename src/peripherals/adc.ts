@@ -2,6 +2,7 @@ import { AlarmCallback, IAlarm } from '../clock/clock';
 import { IRPChip } from '../rpchip';
 import { FIFO } from '../utils/fifo';
 import { BasePeripheral, Peripheral } from './peripheral';
+import { SaveStateStream } from '../utils/save-state';
 
 const CS = 0x00; // ADC Control and Status
 const RESULT = 0x04; // Result of most recent ADC conversion
@@ -314,5 +315,19 @@ export class RPADC<ChipType extends IRPChip = IRPChip>
       default:
         super.writeUint32(offset, value);
     }
+  }
+
+  transferState(s: SaveStateStream) {
+    s.i32array(this.channelValues, this.numChannels);
+    this.cs = s.i32(this.cs);
+    this.fcs = s.i32(this.fcs);
+    this.clockDiv = s.i32(this.clockDiv);
+    this.intEnable = s.i32(this.intEnable);
+    this.intForce = s.i32(this.intForce);
+    this.result = s.i32(this.result);
+    this.busy = s.bool(this.busy);
+    this.err = s.bool(this.err);
+    this.currentChannel = s.i32(this.currentChannel);
+    this.fifo.transferState(s);
   }
 }

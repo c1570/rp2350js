@@ -15,7 +15,7 @@
  * Reference: ARMv8-M Architecture Reference Manual §A6.3 (Thumb-32 encodings)
  */
 
-import { CortexM33Core } from './core';
+import { CortexM33Core, NO_PENDING_FAULT } from './core';
 import { conditionPassed } from './conditions';
 import { fpuExecute } from './execute-fpu';
 import { coprocessorExecute } from './coprocessor';
@@ -57,7 +57,7 @@ function dispatchCoprocessor(core: CortexM33Core, hw0: number, hw1: number): num
     // Check for RCP panic/assertion → NMI.
     if (core.pendingFault === 3 && !core.regs.inHandlerMode()) {
       const f = core.pendingFault;
-      core.pendingFault = null;
+      core.pendingFault = NO_PENDING_FAULT;
       core.deliverFault(f as unknown as 0);
     }
     return result < 0 ? 1 : result;

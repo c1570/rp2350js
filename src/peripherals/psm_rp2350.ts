@@ -1,5 +1,6 @@
 import { IRPChip } from '../rpchip';
 import { BasePeripheral, Peripheral } from './peripheral';
+import { SaveStateStream } from '../utils/save-state';
 
 const FRCE_ON = 0x00;
 const FRCE_OFF = 0x04;
@@ -46,5 +47,11 @@ export class RP2350PSM<ChipType extends IRPChip = IRPChip>
         this.wdsel = value & PSM_BITS_MASK;
         break;
     }
+  }
+
+  transferState(s: SaveStateStream) {
+    this.frceOn = s.i32(this.frceOn);
+    this.frceOff = s.i32(this.frceOff);
+    this.wdsel = s.i32(this.wdsel);
   }
 }

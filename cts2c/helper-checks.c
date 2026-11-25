@@ -14,10 +14,16 @@
 //    instructions on each core (RISC-V, Cortex-M33, Cortex-M0+) with boundary
 //    operands — the cases where a uint-vs-int mixup in the generated C silently
 //    changes the result (see the section comment near the end for details).
+//  - save states: stateF64Lo/Hi/From and stateF32ToBits/FromBits (hand-written
+//    bit-punning bodies again), the SaveStateStream primitives against a raw
+//    buffer, and whole-chip serialize/unserialize with USB, DMA, ADC and timer
+//    work in flight, on both core architectures.
 //
 // Exits non-zero and prints a diagnostic on the first mismatch.
 #include "../build/transpile/rp2350js-c.h"
+#include "inflight-work.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static int failures = 0;
@@ -70,6 +76,15 @@ static void checkI32(const char* label, int32_t got, int32_t want) {
     failures++;
   } else {
     printf("ok   %s: %d\n", label, got);
+  }
+}
+
+static void checkI64(const char* label, int64_t got, int64_t want) {
+  if (got != want) {
+    fprintf(stderr, "FAIL %s: got %lld, want %lld\n", label, (long long)got, (long long)want);
+    failures++;
+  } else {
+    printf("ok   %s: %lld\n", label, (long long)got);
   }
 }
 
@@ -376,7 +391,502 @@ static void check_mtimecmp_unsigned(void) {
   checkF64("mtimecmp keeps bit 31", RP2350SIO_mtimecmpValue(mcu->sio, 0), 6442450944.0);
 }
 
+// ─── save states ────────────────────────────────────────────────────────
+
+// The save-state stream's primitives, against a raw buffer.
+static void check_state_stream(void) {
+  uint8_t buf[64];
+  memset(buf, 0xa5, sizeof buf);
+  SaveStateStream* out = SaveStateStream_new(true, false);
+  SaveStateStream_attach(out, buf, sizeof buf);
+  SaveStateStream_u32(out, (int32_t)0xdeadbeefu);
+  SaveStateStream_i32(out, -12345);
+  SaveStateStream_f64(out, 1.5e300);
+  const float floats[3] = {0.0f, -0.0f, 3.14159f};
+  SaveStateStream_f32array(out, (float*)floats, 3);
+  const uint8_t bytes[5] = {1, 2, 3, 4, 5};
+  SaveStateStream_u8array(out, (uint8_t*)bytes, 5);
+  checkBool("stream stays ok in bounds", out->ok, true);
+  const int32_t words = out->pos;
+  checkI32("stream word count", words, 1 + 1 + 2 + 3 + 2);
+  checkU32("stream u8array zero-pads to a word",
+           (uint32_t)buf[words * 4 - 1] << 16 | (uint32_t)buf[words * 4 - 2] << 8 | buf[words * 4 - 3], 0);
+  SaveStateStream_skip(out, 1000);
+  checkBool("stream skip past the end clears ok", out->ok, false);
+
+  SaveStateStream* in = SaveStateStream_new(false, false);
+  SaveStateStream_attach(in, buf, words * 4);
+  checkU32("stream u32 round trip", (uint32_t)SaveStateStream_u32(in, 0), 0xdeadbeefu);
+  checkI32("stream i32 round trip", SaveStateStream_i32(in, 0), -12345);
+  checkF64("stream f64 round trip", SaveStateStream_f64(in, 0.0), 1.5e300);
+  float back[3] = {1.0f, 1.0f, 1.0f};
+  SaveStateStream_f32array(in, back, 3);
+  checkU32("stream f32array keeps the bits of -0.0", (uint32_t)floatToBits(back[1]), 0x80000000u);
+  checkF32("stream f32array round trip", back[2], 3.14159f);
+  uint8_t backBytes[5] = {0};
+  SaveStateStream_u8array(in, backBytes, 5);
+  checkBool("stream u8array round trip", memcmp(backBytes, bytes, 5) == 0, true);
+  checkI32("stream reads exactly what was written", in->pos, words);
+  checkI32("stream read past the end keeps its argument", SaveStateStream_i32(in, 77), 77);
+  checkBool("stream read past the end clears ok", in->ok, false);
+
+  // Measuring (for serializeSize) advances pos like a real write and stores nothing.
+  SaveStateStream* measuring = SaveStateStream_new(true, true);
+  SaveStateStream_u32(measuring, 1);
+  SaveStateStream_f64(measuring, 2.0);
+  SaveStateStream_skip(measuring, 3);
+  checkI32("stream measuring advances like a real write", measuring->pos, 1 + 2 + 3);
+  checkBool("stream measuring never runs out of room", measuring->ok, true);
+}
+
+static int host_alarm_fires = 0;
+static void host_alarm_fire(void* self) {
+  (void)self;
+  host_alarm_fires++;
+}
+static const AlarmCallbackVTable host_alarm_vtable = {.fire = host_alarm_fire};
+
+static int usb_writes = 0;
+static uint8_t usb_last[4] = {0};
+static void on_endpoint_write(void* ctx, int32_t endpoint, uint8_t* buffer, int32_t length) {
+  (void)ctx;
+  if (endpoint == 1 && length == 4) {
+    memcpy(usb_last, buffer, 4);
+    usb_writes++;
+  }
+}
+
+// Leaves a USB endpoint transfer, a DMA copy, an ADC conversion and a timer alarm
+// half done, so the snapshot has work in flight as well as plain registers.
+static void start_inflight(RP2350* mcu) {
+  rp2350_start_inflight(mcu);
+  RP2350_writeUint32(mcu, 0x400b0010u, 5000); // TIMER0 ALARM0: 5 ms from now
+}
+
+// RISC-V RP2350: registers round-trip, in-flight work completes again after a
+// restore, the clock rewinds, and execution continues as if never interrupted.
+static void check_save_state_rp2350(void) {
+  RP2350Options options = {.coreArch = "riscv", .loadFirmware = NULL};
+  RP2350* mcu = RP2350_new(&options);
+  mcu->usbCtrl->onEndpointWrite_fn = on_endpoint_write;
+  mcu->usbCtrl->onEndpointWrite_ctx = NULL;
+  const int32_t idleSize = RP2350_serializeSize(mcu, 0);
+
+  // Plain registers, far from their reset values.
+  RP2350_writeUint32(mcu, 0x40070024u, 65);          // UART0 IBRD
+  RP2350_writeUint32(mcu, 0x400d8010u, 0xdeadbeefu); // WATCHDOG SCRATCH1
+  RP2350_writeUint32(mcu, 0x50200048u, 0x6001u);     // PIO0 INSTR_MEM0
+  RP2350_writeUint32(mcu, 0xd0000060u, 100);         // SIO UDIVIDEND
+  RP2350_writeUint32(mcu, 0xd0000064u, 7);           // SIO UDIVISOR
+  start_inflight(mcu);
+
+  // An upper bound: pending work, even a pending host alarm, must not move it.
+  host_alarm_fires = 0;
+  IAlarm host = SimulationClock_createAlarm(
+      mcu->clock, (AlarmCallback){.obj = NULL, .vtable = &host_alarm_vtable});
+  checkI32("host alarm is unregistered", ((ClockAlarm*)host.obj)->id, -1);
+  IAlarm_schedule(host, 3.0);
+  const int32_t size = RP2350_serializeSize(mcu, 0);
+  checkI32("serializeSize ignores pending work", size, idleSize);
+
+  uint8_t* state = calloc(1, size);
+  checkBool("rv serialize", RP2350_serialize(mcu, state, size, 0), true);
+  const uint32_t totalWords = ((uint32_t*)state)[5];
+  checkU32("state magic", ((uint32_t*)state)[0], 0x52505353u);
+  checkBool("state fits in serializeSize()", 6 + (int64_t)totalWords <= size / 4, true);
+  // Let everything finish, then overwrite the registers: the state must bring
+  // both the old values and the half-done work back.
+  SimulationClock_tick(mcu->clock, 10e6); // nanoseconds
+  checkI32("host alarm fired once", host_alarm_fires, 1);
+  checkI32("USB buffer delivered once before the restore", usb_writes, 1);
+  checkU32("DMA copied before the restore", RP2350_readUint32(mcu, INFLIGHT_DST + 12), 0x778899aau);
+  checkU32("ADC converted before the restore", RP2350_readUint32(mcu, 0x400a0004u), 0x9abu);
+  RP2350_writeUint32(mcu, 0x40070024u, 1);
+  RP2350_writeUint32(mcu, 0x400d8010u, 0);
+  RP2350_writeUint32(mcu, 0x50200048u, 0);
+  for (int i = 0; i < 4; i++) RP2350_writeUint32(mcu, INFLIGHT_DST + 4 * i, 0);
+  RP2350_writeUint32(mcu, 0x50000008u, 99);
+  mcu->adc->channelValues[2] = 0x123;
+  IAlarm_schedule(host, 3.0); // pending again, but not part of the state
+
+  checkBool("rv unserialize", RP2350_unserialize(mcu, state, size), true);
+  checkU32("UART IBRD restored", RP2350_readUint32(mcu, 0x40070024u), 65);
+  checkU32("WATCHDOG SCRATCH1 restored", RP2350_readUint32(mcu, 0x400d8010u), 0xdeadbeefu);
+  checkU32("PIO instruction restored", mcu->pio[0]->instructions[0], 0x6001u);
+  checkU32("SIO divider restored (100 / 7)", RP2350_readUint32(mcu, 0xd0000070u), 14);
+  checkF64("clock rewound to the snapshot", SimulationClock_getNanos(mcu->clock), 0.0);
+  checkBool("pending host alarm cancelled, not restored", ((ClockAlarm*)host.obj)->scheduled, false);
+
+  SimulationClock_tick(mcu->clock, 4e6);
+  checkI32("USB buffer delivered again after the restore", usb_writes, 2);
+  checkBool("...with the same bytes", memcmp(usb_last, "\xa0\xa1\xa2\xa3", 4) == 0, true);
+  checkU32("DMA copy repeated after the restore", RP2350_readUint32(mcu, INFLIGHT_DST + 12), 0x778899aau);
+  checkI32("DMA count restored before the transfer", RP2350_readUint32(mcu, 0x50000008u), 0);
+  checkU32("ADC converted the captured input after the restore", RP2350_readUint32(mcu, 0x400a0004u), 0x9abu);
+  checkU32("TIMER0 alarm still armed 4 ms in", RP2350_readUint32(mcu, 0x400b0020u) & 1u, 1u);
+  checkU32("TIMER0 alarm not fired early", RP2350_readUint32(mcu, 0x400b003cu) & 1u, 0u);
+  SimulationClock_tick(mcu->clock, 2e6);
+  checkU32("TIMER0 alarm fired after the restore", RP2350_readUint32(mcu, 0x400b003cu) & 1u, 1u);
+  checkI32("cancelled host alarm does not fire again", host_alarm_fires, 1);
+  free(state);
+
+  // A serialize that fails leaves its buffer unusable (see IRPChip.serialize). That
+  // is the one rejection unserialize detects only after applying the body, so it goes
+  // last, with a scratch buffer of its own.
+  uint8_t* scratch = calloc(1, size);
+  checkBool("serialize into a scratch buffer", RP2350_serialize(mcu, scratch, size, 0), true);
+  const int32_t oneShort = (6 + (int32_t)((uint32_t*)scratch)[5]) * 4 - 1;
+  checkBool("serialize refuses a short buffer", RP2350_serialize(mcu, scratch, oneShort, 0), false);
+  checkBool("unserialize rejects what a failed serialize left behind",
+            RP2350_unserialize(mcu, scratch, size), false);
+  free(scratch);
+
+  // Continuing after a restore must reproduce the uninterrupted run. A loop in
+  // SRAM (addi x5,x5,1 ; jal x0,-4) keeps the core busy without any firmware.
+  const uint32_t code = 0x20040000u;
+  RP2350_writeUint32(mcu, code, 0x00128293u);
+  RP2350_writeUint32(mcu, code + 4, 0xffdff06fu); // jal x0, -4
+  CPU* cpu = RP2350_riscvCore0_get(mcu);
+  cpu->pc = (int32_t)code;
+  cpu->next_pc = (int32_t)(code + 4);
+  cpu->regs[5] = 0;
+  for (int i = 0; i < 10; i++) CPU_executeInstruction(cpu);
+  checkI32("rv loop ran to the snapshot", cpu->regs[5], 5);
+  const int32_t loopSize = RP2350_serializeSize(mcu, 0);
+  uint8_t* loopState = calloc(1, loopSize);
+  checkBool("rv loop serialize", RP2350_serialize(mcu, loopState, loopSize, 0), true);
+  const int32_t pcAtSnapshot = cpu->pc;
+  for (int i = 0; i < 20; i++) CPU_executeInstruction(cpu);
+  checkI32("rv loop uninterrupted", cpu->regs[5], 15);
+  const int32_t pcAfter = cpu->pc;
+  const int64_t cyclesAfter = cpu->cycles;
+
+  checkBool("rv loop unserialize", RP2350_unserialize(mcu, loopState, loopSize), true);
+  checkI32("rv loop rewound", cpu->regs[5], 5);
+  checkI32("rv pc rewound", cpu->pc, pcAtSnapshot);
+  for (int i = 0; i < 20; i++) CPU_executeInstruction(cpu);
+  checkI32("rv loop replays", cpu->regs[5], 15);
+  checkI32("rv pc replays", cpu->pc, pcAfter);
+  checkI64("rv cycles replay", cpu->cycles, cyclesAfter);
+  free(loopState);
+}
+
+// ARM RP2350: float registers by raw bits, the pending-fault sentinel, and
+// continuing after a restore.
+static void check_save_state_arm(void) {
+  RP2350Options options = {.coreArch = "arm", .loadFirmware = NULL};
+  RP2350* mcu = RP2350_new(&options);
+  CortexM33Core* core = RP2350_armCore0_get(mcu);
+  checkI32("pendingFault resets to NO_PENDING_FAULT", core->pendingFault, NO_PENDING_FAULT);
+
+  // Signed zero, both infinities, a NaN, the smallest subnormal, the largest finite, pi.
+  const uint32_t bits[8] = {0, 0x80000000u, 0x7f800000u, 0xff800000u,
+                            0x7fc00000u, 0x00000001u, 0x7f7fffffu, 0x40490fdbu};
+  for (int i = 0; i < 8; i++) memcpy(&core->regs->s[i], &bits[i], 4);
+
+  // A stack in SRAM and a `b .` to execute: the fault is delivered after an
+  // instruction, and the exception frame needs somewhere to go.
+  const uint32_t code = 0x20040100u;
+  RP2350_writeUint16(mcu, code, 0xE7FEu); // b .
+  core->regs->r[13] = 0x20041000u;
+  core->regs->msp = 0x20041000u;
+  core->regs->control = 0; // SPSEL = 0: stack on MSP
+  core->regs->r[15] = code;
+
+  core->pendingFault = Fault_UsageFault;
+  const int32_t size = RP2350_serializeSize(mcu, 0);
+  uint8_t* state = calloc(1, size);
+  checkBool("arm serialize", RP2350_serialize(mcu, state, size, 0), true);
+  core->pendingFault = NO_PENDING_FAULT; // the scramble
+  for (int i = 0; i < 8; i++) core->regs->s[i] = 1.0f;
+  checkBool("arm unserialize", RP2350_unserialize(mcu, state, size), true);
+  checkI32("a pending UsageFault survives a restore", core->pendingFault, Fault_UsageFault);
+  for (int i = 0; i < 8; i++) {
+    uint32_t got;
+    memcpy(&got, &core->regs->s[i], 4);
+    char label[64];
+    snprintf(label, sizeof label, "S%d restored bit-exactly", i);
+    checkU32(label, got, bits[i]);
+  }
+
+  // `pendingFault` used to hold null for "none", which is 0 in C — the same value
+  // as Fault.UsageFault — so the generated code silently dropped the fault.
+  CortexM33Core_executeInstruction(core);
+  checkI32("pending UsageFault is delivered", core->pendingFault, NO_PENDING_FAULT);
+  checkU32("...escalated to HardFault, which is not enabled", core->regs->xpsr & 0x1ffu, 3u);
+  free(state);
+
+  // Thumb loop: adds r5,#1 ; b code
+  RP2350_writeUint16(mcu, code, 0x3501u); // adds r5, #1
+  RP2350_writeUint16(mcu, code + 2, 0xE7FDu); // b code
+  core->regs->r[5] = 0;
+  core->regs->r[15] = code;
+  core->regs->xpsr = 0x01000000u; // Thread mode, Thumb
+  core->currentMode = 0;
+  for (int i = 0; i < 10; i++) CortexM33Core_executeInstruction(core);
+  checkI32("m33 loop ran to the snapshot", (int32_t)core->regs->r[5], 5);
+  const int32_t loopSize = RP2350_serializeSize(mcu, 0);
+  uint8_t* loopState = calloc(1, loopSize);
+  checkBool("m33 loop serialize", RP2350_serialize(mcu, loopState, loopSize, 0), true);
+  const uint32_t pcAtSnapshot = core->regs->r[15];
+  for (int i = 0; i < 20; i++) CortexM33Core_executeInstruction(core);
+  checkI32("m33 loop uninterrupted", (int32_t)core->regs->r[5], 15);
+  const uint32_t pcAfter = core->regs->r[15];
+  const int64_t cyclesAfter = core->cycles;
+
+  checkBool("m33 loop unserialize", RP2350_unserialize(mcu, loopState, loopSize), true);
+  checkI32("m33 loop rewound", (int32_t)core->regs->r[5], 5);
+  checkU32("m33 pc rewound", core->regs->r[15], pcAtSnapshot);
+  for (int i = 0; i < 20; i++) CortexM33Core_executeInstruction(core);
+  checkI32("m33 loop replays", (int32_t)core->regs->r[5], 15);
+  checkU32("m33 pc replays", core->regs->r[15], pcAfter);
+  checkI64("m33 cycles replay", core->cycles, cyclesAfter);
+  free(loopState);
+}
+
+#define PSRAM_WINDOW 0x15000000u // cached PSRAM: XIP chip select 1
+#define OMIT_BOTH (SAVE_STATE_OMIT_FLASH | SAVE_STATE_OMIT_PSRAM)
+#define ALL_IMAGES \
+  (SAVE_STATE_FLAG_FLASH | SAVE_STATE_FLAG_FLASH_WRITTEN | SAVE_STATE_FLAG_PSRAM | \
+   SAVE_STATE_FLAG_PSRAM_WRITTEN)
+
+// Flash and PSRAM are left out of a state until something writes them, and are part of
+// every state from then on, unless omitted on request.
+static void check_save_state_images(void) {
+  RP2350Options options = {.coreArch = "riscv", .loadFirmware = NULL};
+  RP2350* mcu = RP2350_new(&options);
+  const int32_t full = RP2350_serializeSize(mcu, 0);
+  const int32_t small = RP2350_serializeSize(mcu, OMIT_BOTH);
+
+  // The plain bound covers both images even before anything has written them, so it
+  // never grows later.
+  checkI32("unwritten images: the plain bound covers exactly the two images", full - small, 24 * 1024 * 1024);
+  checkBool("unwritten images: the bound without them is under 1 MiB", small < 1024 * 1024, true);
+  uint8_t* tiny = calloc(1, small);
+  checkBool("unwritten images: serialize() fits the small bound", RP2350_serialize(mcu, tiny, small, 0), true);
+  const uint32_t* words = (const uint32_t*)tiny;
+  checkU32("unwritten images: header flags", words[2], 0);
+  checkU32("unwritten images: header flash changes", words[6], 0);
+  checkU32("unwritten images: header PSRAM changes", words[7], 0);
+  const int32_t plainBytes = (8 + (int32_t)words[5]) * 4;
+  checkBool("unwritten images: the state itself is under 1 MiB", plainBytes < 1024 * 1024, true);
+  checkBool("unwritten images: unserialize()", RP2350_unserialize(mcu, tiny, small), true);
+
+  // An ordinary store into PSRAM puts it in every state from here on.
+  RP2350_writeUint32(mcu, PSRAM_WINDOW, 0x1234);
+  uint8_t* state = calloc(1, full);
+  checkBool("PSRAM written: serialize()", RP2350_serialize(mcu, state, full, 0), true);
+  words = (const uint32_t*)state;
+  checkU32("PSRAM written: header flags", words[2], SAVE_STATE_FLAG_PSRAM | SAVE_STATE_FLAG_PSRAM_WRITTEN);
+  checkU32("PSRAM written: header PSRAM changes", words[7], 1);
+  checkI32("PSRAM written: the state grew by the image", (8 + (int32_t)words[5]) * 4 - plainBytes,
+           8 * 1024 * 1024);
+  RP2350* fresh = RP2350_new(&options);
+  checkU32("fresh chip: PSRAM starts zeroed", RP2350_readUint32(fresh, PSRAM_WINDOW), 0);
+  checkBool("PSRAM written: unserialize() onto a fresh chip", RP2350_unserialize(fresh, state, full), true);
+  checkU32("PSRAM written: the image came back", RP2350_readUint32(fresh, PSRAM_WINDOW), 0x1234);
+
+  // Omitted on request, with PSRAM written: accepted while nothing writes it again.
+  RP2350_writeUint32(mcu, PSRAM_WINDOW + 4, 0x5678);
+  checkBool("PSRAM omitted on request: serialize()", RP2350_serialize(mcu, tiny, small, SAVE_STATE_OMIT_PSRAM), true);
+  words = (const uint32_t*)tiny;
+  checkU32("PSRAM omitted on request: header flags", words[2], SAVE_STATE_FLAG_PSRAM_WRITTEN);
+  checkU32("PSRAM omitted on request: header PSRAM changes", words[7], 2);
+  RP2350_writeUint32(mcu, 0x20000100u, 7); // something else changes; PSRAM does not
+  checkBool("PSRAM omitted, unchanged since: unserialize()", RP2350_unserialize(mcu, tiny, small), true);
+  checkU32("PSRAM omitted: left exactly as it is", RP2350_readUint32(mcu, PSRAM_WINDOW + 4), 0x5678);
+  RP2350_writeUint32(mcu, PSRAM_WINDOW + 8, 1); // PSRAM written again since the snapshot
+  checkBool("PSRAM omitted, written again since: refused", RP2350_unserialize(mcu, tiny, small), false);
+
+  // Flash: the QMI flash model reports an erase or program through invalidateFlashDecode.
+  mcu->flash[0x110000] = 0x5a;
+  RP2350_invalidateFlashDecode(mcu, 0x100, 4);
+  checkBool("flash written: serialize()", RP2350_serialize(mcu, state, full, 0), true);
+  words = (const uint32_t*)state;
+  checkU32("flash written: header flags", words[2], ALL_IMAGES);
+  checkU32("flash written: header flash changes", words[6], 1);
+  RP2350* fresh2 = RP2350_new(&options);
+  checkU32("fresh chip: flash is erased there", fresh2->flash[0x110000], 0xff);
+  checkBool("flash written: unserialize() onto a fresh chip", RP2350_unserialize(fresh2, state, full), true);
+  checkU32("flash written: the image came back", fresh2->flash[0x110000], 0x5a);
+  checkU32("flash written: PSRAM came back too", RP2350_readUint32(fresh2, PSRAM_WINDOW + 4), 0x5678);
+  // The restored chip knows the images are written: its own state carries them.
+  uint8_t* again = calloc(1, full);
+  RP2350_serialize(fresh2, again, full, 0);
+  checkU32("restored chip: its next state carries both images", ((const uint32_t*)again)[2], ALL_IMAGES);
+  free(again);
+  free(state);
+  free(tiny);
+}
+
+// RP2040: flash left out until written, registers round-trip, in-flight work completes
+// again, the RTC keeps its time, and the Cortex-M0+ continues after a restore.
+static void check_save_state_rp2040(void) {
+  RP2040Options options = {.loadFirmware = NULL};
+  RP2040* mcu = RP2040_new(&options);
+  mcu->usbCtrl->onEndpointWrite_fn = on_endpoint_write;
+  mcu->usbCtrl->onEndpointWrite_ctx = NULL;
+  const uint32_t* words = NULL;
+#define RP2040_RTC 0x4005c000u
+#define RP2040_TIMER 0x40054000u // interrupt registers at +0x34 (0x3c on the RP2350)
+#define RP2040_ADC 0x4004c000u
+  const uint32_t rtcDate = (2024u << 12) | (6u << 8) | 15u;
+  const uint32_t rtcTime = (6u << 24) | (13u << 16) | (40u << 8) | 59u;
+
+  // The RTC's wall clock used to be stubbed out in this build (cts2c had no Date); it
+  // is plain arithmetic now, so the C build can tell the time too.
+  RP2040_writeUint32(mcu, RP2040_RTC + 0x04, (int32_t)rtcDate);
+  RP2040_writeUint32(mcu, RP2040_RTC + 0x08, (int32_t)rtcTime);
+  RP2040_writeUint32(mcu, RP2040_RTC + 0x0c, 0x10); // LOAD
+  RP2040_writeUint32(mcu, RP2040_RTC + 0x0c, 0x01); // ENABLE
+  checkU32("rp2040 RTC reads back the loaded date", RP2040_readUint32(mcu, RP2040_RTC + 0x18), rtcDate);
+  checkU32("rp2040 RTC reads back the loaded time", RP2040_readUint32(mcu, RP2040_RTC + 0x1c), rtcTime);
+
+  // Plain registers, far from their reset values.
+  RP2040_writeUint32(mcu, 0x40034024u, 65);          // UART0 IBRD
+  RP2040_writeUint32(mcu, 0x40058010u, 0xdeadbeefu); // WATCHDOG SCRATCH1
+  RP2040_writeUint32(mcu, 0x50200048u, 0x6001u);     // PIO0 INSTR_MEM0
+  RP2040_writeUint32(mcu, 0xd0000060u, 100);         // SIO UDIVIDEND
+  RP2040_writeUint32(mcu, 0xd0000064u, 7);           // SIO UDIVISOR
+  RP2040_writeUint32(mcu, RP2040_TIMER + 0x10, 5000); // ALARM0: 5 ms from now
+
+  // In-flight USB, DMA and ADC work, without the flash write the harness variant adds.
+  usb_writes = 0;
+  RP_INFLIGHT_WORK(mcu, RP2040_writeUint32, INFLIGHT_CTRL_RP2040, RP2040_ADC, INFLIGHT_SRC_RP2040,
+                   INFLIGHT_DST_RP2040);
+
+  const int32_t full = RP2040_serializeSize(mcu, 0);
+  const int32_t small = RP2040_serializeSize(mcu, SAVE_STATE_OMIT_FLASH);
+  checkI32("rp2040: the plain bound covers exactly the flash image", full - small, 16 * 1024 * 1024);
+  checkBool("rp2040: the bound without flash is under 1 MiB", small < 1024 * 1024, true);
+  uint8_t* state = calloc(1, full);
+  checkBool("rp2040 serialize", RP2040_serialize(mcu, state, full, 0), true);
+  words = (const uint32_t*)state;
+  checkU32("rp2040 state magic", words[0], 0x52505353u);
+  checkU32("rp2040 header: chip id", words[3], 0);
+  checkU32("rp2040 header: flash unwritten, so left out", words[2], 0);
+  checkU32("rp2040 header: flash change count", words[6], 0);
+  checkU32("rp2040 header: PSRAM change count (there is no PSRAM)", words[7], 0);
+  const int32_t plainBytes = (8 + (int32_t)words[5]) * 4;
+  checkBool("rp2040 unwritten flash: the state fits the small bound", plainBytes <= small, true);
+
+  // Let everything finish, then scramble: the state must bring both the old values and
+  // the half-done work back.
+  SimulationClock_tick(mcu->clock, 10e6); // nanoseconds
+  checkI32("rp2040 USB buffer delivered once before the restore", usb_writes, 1);
+  checkU32("rp2040 DMA copied before the restore", RP2040_readUint32(mcu, INFLIGHT_DST_RP2040 + 12), 0x778899aau);
+  checkU32("rp2040 ADC converted before the restore", RP2040_readUint32(mcu, RP2040_ADC + 4), 0x9abu);
+  RP2040_writeUint32(mcu, 0x40034024u, 1);
+  RP2040_writeUint32(mcu, 0x40058010u, 0);
+  RP2040_writeUint32(mcu, 0x50200048u, 0);
+  for (int i = 0; i < 4; i++) RP2040_writeUint32(mcu, INFLIGHT_DST_RP2040 + 4 * i, 0);
+  RP2040_writeUint32(mcu, 0x50000008u, 99);
+  mcu->adc->channelValues[2] = 0x123;
+  RP2040_writeUint32(mcu, RP2040_RTC + 0x04, (2000 << 12) | (1 << 8) | 1); // another date
+  RP2040_writeUint32(mcu, RP2040_RTC + 0x08, 0);
+  RP2040_writeUint32(mcu, RP2040_RTC + 0x0c, 0x10);
+  RP2040_writeUint32(mcu, RP2040_RTC + 0x0c, 0x01);
+  checkU32("rp2040 RTC moved to the other date", RP2040_readUint32(mcu, RP2040_RTC + 0x18), (2000u << 12) | (1u << 8) | 1u);
+
+  checkBool("rp2040 unserialize", RP2040_unserialize(mcu, state, full), true);
+  checkU32("rp2040 UART IBRD restored", RP2040_readUint32(mcu, 0x40034024u), 65);
+  checkU32("rp2040 WATCHDOG SCRATCH1 restored", RP2040_readUint32(mcu, 0x40058010u), 0xdeadbeefu);
+  checkU32("rp2040 PIO instruction restored", mcu->pio[0]->instructions[0], 0x6001u);
+  checkU32("rp2040 SIO divider restored (100 / 7)", RP2040_readUint32(mcu, 0xd0000070u), 14);
+  checkU32("rp2040 RTC date restored", RP2040_readUint32(mcu, RP2040_RTC + 0x18), rtcDate);
+  checkU32("rp2040 RTC time restored", RP2040_readUint32(mcu, RP2040_RTC + 0x1c), rtcTime);
+  checkF64("rp2040 clock rewound to the snapshot", SimulationClock_getNanos(mcu->clock), 0.0);
+
+  SimulationClock_tick(mcu->clock, 4e6);
+  checkI32("rp2040 USB buffer delivered again after the restore", usb_writes, 2);
+  checkBool("...with the same bytes", memcmp(usb_last, "\xa0\xa1\xa2\xa3", 4) == 0, true);
+  checkU32("rp2040 DMA copy repeated after the restore", RP2040_readUint32(mcu, INFLIGHT_DST_RP2040 + 12), 0x778899aau);
+  checkU32("rp2040 ADC converted the captured input after the restore", RP2040_readUint32(mcu, RP2040_ADC + 4), 0x9abu);
+  checkU32("rp2040 TIMER alarm still armed 4 ms in", RP2040_readUint32(mcu, RP2040_TIMER + 0x20) & 1u, 1u);
+  checkU32("rp2040 TIMER alarm not fired early", RP2040_readUint32(mcu, RP2040_TIMER + 0x34) & 1u, 0u);
+  SimulationClock_tick(mcu->clock, 2e6);
+  checkU32("rp2040 TIMER alarm fired after the restore", RP2040_readUint32(mcu, RP2040_TIMER + 0x34) & 1u, 1u);
+  // The wall clock runs on from the restored baseline, as if nothing had happened.
+  SimulationClock_tick(mcu->clock, 1.5e9);
+  checkU32("rp2040 RTC kept time across the restore", RP2040_readUint32(mcu, RP2040_RTC + 0x1c),
+           (6u << 24) | (13u << 16) | (41u << 8) | 0u);
+  free(state);
+
+  // Flash: an ordinary store into the flash window puts the image in every state. Two
+  // states from the same instant, so that only the flash write tells them apart (each
+  // queued clock alarm costs a word, and alarms come and go).
+  uint8_t* before = calloc(1, full);
+  RP2040_serialize(mcu, before, full, 0);
+  checkU32("rp2040 flash still unwritten at this point", ((const uint32_t*)before)[2], 0);
+  const int32_t beforeBytes = (8 + (int32_t)((const uint32_t*)before)[5]) * 4;
+  free(before);
+  RP2040_writeUint32(mcu, 0x10150000u, (int32_t)0x5a5a5a5au);
+  uint8_t* withFlash = calloc(1, full);
+  checkBool("rp2040 flash written: serialize", RP2040_serialize(mcu, withFlash, full, 0), true);
+  words = (const uint32_t*)withFlash;
+  checkU32("rp2040 flash written: header flags", words[2], SAVE_STATE_FLAG_FLASH | SAVE_STATE_FLAG_FLASH_WRITTEN);
+  checkU32("rp2040 flash written: header flash change count", words[6], 1);
+  checkI32("rp2040 flash written: the state grew by the image",
+           (8 + (int32_t)words[5]) * 4 - beforeBytes, 16 * 1024 * 1024);
+  RP2040* fresh = RP2040_new(&options);
+  checkU32("rp2040 fresh chip: flash is erased there", RP2040_readUint32(fresh, 0x10150000u), 0xffffffffu);
+  checkBool("rp2040 flash written: unserialize() onto a fresh chip", RP2040_unserialize(fresh, withFlash, full), true);
+  checkU32("rp2040 flash written: the image came back", RP2040_readUint32(fresh, 0x10150000u), 0x5a5a5a5au);
+  checkU32("rp2040 flash written: the RTC came back too", RP2040_readUint32(fresh, RP2040_RTC + 0x18), rtcDate);
+  // The restored chip knows the image is written: its own next state carries it.
+  uint8_t* again = calloc(1, full);
+  RP2040_serialize(fresh, again, full, 0);
+  checkU32("rp2040 restored chip: its next state carries the image",
+           ((const uint32_t*)again)[2], SAVE_STATE_FLAG_FLASH | SAVE_STATE_FLAG_FLASH_WRITTEN);
+  free(again);
+
+  // Omitted on request once written: accepted while nothing writes it again.
+  uint8_t* omitted = calloc(1, small);
+  checkBool("rp2040 flash omitted on request: serialize", RP2040_serialize(mcu, omitted, small, SAVE_STATE_OMIT_FLASH), true);
+  checkU32("rp2040 flash omitted on request: header flags", ((const uint32_t*)omitted)[2], SAVE_STATE_FLAG_FLASH_WRITTEN);
+  checkU32("rp2040 flash omitted on request: header flash change count", ((const uint32_t*)omitted)[6], 1);
+  checkBool("rp2040 flash omitted, unchanged since: unserialize()", RP2040_unserialize(mcu, omitted, small), true);
+  RP2040_writeUint32(mcu, 0x10150004u, 1u); // written again since the snapshot
+  checkBool("rp2040 flash omitted, written again since: refused", RP2040_unserialize(mcu, omitted, small), false);
+  free(omitted);
+  free(withFlash);
+
+  // Continuing after a restore must reproduce the uninterrupted run. A loop in SRAM
+  // (adds r5,#1 ; b) keeps the core busy without any firmware.
+  const uint32_t code = 0x20040100u;
+  RP2040_writeUint16(mcu, code, 0x3501u);       // adds r5, #1
+  RP2040_writeUint16(mcu, code + 2, 0xE7FDu);  // b code
+  CortexM0Core* core = mcu->core[0];
+  core->registers[5] = 0;
+  core->registers[15] = code;
+  for (int i = 0; i < 10; i++) CortexM0Core_executeInstruction(core);
+  checkI32("m0 loop ran to the snapshot", (int32_t)core->registers[5], 5);
+  const int32_t loopSize = RP2040_serializeSize(mcu, 0);
+  uint8_t* loopState = calloc(1, loopSize);
+  checkBool("m0 loop serialize", RP2040_serialize(mcu, loopState, loopSize, 0), true);
+  const uint32_t pcAtSnapshot = core->registers[15];
+  for (int i = 0; i < 20; i++) CortexM0Core_executeInstruction(core);
+  checkI32("m0 loop uninterrupted", (int32_t)core->registers[5], 15);
+  const uint32_t pcAfter = core->registers[15];
+  const int64_t cyclesAfter = core->cycles;
+
+  checkBool("m0 loop unserialize", RP2040_unserialize(mcu, loopState, loopSize), true);
+  checkI32("m0 loop rewound", (int32_t)core->registers[5], 5);
+  checkU32("m0 pc rewound", core->registers[15], pcAtSnapshot);
+  for (int i = 0; i < 20; i++) CortexM0Core_executeInstruction(core);
+  checkI32("m0 loop replays", (int32_t)core->registers[5], 15);
+  checkU32("m0 pc replays", core->registers[15], pcAfter);
+  checkI64("m0 cycles replay", core->cycles, cyclesAfter);
+  free(loopState);
+#undef RP2040_RTC
+#undef RP2040_TIMER
+#undef RP2040_ADC
+}
+
 int main(void) {
+  // cts2c stubs abort() the process; buffered stdout would lose everything up to there.
+  setvbuf(stdout, NULL, _IONBF, 0);
+
   // floatToBits/bitsToFloat: 3.14159f's real IEEE-754 bits are 0x40490FD0 — NOT the
   // bit pattern for 3.0f (0x40400000), which is what the pre-fix
   // truncate-to-int32-then-reconvert bug would have silently produced instead.
@@ -422,6 +932,16 @@ int main(void) {
   checkI32("f64ToI32Sat(3000000000.5)", f64ToI32Sat(3000000000.5), 0x7fffffff);
   checkU32("f64ToU32Sat(42.9)", (uint32_t)f64ToU32Sat(42.9), 42u);
   checkU32("f64ToU32Sat(5000000000.5)", (uint32_t)f64ToU32Sat(5000000000.5), 0xffffffffu);
+
+  // stateF64Lo/Hi/From and stateF32ToBits/FromBits: the save-state stream's own
+  // bit-reinterpretation bodies. 0.1 has no finite binary representation, so a
+  // numeric conversion would not round-trip its bits (0x3FB999999999999A).
+  checkU32("stateF64Lo(0.1)", (uint32_t)stateF64Lo(0.1), 0x9999999Au);
+  checkU32("stateF64Hi(0.1)", (uint32_t)stateF64Hi(0.1), 0x3FB99999u);
+  checkF64("stateF64From(lo, hi) of 0.1", stateF64From((int32_t)0x9999999Au, (int32_t)0x3FB99999u), 0.1);
+  checkU32("stateF64Hi(-0.0)", (uint32_t)stateF64Hi(-0.0), 0x80000000u);
+  checkU32("stateF32ToBits(3.14159f)", (uint32_t)stateF32ToBits(3.14159f), 0x40490FD0u);
+  checkF32("stateF32FromBits(0x40490FD0)", stateF32FromBits((int32_t)0x40490FD0u), 3.14159f);
 
   // ─── checkTraceMagic (RISC-V) ──────────────────────────────────────────
   // The `j` over the marker is 4 bytes, so the marker sits at the link address
@@ -638,6 +1158,13 @@ int main(void) {
   // ─── Timer alarm scheduling past INT32_MAX ns ──────────────────────────
   check_timer_alarm_overflow();
   check_mtimecmp_unsigned();
+
+  // ─── save states ──────────────────────────────────────────────────────
+  check_state_stream();
+  check_save_state_rp2350();
+  check_save_state_arm();
+  check_save_state_images();
+  check_save_state_rp2040();
 
   if (failures > 0) {
     fprintf(stderr, "\n%d check(s) FAILED\n", failures);

@@ -1,6 +1,7 @@
 import { RP2350 } from '../rp2350';
 import { IRPChip } from '../rpchip';
 import { BasePeripheral, Peripheral } from './peripheral';
+import { SaveStateStream } from '../utils/save-state';
 
 const RESET = 0x0; //Reset control.
 const WDSEL = 0x4; //Watchdog select.
@@ -46,5 +47,10 @@ export class RPReset<ChipType extends IRPChip = IRPChip>
         super.writeUint32(offset, value);
         break;
     }
+  }
+
+  transferState(s: SaveStateStream) {
+    this.reset = s.i32(this.reset);
+    this.wdsel = s.i32(this.wdsel);
   }
 }

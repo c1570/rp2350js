@@ -1,6 +1,7 @@
 import { IRPChip } from '../rpchip';
 import { BasePeripheral, Peripheral } from './peripheral';
 import { GPIOPin } from '../gpio-pin';
+import { SaveStateStream } from '../utils/save-state';
 
 const VOLTAGE_SELECT = 0;
 const BANK0_FIRST = 0x4;
@@ -63,5 +64,9 @@ export class RP2350PADS<ChipType extends IRPChip = IRPChip>
       default:
         super.writeUint32(offset, value);
     }
+  }
+
+  transferState(s: SaveStateStream) {
+    this.voltageSelect = s.i32(this.voltageSelect);
   }
 }

@@ -1,5 +1,6 @@
 import { IRPChip } from '../rpchip';
 import { BasePeripheral, Peripheral } from './peripheral';
+import { SaveStateStream } from '../utils/save-state';
 
 const CSR_OFFSET = 0x00;
 const WDATA_OFFSET = 0x04;
@@ -131,5 +132,13 @@ export class RP2350SHA256<ChipType extends IRPChip = IRPChip>
         this.sumValid = true;
       }
     }
+  }
+
+  transferState(s: SaveStateStream) {
+    s.u32array(this.state, 8);
+    this.wordCount = s.i32(this.wordCount);
+    s.u32array(this.block, 16);
+    this.sumValid = s.bool(this.sumValid);
+    this.bswap = s.bool(this.bswap);
   }
 }

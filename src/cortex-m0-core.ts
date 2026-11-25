@@ -1,3 +1,4 @@
+import { SaveStateStream } from './utils/save-state';
 import { ICpuCore } from './cpu-core';
 import { Int53, Uint32 } from './utils/types';
 import { MAX_HARDWARE_IRQ } from './irq';
@@ -138,6 +139,37 @@ export class CortexM0Core implements ICpuCore {
     this.SP = this.rpchip.readUint32(this.VTOR);
     this.PC = this.rpchip.readUint32(this.VTOR + 4) & 0xfffffffe;
     this.cycles = 0;
+  }
+
+  transferState(s: SaveStateStream) {
+    // SP, LR and PC are registers[13..15]; the PSR views are derived from the flags.
+    s.u32array(this.registers, 16);
+    this.bankedSP = s.u32(this.bankedSP); // kept unsigned, like the `>>> 0` that sets it
+    this.cycles = s.i53(this.cycles);
+    this.eventRegistered = s.bool(this.eventRegistered);
+    this.waiting = s.bool(this.waiting);
+    this.N = s.bool(this.N);
+    this.C = s.bool(this.C);
+    this.Z = s.bool(this.Z);
+    this.V = s.bool(this.V);
+    this.breakRewind = s.i32(this.breakRewind);
+    this.PM = s.bool(this.PM);
+    this.SPSEL = s.i32(this.SPSEL) as StackPointerBank;
+    this.nPRIV = s.bool(this.nPRIV);
+    this.currentMode = s.i32(this.currentMode) as ExecutionModeM0;
+    this.IPSR = s.i32(this.IPSR);
+    this.interruptNMIMask = s.i32(this.interruptNMIMask);
+    this.pendingInterrupts = s.i32(this.pendingInterrupts);
+    this.enabledInterrupts = s.i32(this.enabledInterrupts);
+    s.i32array(this.interruptPriorities, 4);
+    this.pendingNMI = s.bool(this.pendingNMI);
+    this.pendingPendSV = s.bool(this.pendingPendSV);
+    this.pendingSVCall = s.bool(this.pendingSVCall);
+    this.pendingSystick = s.bool(this.pendingSystick);
+    this.interruptsUpdated = s.bool(this.interruptsUpdated);
+    this.VTOR = s.i32(this.VTOR);
+    this.SHPR2 = s.i32(this.SHPR2);
+    this.SHPR3 = s.i32(this.SHPR3);
   }
 
   get SP() {

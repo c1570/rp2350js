@@ -1,6 +1,7 @@
 import { RP2040 } from './rp2040';
 import { RPSIOCore } from './sio-core';
 import { FIFO } from './utils/fifo';
+import { SaveStateStream } from './utils/save-state';
 
 const CPUID = 0x000;
 
@@ -37,6 +38,10 @@ export class RPSIO {
   qspiGpioValue = 0;
   qspiGpioOutputEnable = 0;
   spinLock = 0;
+  // Fields rather than constructor locals so transferState() can save each FIFO
+  // exactly once: both cores share them (one core's rx is the other's tx).
+  private readonly rxFIFO = new FIFO(8);
+  private readonly txFIFO = new FIFO(8);
   readonly sioCore: [RPSIOCore, RPSIOCore];
 
   constructor(
@@ -44,12 +49,22 @@ export class RPSIO {
     readonly sio_proc0_irq: number,
     readonly sio_proc1_irq: number
   ) {
-    const rxFIFO = new FIFO(8);
-    const txFIFO = new FIFO(8);
     this.sioCore = [
-      new RPSIOCore(rpchip, rxFIFO, txFIFO, sio_proc0_irq, sio_proc1_irq, 0, 1),
-      new RPSIOCore(rpchip, txFIFO, rxFIFO, sio_proc1_irq, sio_proc0_irq, 1, 0),
+      new RPSIOCore(rpchip, this.rxFIFO, this.txFIFO, sio_proc0_irq, sio_proc1_irq, 0, 1),
+      new RPSIOCore(rpchip, this.txFIFO, this.rxFIFO, sio_proc1_irq, sio_proc0_irq, 1, 0),
     ];
+  }
+
+  transferState(s: SaveStateStream) {
+    this.gpioValue = s.i32(this.gpioValue);
+    this.gpioOutputEnable = s.i32(this.gpioOutputEnable);
+    this.qspiGpioValue = s.i32(this.qspiGpioValue);
+    this.qspiGpioOutputEnable = s.i32(this.qspiGpioOutputEnable);
+    this.spinLock = s.i32(this.spinLock);
+    this.sioCore[0].transferState(s);
+    this.sioCore[1].transferState(s);
+    this.rxFIFO.transferState(s);
+    this.txFIFO.transferState(s);
   }
 
   readUint32(offset: number, cpuCore: number): number {

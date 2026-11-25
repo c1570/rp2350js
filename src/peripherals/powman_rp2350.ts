@@ -1,5 +1,6 @@
 import { IRPChip } from '../rpchip';
 import { BasePeripheral, Peripheral } from './peripheral';
+import { SaveStateStream } from '../utils/save-state';
 import { Float64 } from '../utils/types';
 
 const BADPASSWD = 0x00;
@@ -29,7 +30,9 @@ export class RP2350POWMAN<ChipType extends IRPChip = IRPChip>
   extends BasePeripheral<ChipType>
   implements Peripheral
 {
-  private baseMs = 0;
+  // Float64: baseMs carries fractional milliseconds (see nowMs()), which a plain
+  // `number` would truncate to int32_t in C.
+  private baseMs: Float64 = 0;
   private runStartNanos: Float64 = 0;
   private running = false;
   private badPasswd = false;
@@ -98,6 +101,15 @@ export class RP2350POWMAN<ChipType extends IRPChip = IRPChip>
         return;
     }
     if (offset < 0x100) this.regs[offset >> 2] = data;
+  }
+
+  transferState(s: SaveStateStream) {
+    this.baseMs = s.f64(this.baseMs);
+    this.runStartNanos = s.f64(this.runStartNanos);
+    this.running = s.bool(this.running);
+    this.badPasswd = s.bool(this.badPasswd);
+    s.u16array(this.setWords, 4);
+    s.u32array(this.regs, REG_WORDS);
   }
 
   private applySet(index: number, data: number) {

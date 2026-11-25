@@ -1,5 +1,6 @@
 import { IRPChip } from '../rpchip';
 import { BasePeripheral, Peripheral } from './peripheral';
+import { SaveStateStream } from '../utils/save-state';
 
 const SSI_CTRLR0 = 0x00000000;
 const SSI_SSIENR = 0x00000008;
@@ -192,5 +193,17 @@ export class RPSSI<ChipType extends IRPChip = IRPChip>
         }
         break;
     }
+  }
+
+  transferState(s: SaveStateStream) {
+    s.u32array(this.regs, 0x100);
+    this.phase = s.i32(this.phase) as SpiPhase;
+    this.flashCmd = s.i32(this.flashCmd);
+    this.flashAddr = s.i32(this.flashAddr);
+    this.addrBytesRemaining = s.i32(this.addrBytesRemaining);
+    s.u8array(this.rxFifo, 16);
+    this.rxFifoHead = s.i32(this.rxFifoHead);
+    this.rxFifoTail = s.i32(this.rxFifoTail);
+    this.rxFifoCount = s.i32(this.rxFifoCount);
   }
 }

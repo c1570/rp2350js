@@ -1,3 +1,5 @@
+import { SaveStateStream } from './save-state';
+
 export class FIFO {
   readonly buffer: Uint32Array;
 
@@ -46,6 +48,16 @@ export class FIFO {
 
   reset() {
     this.used = 0;
+  }
+
+  transferState(s: SaveStateStream) {
+    this.start = s.i32(this.start);
+    this.used = s.i32(this.used);
+    s.u32array(this.buffer, this.capacity);
+    // A joined FIFO has capacity 0 (and start 0): only flag genuinely invalid state.
+    if (this.used > this.capacity || (this.capacity > 0 && this.start >= this.capacity)) {
+      s.ok = false;
+    }
   }
 
   get empty() {

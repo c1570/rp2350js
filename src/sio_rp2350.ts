@@ -3,6 +3,7 @@ import { AlarmCallback, IAlarm } from './clock/clock';
 import { RPSIOCore } from './sio-core';
 import { FIFO } from './utils/fifo';
 import { Float64, Uint32 } from './utils/types';
+import { SaveStateStream } from './utils/save-state';
 
 const CPUID = 0x000;
 
@@ -91,6 +92,10 @@ export class RP2350SIO {
   // The datasheet resets mtimecmph to 0xffffffff too; 0 keeps lo-only writes working and
   // the compare value (0xffffffff ticks, ~71 minutes) is just as unreachable in practice.
   private readonly mtimecmpHigh: [Uint32, Uint32] = [0, 0];
+  // Fields rather than constructor locals so transferState() can save each FIFO
+  // exactly once: both cores share them (one core's rx is the other's tx).
+  private readonly rxFIFO = new FIFO(8);
+  private readonly txFIFO = new FIFO(8);
 
   constructor(
     private readonly rpchip: RP2350,
@@ -98,15 +103,34 @@ export class RP2350SIO {
     readonly sio_proc1_irq: number,
     readonly sio_mtimecmp_irq: number = sio_proc0_irq
   ) {
-    const rxFIFO = new FIFO(8);
-    const txFIFO = new FIFO(8);
     this.sioCore = [
-      new RPSIOCore(rpchip, rxFIFO, txFIFO, sio_proc0_irq, sio_proc1_irq, 0, 1),
-      new RPSIOCore(rpchip, txFIFO, rxFIFO, sio_proc1_irq, sio_proc0_irq, 1, 0),
+      new RPSIOCore(rpchip, this.rxFIFO, this.txFIFO, sio_proc0_irq, sio_proc1_irq, 0, 1),
+      new RPSIOCore(rpchip, this.txFIFO, this.rxFIFO, sio_proc1_irq, sio_proc0_irq, 1, 0),
     ];
 
     this.mtimecmpAlarm0 = rpchip.clock.createAlarm(new MtimecmpAlarmCallback(this, 0));
     this.mtimecmpAlarm1 = rpchip.clock.createAlarm(new MtimecmpAlarmCallback(this, 1));
+  }
+
+  transferState(s: SaveStateStream) {
+    this.gpioValue = s.i32(this.gpioValue);
+    this.gpioOutputEnable = s.i32(this.gpioOutputEnable);
+    this.gpioHiValue = s.i32(this.gpioHiValue);
+    this.gpioHiOutputEnable = s.i32(this.gpioHiOutputEnable);
+    this.spinLock = s.i32(this.spinLock);
+    this.sioCore[0].transferState(s);
+    this.sioCore[1].transferState(s);
+    this.rxFIFO.transferState(s);
+    this.txFIFO.transferState(s);
+    this.mtimeBaseValue = s.f64(this.mtimeBaseValue);
+    this.mtimeBaseNanos = s.f64(this.mtimeBaseNanos);
+    this.mtimeEnabled = s.bool(this.mtimeEnabled);
+    this.mtimeNanosPerTick = s.f64(this.mtimeNanosPerTick);
+    this.mtimeCtrl = s.i32(this.mtimeCtrl);
+    this.mtimecmpLow[0] = s.u32(this.mtimecmpLow[0]);
+    this.mtimecmpLow[1] = s.u32(this.mtimecmpLow[1]);
+    this.mtimecmpHigh[0] = s.u32(this.mtimecmpHigh[0]);
+    this.mtimecmpHigh[1] = s.u32(this.mtimecmpHigh[1]);
   }
 
   private mtimecmpAlarm(cpuCore: number): IAlarm {

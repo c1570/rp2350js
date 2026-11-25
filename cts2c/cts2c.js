@@ -56,6 +56,10 @@ const GROWABLE_ARRAY_CAPACITY = 8;
 // ─── Type registry ──────────────────────────────────────────────────
 const classes = new Map(); // name → { fields, methods, parent, isBase, implements }
 const enums = new Map(); // name → Map<member, value>
+// Enums share one flat C namespace, keyed by name alone. These record a name declared in
+// two files with different values, which emitAllEnums() turns into a #error.
+const enumHomes = new Map(); // name → file of its first declaration
+const enumConflicts = new Map(); // name → [first file, conflicting file]
 const interfaces = new Map(); // name → Map<method name, { retType, params }>
 const freeFunctions = new Map(); // name → { params, retType }
 const arrowFunctions = new Map(); // name → { params, retType }
@@ -1884,6 +1888,16 @@ function collectTypes(filepath) {
         members.set(m.id.name, val);
         val++;
       }
+      // A second declaration under the same name is fine when its values are identical
+      // (a module-private enum repeated per file), but not when they differ: the last
+      // one would silently win for every user of either. Each chip's DMA used to declare
+      // its own `DREQChannel` that way, and the C build resolved the RP2040's to the
+      // RP2350's numbering.
+      const declared = enums.get(name);
+      if (declared?.size && !enumConflicts.has(name) && !sameEnumMembers(declared, members)) {
+        enumConflicts.set(name, [enumHomes.get(name), relFile]);
+      }
+      if (!declared?.size) enumHomes.set(name, relFile);
       enums.set(name, members);
     }
 
@@ -2335,7 +2349,8 @@ function emitImpl(node, out) {
           break;
         }
       }
-      // Float/double bit-reinterpretation helpers (execute-fpu.ts/coprocessor.ts): their
+      // Float/double bit-reinterpretation helpers (execute-fpu.ts/coprocessor.ts/
+      // utils/save-state.ts): their
       // real TS bodies alias a Float32Array/Uint32Array (or Float64Array/Uint32Array)
       // pair over one ArrayBuffer to reinterpret bits — safe in JS, but transpiled
       // literally that's two incompatible C pointer types over the same memory, UB
@@ -2345,7 +2360,18 @@ function emitImpl(node, out) {
       // is always well-defined, and GCC/Clang at -O1+ fold a constant-size memcpy into
       // a scalar down to a register move, so this costs nothing once optimized.
       if (
-        ['floatToBits', 'bitsToFloat', 'isSignNegative', 'readDouble', 'writeDouble'].includes(name)
+        [
+          'floatToBits',
+          'bitsToFloat',
+          'isSignNegative',
+          'readDouble',
+          'writeDouble',
+          'stateF64Lo',
+          'stateF64Hi',
+          'stateF64From',
+          'stateF32ToBits',
+          'stateF32FromBits',
+        ].includes(name)
       ) {
         const fn = freeFunctions.get(name);
         if (fn) {
@@ -2373,6 +2399,24 @@ function emitImpl(node, out) {
             out.push(`  uint64_t __pun_bits; memcpy(&__pun_bits, &${p[2]}, sizeof(__pun_bits));`);
             out.push(`  ${p[0]}->dcpHalves[${p[1]} * 2] = (uint32_t)(__pun_bits & 0xffffffffu);`);
             out.push(`  ${p[0]}->dcpHalves[${p[1]} * 2 + 1] = (uint32_t)(__pun_bits >> 32);`);
+          } else if (name === 'stateF64Lo') {
+            out.push(`  uint64_t __pun_bits; memcpy(&__pun_bits, &${p[0]}, sizeof(__pun_bits));`);
+            out.push(`  return (int32_t)(uint32_t)(__pun_bits & 0xffffffffu);`);
+          } else if (name === 'stateF64Hi') {
+            out.push(`  uint64_t __pun_bits; memcpy(&__pun_bits, &${p[0]}, sizeof(__pun_bits));`);
+            out.push(`  return (int32_t)(uint32_t)(__pun_bits >> 32);`);
+          } else if (name === 'stateF64From') {
+            out.push(
+              `  uint64_t __pun_bits = ((uint64_t)(uint32_t)${p[1]} << 32) | (uint64_t)(uint32_t)${p[0]};`
+            );
+            out.push(`  double __pun_d; memcpy(&__pun_d, &__pun_bits, sizeof(__pun_d));`);
+            out.push(`  return __pun_d;`);
+          } else if (name === 'stateF32ToBits') {
+            out.push(`  uint32_t __pun_bits; memcpy(&__pun_bits, &${p[0]}, sizeof(__pun_bits));`);
+            out.push(`  return (int32_t)__pun_bits;`);
+          } else if (name === 'stateF32FromBits') {
+            out.push(`  float __pun_f; memcpy(&__pun_f, &${p[0]}, sizeof(__pun_f));`);
+            out.push(`  return __pun_f;`);
           }
           out.push('}');
           out.push('');
@@ -2469,12 +2513,6 @@ function emitFieldInitializers(classNode, className, out, ctx, params) {
     const field = info.fields.get(fname);
     if (!field?.initNode) continue;
     const initNode = field.initNode;
-
-    // RP2040RTC's `baseline = new Date(...)` — cts2c has no Date support (see the
-    // matching readUint32/writeUint32 override in emitClassImpl). `baseline` is only
-    // ever read back through those two hand-written bodies, which never touch it, so
-    // leaving it NULL (from the surrounding calloc) is safe.
-    if (className === 'RP2040RTC' && fname === 'baseline') continue;
 
     // Inlined typed array: the struct's own calloc already zeroed it.
     if (field.inlineArray && field.isTypedArray) continue;
@@ -2947,64 +2985,6 @@ function emitClassImpl(node, out) {
       const nameExpr = info.fields.has('name') ? `self->name` : `"${name}"`;
       out.push(`static ${msig.retType} ${name}_${mname}(${paramStr}) {`);
       out.push(`  fprintf(stderr, "[%s] %s\\n", ${nameExpr}, ${msgParam});`);
-      out.push(`}`);
-      out.push('');
-      continue;
-    }
-
-    // RP2040RTC (rtc.ts) uses `Date` for its wall-clock read/reconstruct logic, which
-    // cts2c has no support for at all (see the `baseline` field-initializer skip in
-    // emitFieldInitializers below for the matching constructor-side half of this).
-    // Rather than teaching cts2c a general Date feature, hand-write these two methods:
-    // the real register bookkeeping (setup0/setup1/ctrl) is preserved, but the actual
-    // Date-backed wall-clock value is stubbed out with a runtime warning instead of
-    // computed — same by-name-override precedent as checkTraceMagic/loadFirmwareFromUF2.
-    if (name === 'RP2040RTC' && (mname === 'readUint32' || mname === 'writeUint32')) {
-      const params = [{ name: 'self', type: `${name}*` }, ...msig.params];
-      const paramStr = params.map((p) => `${p.type} ${cName(p.name)}`).join(', ');
-      out.push(`static ${msig.retType} ${name}_${mname}(${paramStr}) {`);
-      if (mname === 'readUint32') {
-        out.push(`  switch (offset) {`);
-        out.push(`  case RTC_SETUP0: return self->setup0;`);
-        out.push(`  case RTC_SETUP1: return self->setup1;`);
-        out.push(`  case RTC_CTRL: return self->ctrl;`);
-        out.push(`  case IRQ_SETUP_0: return 0;`);
-        out.push(`  case RTC_RTC1:`);
-        out.push(`  case RTC_RTC0:`);
-        out.push(
-          `    fprintf(stderr, "[%s] RTC wall-clock read (offset 0x%x) is stubbed in the C build (no Date support in cts2c) -- returning 0\\n", self->base.name, offset);`
-        );
-        out.push(`    return 0;`);
-        out.push(`  default: break;`);
-        out.push(`  }`);
-        out.push(`  return BasePeripheral__RP2040_readUint32(&self->base, offset);`);
-      } else {
-        out.push(`  switch (offset) {`);
-        out.push(`  case RTC_SETUP0: self->setup0 = value; break;`);
-        out.push(`  case RTC_SETUP1: self->setup1 = value; break;`);
-        out.push(`  case RTC_CTRL:`);
-        out.push(`    if (value & RTC_LOAD_BITS) self->ctrl |= RTC_LOAD_BITS;`);
-        out.push(`    if (value & RTC_ENABLE_BITS) {`);
-        out.push(`      self->ctrl |= RTC_ENABLE_BITS;`);
-        out.push(`      self->ctrl |= RTC_ACTIVE_BITS;`);
-        out.push(`      if (self->ctrl & RTC_LOAD_BITS) {`);
-        out.push(
-          `        fprintf(stderr, "[%s] RTC_LOAD (offset 0x%x) is stubbed in the C build (no Date support in cts2c) -- setup0/setup1 recorded but not applied to wall clock\\n", self->base.name, offset);`
-        );
-        out.push(
-          `        self->baselineNanos = SimulationClock_getNanos(self->base.rpchip->clock);`
-        );
-        out.push(`        self->ctrl &= ~RTC_LOAD_BITS;`);
-        out.push(`      }`);
-        out.push(`    } else {`);
-        out.push(`      self->ctrl &= ~RTC_ENABLE_BITS;`);
-        out.push(`      self->ctrl &= ~RTC_ACTIVE_BITS;`);
-        out.push(`    }`);
-        out.push(`    break;`);
-        out.push(`  default:`);
-        out.push(`    BasePeripheral__RP2040_writeUint32(&self->base, offset, value);`);
-        out.push(`  }`);
-      }
       out.push(`}`);
       out.push('');
       continue;
@@ -6130,9 +6110,22 @@ function markInlineArrays() {
   }
 }
 
+function sameEnumMembers(a, b) {
+  if (a.size !== b.size) return false;
+  for (const [member, value] of a) {
+    if (b.get(member) !== value) return false;
+  }
+  return true;
+}
+
 // Emit all collected enums
 function emitAllEnums(out) {
   out.push('// ─── Enum definitions ───');
+  for (const [name, [first, second]] of enumConflicts) {
+    out.push(
+      `#error "enum ${name} is declared with different values in ${first} and ${second}: cts2c has one flat namespace for enums, so rename one of them"`
+    );
+  }
   for (const [name, members] of enums) {
     out.push(`typedef enum {`);
     for (const [member, value] of members) {

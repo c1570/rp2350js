@@ -1,6 +1,7 @@
 import { IRPChip } from '../rpchip';
 import { FIFO } from '../utils/fifo';
 import { BasePeripheral, Peripheral } from './peripheral';
+import { SaveStateStream } from '../utils/save-state';
 
 const SSPCR0 = 0x000; // Control register 0, SSPCR0 on page 3-4
 const SSPCR1 = 0x004; // Control register 1, SSPCR1 on page 3-5
@@ -268,5 +269,17 @@ export class RPSPI<ChipType extends IRPChip = IRPChip>
       default:
         super.writeUint32(offset, value);
     }
+  }
+
+  transferState(s: SaveStateStream) {
+    this.busy = s.bool(this.busy);
+    this.control0 = s.i32(this.control0);
+    this.control1 = s.i32(this.control1);
+    this.dmaControl = s.i32(this.dmaControl);
+    this.clockDivisor = s.i32(this.clockDivisor);
+    this.intRaw = s.i32(this.intRaw);
+    this.intEnable = s.i32(this.intEnable);
+    this.rxFIFO.transferState(s);
+    this.txFIFO.transferState(s);
   }
 }

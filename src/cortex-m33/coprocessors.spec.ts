@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { RP2350 } from '../rp2350';
+import { NO_PENDING_FAULT } from './core';
 
 const SRAM = 0x20000000;
 
@@ -227,7 +228,7 @@ describe('Cortex-M33 CP7 RCP', () => {
     put32(chip, SRAM, 0xee00, 0x0730); // mcr p7, 0, r0, c0, c0, 1
     core.PC = SRAM;
     core.executeInstruction();
-    expect(core.pendingFault).toBe(null);
+    expect(core.pendingFault).toBe(NO_PENDING_FAULT);
   });
 
   it('rcp_canary_check triggers NMI when value mismatches', () => {
@@ -287,7 +288,7 @@ describe('Cortex-M33 CP7 RCP', () => {
     put32(chip, SRAM, 0xec51, 0x0770); // mrrc p7, 7, r0, r1, c0
     core.PC = SRAM;
     core.executeInstruction();
-    expect(core.pendingFault).toBe(null);
+    expect(core.pendingFault).toBe(NO_PENDING_FAULT);
   });
 
   it('rcp_salt_core0 sets salt', () => {

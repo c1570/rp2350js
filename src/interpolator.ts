@@ -1,4 +1,5 @@
 import { s32, u32 } from './utils/bit';
+import { SaveStateStream } from './utils/save-state';
 
 export class InterpolatorConfig {
   shift = 0;
@@ -199,5 +200,20 @@ export class Interpolator {
     this.base1 = u32(base1);
 
     this.update();
+  }
+
+  transferState(s: SaveStateStream) {
+    this.accum0 = s.i32(this.accum0);
+    this.accum1 = s.i32(this.accum1);
+    this.base0 = s.i32(this.base0);
+    this.base1 = s.i32(this.base1);
+    this.base2 = s.i32(this.base2);
+    this.ctrl0 = s.i32(this.ctrl0);
+    this.ctrl1 = s.i32(this.ctrl1);
+    this.result0 = s.i32(this.result0);
+    this.result1 = s.i32(this.result1);
+    this.result2 = s.i32(this.result2);
+    this.smresult0 = s.i32(this.smresult0);
+    this.smresult1 = s.i32(this.smresult1);
   }
 }

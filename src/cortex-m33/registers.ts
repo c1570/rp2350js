@@ -1,6 +1,7 @@
 /**
  * Cortex-M33 (ARMv8-M Mainline) register file.
  */
+import { SaveStateStream } from '../utils/save-state';
 
 /** xPSR flag bit positions. */
 export const XPSR_N = 0x80000000;
@@ -59,6 +60,29 @@ export class M33Registers {
   // own declared constructor — relying on the implicit default one (real, valid JS/TS)
   // got none at all ("implicit declaration of function ... _new").
   constructor() {}
+
+  transferState(s: SaveStateStream) {
+    s.u32array(this.r, 16);
+    this.xpsr = s.i32(this.xpsr);
+    this.primask = s.i32(this.primask);
+    this.basepri = s.i32(this.basepri);
+    this.faultmask = s.i32(this.faultmask);
+    this.control = s.i32(this.control);
+    this.msp = s.i32(this.msp);
+    this.psp = s.i32(this.psp);
+    this.msp_ns = s.i32(this.msp_ns);
+    this.psp_ns = s.i32(this.psp_ns);
+    this.msplim = s.i32(this.msplim);
+    this.psplim = s.i32(this.psplim);
+    this.msplim_ns = s.i32(this.msplim_ns);
+    this.psplim_ns = s.i32(this.psplim_ns);
+    this.primask_ns = s.i32(this.primask_ns);
+    this.basepri_ns = s.i32(this.basepri_ns);
+    this.faultmask_ns = s.i32(this.faultmask_ns);
+    this.control_ns = s.i32(this.control_ns);
+    s.f32array(this.s, 32);
+    this.fpscr = s.i32(this.fpscr);
+  }
 
   /** Reset to a fresh post-power-on state. T bit set (Thumb always). */
   reset() {
