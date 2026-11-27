@@ -1,0 +1,33 @@
+;
+; Countdown display: shows x[7:0] on the pins, decrementing once per loop
+; (~12 SM cycles at clk_sys). PULL NOBLOCK with an empty FIFO has MOV OSR, X
+; semantics, so the counter re-latches itself from x every loop; a word pushed
+; by the CPU reloads it. The CPU pushes 0 whenever GPIO24 toggles, which wraps
+; the visible 8 bits to 0xff and restarts the countdown from the top.
+;
+
+.program countdown
+.origin 0
+
+    mov x, NULL
+.wrap_target
+start:
+    pull noblock
+    mov x, osr
+    out pins, 8 [7]
+    jmp x-- start
+.wrap
+
+% c-sdk {
+static inline void countdown_program_init(PIO pio, uint sm, uint offset, uint pin_base) {
+    pio_sm_config c = countdown_program_get_default_config(offset);
+    sm_config_set_out_pins(&c, pin_base, 8);
+    sm_config_set_out_shift(&c, true, false, 32); // shift right, NO autopull (explicit PULL)
+    for (uint i = 0; i < 8; i++) {
+        pio_gpio_init(pio, pin_base + i);
+    }
+    pio_sm_set_consecutive_pindirs(pio, sm, pin_base, 8, true);
+    pio_sm_init(pio, sm, offset, &c);
+    pio_sm_set_enabled(pio, sm, true);
+}
+%}

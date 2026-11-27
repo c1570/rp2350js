@@ -85,7 +85,10 @@
     "test:micropython-spi": "ts-node test/micropython-spi-test.ts",
     "bench:cpu": "npm run build && tsx test/cpu_benchmark/compare.ts",
     "bin": "node dist/cjs/rp2-emu-cli/rp2-emu.js",
-    "bin:dev": "ts-node src/rp2-emu-cli/rp2-emu.ts"
+    "bin:dev": "ts-node src/rp2-emu-cli/rp2-emu.ts",
+    "demo:web:build": "cd demo/web && ./build.sh",
+    "demo:web:serve": "node demo/web/server.mjs 8080",
+    "demo:web:test": "ts-node --transpile-only demo/web/test/runner-test.ts && ts-node --transpile-only demo/web/test/browser-stub-test.ts"
   },
   "devDependencies": {
     "@babel/parser": "^7.29.8",

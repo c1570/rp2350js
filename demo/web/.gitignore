@@ -1,0 +1,4 @@
+# Build artifacts of ./build.sh (browser bundle, firmware disassembly); the
+# firmware .hex/.uf2 are covered by the root .gitignore patterns.
+public/app.js
+public/webfirmware.dis

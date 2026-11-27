@@ -4,6 +4,8 @@ https://github.com/c1570/rp2350js
 
 Raspberry Pi Pico (2) emulator. Develop/test/debug RP2040/2350 projects on your PC/in your CI stack.
 
+Web demo of rp2350js and time rewind feature: <https://c1570.github.io/rp2350js/>
+
 This is a much improved fork of Uri Shaked's [rp2040js](https://github.com/wokwi/rp2040js) project. For its original README, see [README_OLD.md](/README_OLD.md).
 
 ### Status of rp2350js
