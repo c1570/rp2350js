@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>rp2350js — snapshot/rewind web demo</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+    <header>
+      <h1 class="brand"><a href="https://github.com/c1570/rp2350js" target="_blank" rel="noopener">rp2350js</a> <span><a href="https://github.com/c1570/rp2350js" target="_blank" rel="noopener">github.com/c1570/rp2350js</a></span></h1>
+      <div id="transport"></div>
+    </header>
+    <div class="timeline-row" id="timeline-row">
+      <span id="prepare-label"></span>
+      <!-- Compact GPIO24 button for narrow screens (the PCB is hidden there); same state as the PCB's. -->
+      <svg id="gpio24-compact" viewBox="0 0 44 28" width="44" height="28" role="button" tabindex="0" aria-label="GPIO24 button (click to toggle)">
+        <defs>
+          <radialGradient id="gp24-glow-compact">
+            <stop offset="0" stop-color="#f59e0b" stop-opacity="0.95"/>
+            <stop offset="0.45" stop-color="#f59e0b" stop-opacity="0.4"/>
+            <stop offset="1" stop-color="#f59e0b" stop-opacity="0"/>
+          </radialGradient>
+        </defs>
+        <circle class="btn-glow" id="btn-gp24-compact-glow" cx="22" cy="14" r="14" fill="url(#gp24-glow-compact)"/>
+        <g class="btn" id="btn-gp24-compact">
+          <rect class="btn-body" x="3" y="2" width="38" height="24" rx="4"/>
+          <circle class="btn-cap" cx="22" cy="14" r="9"/>
+        </g>
+      </svg>
+    </div>
+
+    <section class="board-analyzer-row">
+      <div id="pcb"><svg></svg></div>
+      <div class="analyzer-wrap" id="analyzer-wrap">
+        <div id="analyzer-canvas-wrap"></div>
+        <div id="analyzer-popover" role="tooltip" aria-hidden="true">
+          <span id="analyzer-popover-text"></span>
+          <button id="analyzer-popover-copy" title="Copy to clipboard" aria-label="Copy to clipboard">
+            <svg class="icon-copy" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="3" y="2.5" width="10" height="12" rx="1.5"/><rect x="5.5" y="1" width="5" height="3" rx="0.8"/></svg>
+            <svg class="icon-check" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8.5l3 3 7-7"/></svg>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <section class="windows-row">
+      <div class="window">
+        <div class="window-title">Hazard3 RISC-V - core0 <span id="cpu-pc"></span></div>
+        <div class="code-scroll" id="cpu-code"></div>
+      </div>
+      <div class="window">
+        <div class="window-title">Hazard3 RISC-V - core1 <span id="cpu1-pc"></span></div>
+        <div class="code-scroll" id="cpu1-code"></div>
+      </div>
+      <div class="window">
+        <div class="window-title"><span id="pio-state"></span></div>
+        <div class="code-scroll" id="pio-code"></div>
+      </div>
+    </section>
+
+    <section class="window">
+      <div class="window-title">UART0 serial output</div>
+      <pre class="code-scroll serial" id="serial"></pre>
+    </section>
+    <div id="help-overlay">
+      <div id="help-box">
+        <h2>What am I looking at?</h2>
+        <p>
+          A <b>RP2350 microcontroller</b> emulated by <b><a href="https://github.com/c1570/rp2350js" target="_blank" rel="noopener">rp2350js</a></b> in your browser,
+          running a small testing (RISC-V) firmware.
+        </p>
+        <ul>
+          <li><b>PIO0 SM0</b> counts <i>down</i> and shows the 8-bit value on <b>GPIO2..9</b>.</li>
+          <li><b>CPU core1</b> outputs another counter (counting up) on <b>GPIO16..23</b>.</li>
+          <li><b>CPU core0</b> prints status lines to the serial, shown in the bottom window.</li>
+        </ul>
+        <h2>What can I do?</h2>
+        <ul>
+          <li><b>⏪/⏩ buttons</b> move time forward and backward. Hold to auto-repeat.</li>
+          <li><b>The slider</b> scrubs the timeline (it ends once the firmware stops outputting to the serial).</li>
+          <li>The <b>GPIO24 button</b> resets the PIO counter and switches the core1 counter to decrement mode. Note how on click, its future consequences become visible immediately.</li>
+          <li>Click anywhere in the analyzer window to get a copyable textual signal description.</li>
+        </ul>
+        <h2>What's the point?</h2>
+        <p>This is a simple showcase of rp2350js as well as a demonstration of a simple debugging environment with time rewind functionality.</p>
+        <p>It is not intended for normal use as is; instead, modify it for your specific project needs.</p>
+        <button id="help-close">close</button>
+      </div>
+    </div>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

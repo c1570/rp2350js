@@ -1,0 +1,327 @@
+:root {
+  --bg: #0b1220;
+  --panel: #111a2e;
+  --panel2: #0e1626;
+  --border: #1e2a44;
+  --text: #cbd5e1;
+  --dim: #64748b;
+  --pio: #4ade80;
+  --cpu: #38bdf8;
+  --accent: #f59e0b;
+  --hl0: rgba(74, 222, 128, 0.18);
+  --hl1: rgba(56, 189, 248, 0.15);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-size: 14px;
+}
+
+#app {
+  margin: 0;
+  padding: 12px 12px 40px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+h1 { font-size: 20px; margin: 0; }
+h1.brand { margin-left: 10px; }
+h1 a { color: var(--text); text-decoration: none; }
+h1 a:hover { color: var(--pio); text-decoration: underline; }
+h1 span { font-size: 13px; font-weight: normal; margin-left: 8px; }
+h1 span a { color: var(--dim); text-decoration: none; }
+h1 span a:hover { color: var(--pio); text-decoration: underline; }
+
+.timeline-row { display: flex; padding: 0 2px; align-items: center; justify-content: center; gap: 10px; min-height: 22px; }
+.timeline-row input { flex: 1 1 auto; accent-color: var(--accent); height: 22px; }
+/* The slider is only ever disabled while the timeline is prepared: hide it then,
+   so the centered "preparing timeline…" note has the row to itself (the row keeps
+   the slider's height, so nothing shifts when it reappears). */
+.timeline-row input:disabled { display: none; }
+/* Breathing glow on the slider until it is first moved — then the GPIO24 button takes over. */
+@keyframes breathe-slider {
+  0%,
+  100% {
+    box-shadow: 0 0 3px 1px rgba(245, 158, 11, 0.35); /* never fully off */
+  }
+  50% {
+    box-shadow: 0 0 18px 6px rgba(245, 158, 11, 0.85);
+  }
+}
+.timeline-row input.blink {
+  animation: breathe-slider 1.6s ease-in-out infinite;
+  border-radius: 11px;
+}
+/* Compact GPIO24 button (narrow screens only; see the media query below). */
+#gpio24-compact { display: none; flex: 0 0 auto; }
+.timeline-row.preparing #gpio24-compact { display: none; }
+.timeline-row #prepare-label { font: 12px ui-monospace, monospace; color: var(--dim); white-space: nowrap; }
+
+/* --- board + logic analyzer row --- */
+/* Fixed row height: both columns are pinned to it, so the analyzer can never
+   grow taller than the board (e.g. when the heading wraps on narrow windows). */
+.board-analyzer-row {
+  display: flex;
+  gap: 16px;
+  align-items: stretch;
+  height: var(--board-h, 480px);
+}
+
+#pcb { flex: 0 0 auto; display: flex; }
+#pcb svg { height: 100%; width: auto; display: block; }
+
+.board { fill: #123b23; stroke: #0d2b1a; stroke-width: 2; }
+.usb { fill: #9aa4b2; stroke: #6b7686; }
+.chip { fill: #111827; stroke: #334155; }
+.chip-dot { fill: #e5e7eb; }
+.chip-lbl { fill: #94a3b8; }
+
+/* Pads are dark grey when low/undriven; the used ones light up in their lane color. */
+.pad { fill: #4b5563; stroke: #6b7280; stroke-width: 1; transition: fill 60ms linear; }
+.pad.used-pio { stroke: var(--pio); }
+.pad.used-cpu { stroke: var(--cpu); }
+.pad.hi-pio { fill: var(--pio); }
+.pad.hi-cpu { fill: var(--cpu); }
+.pad.virtual { stroke-dasharray: 3 2; fill: #374151; }
+.pad.virtual.hi-cpu { fill: var(--cpu); }
+
+.lbl { font: 7px ui-monospace, monospace; fill: #94a3b8; pointer-events: none; }
+.lbl-used { font-weight: 700; fill: #e2e8f0; }
+.note { font: 8px ui-monospace, monospace; fill: var(--dim); }
+
+.btn { cursor: pointer; }
+/* Halo behind the GPIO24 button (a radial-gradient circle in the SVG — CSS
+   drop-shadow on SVG groups is clipped to the group's filter region), plus a
+   gentle scale pulse and an accent outline while the hint is active. */
+.btn-glow {
+  opacity: 0;
+  pointer-events: none;
+}
+@keyframes breathe-svg {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+.btn-glow.blink {
+  animation: breathe-svg 1.6s ease-in-out infinite;
+}
+@keyframes breathe-btn {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.07);
+  }
+}
+.btn.blink {
+  animation: breathe-btn 1.6s ease-in-out infinite;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+.btn.blink .btn-cap {
+  fill: var(--accent);
+}
+.btn.blink .btn-body {
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+.btn-body { fill: #cbd5e1; stroke: #64748b; }
+.btn-cap { fill: #ef4444; stroke: #7f1d1d; }
+.btn.pressed .btn-cap { fill: #fca5a5; }
+.btn.pressed .btn-body { stroke: #f59e0b; stroke-width: 2; }
+.btn-led { fill: #475569; }
+.btn-led.on { fill: #ef4444; }
+
+/* --- logic analyzer (left of it: the PCB) --- */
+.analyzer-wrap {
+  position: relative; /* anchors the sample popover */
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+}
+#analyzer-canvas-wrap { flex: 1 1 auto; min-height: 0; }
+.analyzer-canvas { width: 100%; height: 100%; display: block; border-radius: 4px; cursor: crosshair; }
+
+/* --- analyzer sample popover (click a lane) --- */
+#analyzer-popover {
+  position: absolute;
+  z-index: 5;
+  display: none;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100% - 16px);
+  padding: 5px 6px 5px 10px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font: 12px ui-monospace, monospace;
+  color: var(--text);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+#analyzer-popover.open { display: flex; }
+#analyzer-popover-copy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  background: #1e293b;
+  color: var(--text);
+  border: 1px solid #334155;
+  border-radius: 4px;
+  cursor: pointer;
+}
+#analyzer-popover-copy:hover { background: #334155; }
+#analyzer-popover-copy .icon-check,
+#analyzer-popover-copy.copied .icon-copy { display: none; }
+#analyzer-popover-copy.copied .icon-check { display: inline; color: var(--pio); }
+
+/* --- code windows --- */
+.windows-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+@media (max-width: 1250px) { .windows-row { grid-template-columns: 1fr; } }
+
+.window {
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+.window-title {
+  font: 11px ui-monospace, monospace;
+  color: var(--dim);
+  margin-bottom: 8px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.code-scroll {
+  position: relative;
+  height: 260px;
+  overflow: auto;
+  background: #0a0f1c;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 8px;
+  font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: pre;
+}
+.code-line { min-height: 1.45em; }
+.hl-core0 { background: var(--hl0); box-shadow: inset 2px 0 0 var(--pio); color: #e2e8f0; }
+.hl-core1 { background: var(--hl1); box-shadow: inset 2px 0 0 var(--cpu); color: #e2e8f0; }
+
+.serial { height: 180px; color: #a7f3d0; }
+
+/* --- transport buttons (header, top right) --- */
+#transport { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+
+#transport button {
+  background: #1e293b;
+  color: var(--text);
+  border: 1px solid #334155;
+  border-radius: 6px;
+  padding: 5px 10px;
+  font: 600 12px ui-sans-serif, system-ui, sans-serif;
+  cursor: pointer;
+}
+#transport button:hover:not(:disabled) { background: #334155; }
+#transport button:disabled { opacity: 0.35; cursor: not-allowed; }
+
+/* Breathing glow on the initial hints (help button; slider, then GPIO24 button) until used. */
+@keyframes breathe {
+  0%,
+  100% {
+    box-shadow: 0 0 3px 1px rgba(245, 158, 11, 0.35); /* never fully off */
+    background: #1e293b;
+  }
+  50% {
+    box-shadow: 0 0 18px 6px rgba(245, 158, 11, 0.85);
+    background: #3b3222;
+  }
+}
+#transport button.blink {
+  animation: breathe 1.6s ease-in-out infinite;
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* --- help popup --- */
+#transport button.help-btn { margin-right: 14px; }
+
+#help-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 20;
+}
+#help-overlay.open { display: flex; }
+
+#help-box {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  max-width: 680px;
+  width: min(680px, 92vw);
+  max-height: 82vh;
+  overflow: auto;
+  padding: 18px 24px 22px;
+  font-size: 13px;
+  line-height: 1.55;
+}
+#help-box h2 { font-size: 15px; margin: 14px 0 6px; color: var(--accent); }
+#help-box h2:first-child { margin-top: 0; }
+#help-box ul { margin: 6px 0; padding-left: 18px; }
+#help-box li { margin: 4px 0; }
+#help-box button {
+  background: #1e293b;
+  color: var(--text);
+  border: 1px solid #334155;
+  border-radius: 6px;
+  padding: 6px 14px;
+  cursor: pointer;
+  margin-top: 10px;
+}
+#help-box button:hover { background: #334155; }
+#help-box a {
+  color: var(--pio);
+  text-decoration: underline;
+  text-decoration-color: rgba(74, 222, 128, 0.35);
+  text-underline-offset: 2px;
+}
+#help-box a:hover { color: #86efac; text-decoration-color: currentColor; }
+
+/* --- narrow screens (phones): no PCB, the GPIO24 button moves next to the slider --- */
+@media (max-width: 700px) {
+  #pcb { display: none; }
+  #gpio24-compact { display: block; }
+  .board-analyzer-row { height: 240px; }
+}
