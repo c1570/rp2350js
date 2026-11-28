@@ -8,16 +8,11 @@
 // Mode:
 //   full  — every .ts file under src/, excluding *.spec.ts, *.d.ts, gdb/, mcp/, rp2-emu-cli/,
 //           emulator-controller.ts and pio-gpio-dump.ts (MCP/rp2_emu-CLI/GDB-monitor-only
-//           debug/string-formatting surface — not part of the emulator core), rp2040.ts
-//           itself (out of scope — this project targets an RP2350 C transpile only, and
-//           rp2040.ts pulls in a parallel set of RP2040-only peripherals/casts not worth
-//           chasing), simulator.ts (an RP2040-based demo/debug harness — unused anywhere in
-//           src/, out of scope like rp2040.ts), and ppb.ts/syscfg.ts (RP2040-only
-//           peripherals — RP2350 has its own ppb_rp2350.ts/syscfg_rp2350.ts. Both do
-//           `this.rpchip as unknown as RP2040` then index a field on the cast result; cts2c
-//           doesn't resolve field access through that cast pattern yet, degrading to
-//           int32_t. Not worth chasing until cts2c builds a real IRPChip vtable-value at
-//           cast sites)
+//           debug/string-formatting surface — not part of the emulator core) and
+//           simulator.ts (an RP2040-based demo/debug harness — unused anywhere in src/).
+//           Everything else — rp2040.ts and the RP2040-only peripherals included — is
+//           transpiled: both chips are in scope (see FULL_EXCLUDE below, and the cts2c
+//           README's Scope section).
 //
 // Output goes to build/transpile/full.{c,o,manifest.txt,gcc.log} so runs are reproducible
 // and diffable across commits.
