@@ -129,6 +129,34 @@ describe('RPClocks (RP2040)', () => {
     expect(rp2040.clkSys).toEqual(200 * MHz);
   });
 
+  it('should notify clock listeners when clk_sys changes', () => {
+    const rp2040 = new RP2040();
+    const calls: Array<[number, number]> = [];
+    rp2040.addClockListener({
+      onClockChange: (clkSys, oldClkSys) => calls.push([clkSys, oldClkSys]),
+    });
+    setSysClock(rp2040, RP2040_CLOCKS_BASE, RP2040_PLL_SYS_BASE, {
+      fbdiv: 100,
+      postdiv1: 6,
+      postdiv2: 1,
+    });
+    expect(calls.at(-1)).toEqual([200 * MHz, 12 * MHz]);
+  });
+
+  it('should not notify clock listeners when clk_sys is unchanged', () => {
+    const rp2040 = new RP2040();
+    setSysClock(rp2040, RP2040_CLOCKS_BASE, RP2040_PLL_SYS_BASE, {
+      fbdiv: 100,
+      postdiv1: 6,
+      postdiv2: 1,
+    });
+    let calls = 0;
+    rp2040.addClockListener({ onClockChange: () => calls++ });
+    // Re-selecting the same source leaves clk_sys at 200 MHz
+    rp2040.writeUint32(RP2040_CLOCKS_BASE + CLK_SYS_CTRL, CLK_SYS_SRC_AUX | CLK_SYS_AUXSRC_PLL_SYS);
+    expect(calls).toEqual(0);
+  });
+
   it('should retune systick and the PWM timers when clk_sys changes', () => {
     const rp2040 = new RP2040();
     setSysClock(rp2040, RP2040_CLOCKS_BASE, RP2040_PLL_SYS_BASE, {
@@ -206,5 +234,29 @@ describe('RPClocks (RP2350)', () => {
     expect(rp2350.ppb!.coreState[0].systickTimer.frequency).toEqual(200 * MHz);
     expect(rp2350.ppb!.coreState[1].systickTimer.frequency).toEqual(200 * MHz);
     expect(rp2350.pwm.channels[0].timer.frequency).toEqual(200 * MHz);
+  });
+
+  it('should notify clock listeners when clk_sys changes', () => {
+    const rp2350 = new RP2350();
+    const calls: Array<[number, number]> = [];
+    rp2350.addClockListener({
+      onClockChange: (clkSys, oldClkSys) => calls.push([clkSys, oldClkSys]),
+    });
+    initPll(rp2350, RP2350_PLL_SYS_BASE, { fbdiv: 125, postdiv1: 5, postdiv2: 2 });
+    rp2350.writeUint32(RP2350_CLOCKS_BASE + CLK_REF_CTRL, CLK_REF_SRC_XOSC);
+    rp2350.writeUint32(RP2350_CLOCKS_BASE + CLK_SYS_CTRL, CLK_SYS_SRC_AUX | CLK_SYS_AUXSRC_PLL_SYS);
+    expect(calls.at(-1)).toEqual([150 * MHz, 12 * MHz]);
+  });
+
+  it('should not notify clock listeners when clk_sys is unchanged', () => {
+    const rp2350 = new RP2350();
+    initPll(rp2350, RP2350_PLL_SYS_BASE, { fbdiv: 125, postdiv1: 5, postdiv2: 2 });
+    rp2350.writeUint32(RP2350_CLOCKS_BASE + CLK_REF_CTRL, CLK_REF_SRC_XOSC);
+    rp2350.writeUint32(RP2350_CLOCKS_BASE + CLK_SYS_CTRL, CLK_SYS_SRC_AUX | CLK_SYS_AUXSRC_PLL_SYS);
+    let calls = 0;
+    rp2350.addClockListener({ onClockChange: () => calls++ });
+    // Re-selecting the same source leaves clk_sys at 150 MHz
+    rp2350.writeUint32(RP2350_CLOCKS_BASE + CLK_SYS_CTRL, CLK_SYS_SRC_AUX | CLK_SYS_AUXSRC_PLL_SYS);
+    expect(calls).toEqual(0);
   });
 });

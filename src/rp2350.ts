@@ -1,4 +1,4 @@
-import { IRPChip } from './rpchip';
+import { ClockListener, IRPChip } from './rpchip';
 import { SimulationClock } from './clock/simulation-clock';
 import { ICpuCore } from './cpu-core';
 import { CPU } from './riscv/cpu';
@@ -294,6 +294,15 @@ export class RP2350 implements IRPChip {
 
   public logger: Logger = new ConsoleLogger(LogLevel.Debug, true);
 
+  // Host listeners notified when clk_sys changes. Push-only: like GPIOPin's listeners,
+  // there is no unsubscribe (the closure was untranslatable to C).
+  private readonly clockListeners: ClockListener[] = [];
+
+  /** Registers a listener to be notified whenever clk_sys changes. */
+  addClockListener(listener: ClockListener) {
+    this.clockListeners.push(listener);
+  }
+
   private readonly ioQspi = new RPIOQSPI(this, 'IO_QSPI_BASE');
   private readonly xipQmi = new RPXIPQMI(this, 'XIP_QMI_BASE');
   private readonly timer0 = new RPTimer(this, 'TIMER0_BASE', IRQ2350.TIMER0_IRQ_0);
@@ -554,21 +563,30 @@ export class RP2350 implements IRPChip {
   }
 
   /**
-   * Recomputes `clkSys` from the PLL and CLOCKS registers and retunes the timers that
-   * count clk_sys cycles. Until firmware configures the clock tree, `clkSys` keeps its
-   * default. Called by the PLL and CLOCKS peripherals when their registers change.
+   * Recomputes `clkSys` from the PLL and CLOCKS registers and updates the peripherals
+   * derived from it (see updateClkSys). Until firmware configures the clock tree,
+   * `clkSys` keeps its default. Called by the PLL and CLOCKS peripherals when their
+   * registers change.
    */
   updateClocks() {
+    this.updateClkSys();
+  }
+
+  private updateClkSys() {
     const clkSys = this.clocks.sysFreq;
     // 0 means clk_sys is fed from an unmodelled or unconfigured source: keep the last value
     if (!clkSys || clkSys === this.clkSys) {
       return;
     }
+    const oldClkSys = this.clkSys;
     this.clkSys = clkSys;
     if (this.ppb) {
       this.ppb.setSystickFrequency(clkSys);
     }
     this.pwm.clkSysChanged();
+    for (const listener of this.clockListeners) {
+      listener.onClockChange(clkSys, oldClkSys);
+    }
   }
 
   findPeripheral(address: Uint32): Peripheral {

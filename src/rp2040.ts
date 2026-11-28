@@ -29,6 +29,7 @@ import { RP2040VregAndChipReset } from './peripherals/vreg_rp2040';
 import { RPUSBController } from './peripherals/usb';
 import { RPSIO } from './sio';
 import { RPWatchdog } from './peripherals/watchdog';
+import { ClockListener } from './rpchip';
 import { ConsoleLogger, Logger, LogLevel } from './utils/logging';
 import { bootromB1 } from './bootroms';
 import { loadFirmware, LoadFirmwareOptions, LoadFirmwareResult } from './utils/load-firmware';
@@ -182,6 +183,15 @@ export class RP2040 implements IRPChip {
 
   public logger: Logger = new ConsoleLogger(LogLevel.Debug, true);
 
+  // Host listeners notified when clk_sys changes. Push-only: like GPIOPin's listeners,
+  // there is no unsubscribe (the closure was untranslatable to C).
+  private readonly clockListeners: ClockListener[] = [];
+
+  /** Registers a listener to be notified whenever clk_sys changes. */
+  addClockListener(listener: ClockListener) {
+    this.clockListeners.push(listener);
+  }
+
   readonly peripherals: { [index: number]: Peripheral } = {
     0x18000: this.ssi,
     0x40000: new RP2040SysInfo(this, 'SYSINFO_BASE'),
@@ -325,19 +335,28 @@ export class RP2040 implements IRPChip {
   }
 
   /**
-   * Recomputes `clkSys` from the PLL and CLOCKS registers and retunes the timers that
-   * count clk_sys cycles. Until firmware configures the clock tree, `clkSys` keeps its
-   * default. Called by the PLL and CLOCKS peripherals when their registers change.
+   * Recomputes `clkSys` from the PLL and CLOCKS registers and updates the peripherals
+   * derived from it (see updateClkSys). Until firmware configures the clock tree,
+   * `clkSys` keeps its default. Called by the PLL and CLOCKS peripherals when their
+   * registers change.
    */
   updateClocks() {
+    this.updateClkSys();
+  }
+
+  private updateClkSys() {
     const clkSys = this.clocks.sysFreq;
     // 0 means clk_sys is fed from an unmodelled or unconfigured source: keep the last value
     if (!clkSys || clkSys === this.clkSys) {
       return;
     }
+    const oldClkSys = this.clkSys;
     this.clkSys = clkSys;
     this.ppb.systickTimer.frequency = clkSys;
     this.pwm.clkSysChanged();
+    for (const listener of this.clockListeners) {
+      listener.onClockChange(clkSys, oldClkSys);
+    }
   }
 
   findPeripheral(address: Uint32): Peripheral {

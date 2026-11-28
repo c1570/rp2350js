@@ -5,6 +5,18 @@ import { Float64 } from './utils/types';
 import { Logger } from './utils/logging';
 import { RPPIO } from './peripherals/pio';
 
+/**
+ * Notified after clk_sys changes. Listeners that cache a frequency derived from
+ * clk_sys (PIO clock dividers, for instance) use this to re-derive it.
+ *
+ * An interface (not `() => void`) because cts2c targets C: like AlarmCallback, it
+ * transpiles to vtable dispatch, where a bare function type would degrade to void*.
+ * There is no unsubscribe — see `addClockListener` on the chip classes.
+ */
+export interface ClockListener {
+  onClockChange(clkSys: number, oldClkSys: number): void;
+}
+
 export interface IRPChip {
   readonly identifier: string; // "rp2040" or "rp2350"
 
