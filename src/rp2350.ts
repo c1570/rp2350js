@@ -563,13 +563,13 @@ export class RP2350 implements IRPChip {
   }
 
   /**
-   * Recomputes `clkSys` from the PLL and CLOCKS registers and updates the peripherals
-   * derived from it (see updateClkSys). Until firmware configures the clock tree,
-   * `clkSys` keeps its default. Called by the PLL and CLOCKS peripherals when their
-   * registers change.
+   * Recomputes `clkSys` and `clkPeri` from the PLL and CLOCKS registers and updates the
+   * peripherals derived from them. Until firmware configures the clock tree, each keeps
+   * its default. Called by the PLL and CLOCKS peripherals when their registers change.
    */
   updateClocks() {
     this.updateClkSys();
+    this.updateClkPeri();
   }
 
   private updateClkSys() {
@@ -587,6 +587,18 @@ export class RP2350 implements IRPChip {
     for (const listener of this.clockListeners) {
       listener.onClockChange(clkSys, oldClkSys);
     }
+  }
+
+  private updateClkPeri() {
+    const clkPeri = this.clocks.periFreq;
+    // 0 means the clock generator is stopped, or the source is one we do not model
+    if (!clkPeri || clkPeri === this.clkPeri) {
+      return;
+    }
+    this.clkPeri = clkPeri;
+    // Indexed access, not for-of: cts2c's inference does not see through this.uart.
+    this.uart[0].clkPeriChanged();
+    this.uart[1].clkPeriChanged();
   }
 
   findPeripheral(address: Uint32): Peripheral {

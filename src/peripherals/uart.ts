@@ -108,6 +108,13 @@ export class RPUART<ChipType extends IRPChip = IRPChip>
     return Math.round(this.rpchip.clkPeri / (this.baudDivider * 16));
   }
 
+  /** Re-reports the baud rate, unless the firmware has not set the divider yet. */
+  clkPeriChanged() {
+    if (this.baudDivider) {
+      this.onBaudRateChange?.(this.baudRate);
+    }
+  }
+
   get flags() {
     return (this.rxFIFO.full ? RXFF : 0) | (this.rxFIFO.empty ? RXFE : 0) | TXFE;
   }

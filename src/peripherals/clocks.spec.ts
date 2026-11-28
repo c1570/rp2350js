@@ -23,6 +23,7 @@ const CLK_REF_DIV = 0x34;
 const CLK_SYS_CTRL = 0x3c;
 const CLK_SYS_DIV = 0x40;
 const CLK_PERI_CTRL = 0x48;
+const CLK_PERI_DIV = 0x4c;
 
 // PLL register offsets
 const PLL_CS = 0x00;
@@ -42,6 +43,14 @@ const CLK_SYS_AUXSRC_PLL_SYS = 0x0 << 5;
 const CLK_SYS_AUXSRC_XOSC = 0x3 << 5;
 /** CLK_SYS_CTRL.AUXSRC = clksrc_gpin0 */
 const CLK_SYS_AUXSRC_GPIN0 = 0x4 << 5;
+/** CLK_PERI_CTRL.ENABLE */
+const CLK_PERI_ENABLE = 1 << 11;
+/** CLK_PERI_CTRL.AUXSRC = clk_sys */
+const CLK_PERI_AUXSRC_CLK_SYS = 0x0 << 5;
+/** CLK_PERI_CTRL.AUXSRC = clksrc_pll_usb */
+const CLK_PERI_AUXSRC_PLL_USB = 0x2 << 5;
+/** RP2350 CLK_PERI_DIV.INT = 2 (bits 17:16; the RP2040 has no clk_peri divider) */
+const RP2350_CLK_PERI_DIV_2 = 2 << 16;
 
 interface PLLConfig {
   refdiv?: number;
@@ -157,6 +166,13 @@ describe('RPClocks (RP2040)', () => {
     expect(calls).toEqual(0);
   });
 
+  it('should keep the last known good frequency while the clk_peri generator is stopped', () => {
+    const rp2040 = new RP2040();
+    initPll(rp2040, RP2040_PLL_USB_BASE, { fbdiv: 40, postdiv1: 5, postdiv2: 2 });
+    rp2040.writeUint32(RP2040_CLOCKS_BASE + CLK_PERI_CTRL, CLK_PERI_AUXSRC_PLL_USB); // ENABLE clear
+    expect(rp2040.clkPeri).toEqual(125 * MHz);
+  });
+
   it('should retune systick and the PWM timers when clk_sys changes', () => {
     const rp2040 = new RP2040();
     setSysClock(rp2040, RP2040_CLOCKS_BASE, RP2040_PLL_SYS_BASE, {
@@ -257,6 +273,156 @@ describe('RPClocks (RP2350)', () => {
     rp2350.addClockListener({ onClockChange: () => calls++ });
     // Re-selecting the same source leaves clk_sys at 150 MHz
     rp2350.writeUint32(RP2350_CLOCKS_BASE + CLK_SYS_CTRL, CLK_SYS_SRC_AUX | CLK_SYS_AUXSRC_PLL_SYS);
+    expect(calls).toEqual(0);
+  });
+});
+
+describe('RPClocks: clk_peri (RP2040)', () => {
+  /** Configures PLL_USB the way pico-sdk's `clocks_init()` does: 12 / 1 * 40 / (5 * 2) = 48 MHz */
+  function initPllUsb(rp2040: RP2040) {
+    initPll(rp2040, RP2040_PLL_USB_BASE, { fbdiv: 40, postdiv1: 5, postdiv2: 2 });
+  }
+
+  it('should follow clk_sys when AUXSRC selects it', () => {
+    const rp2040 = new RP2040();
+    setSysClock(rp2040, RP2040_CLOCKS_BASE, RP2040_PLL_SYS_BASE, {
+      fbdiv: 100,
+      postdiv1: 6,
+      postdiv2: 1,
+    });
+    rp2040.writeUint32(
+      RP2040_CLOCKS_BASE + CLK_PERI_CTRL,
+      CLK_PERI_ENABLE | CLK_PERI_AUXSRC_CLK_SYS
+    );
+    expect(rp2040.clkPeri).toEqual(200 * MHz);
+  });
+
+  it('should run at 48 MHz off the USB PLL, as arduino-pico does above 125 MHz', () => {
+    const rp2040 = new RP2040();
+    initPllUsb(rp2040);
+    setSysClock(rp2040, RP2040_CLOCKS_BASE, RP2040_PLL_SYS_BASE, {
+      fbdiv: 100,
+      postdiv1: 6,
+      postdiv2: 1,
+    });
+    rp2040.writeUint32(
+      RP2040_CLOCKS_BASE + CLK_PERI_CTRL,
+      CLK_PERI_ENABLE | CLK_PERI_AUXSRC_PLL_USB
+    );
+    expect(rp2040.clkPeri).toEqual(48 * MHz);
+  });
+
+  it('should keep the last known good frequency while the clock generator is stopped', () => {
+    const rp2040 = new RP2040();
+    initPllUsb(rp2040);
+    rp2040.writeUint32(RP2040_CLOCKS_BASE + CLK_PERI_CTRL, CLK_PERI_AUXSRC_PLL_USB); // ENABLE clear
+    expect(rp2040.clkPeri).toEqual(125 * MHz);
+  });
+
+  it('should re-notify the UART when clk_peri changes after the divider is set', () => {
+    const rp2040 = new RP2040();
+    initPllUsb(rp2040);
+    // uart_init(uart0, 115200) against a 48 MHz clk_peri: 48e6 / (16 * 115200) = 26.0417
+    rp2040.writeUint32(RP2040_UART0_BASE + UARTIBRD, 26);
+    rp2040.writeUint32(RP2040_UART0_BASE + UARTFBRD, 3);
+    const seen: number[] = [];
+    rp2040.uart[0].onBaudRateChange = (baudRate) => seen.push(baudRate);
+    rp2040.writeUint32(
+      RP2040_CLOCKS_BASE + CLK_PERI_CTRL,
+      CLK_PERI_ENABLE | CLK_PERI_AUXSRC_PLL_USB
+    );
+    expect(seen).toEqual([115177]); // 48e6 / (26.046875 * 16), rounded
+  });
+
+  it('should not notify a UART whose divider the firmware has not set yet', () => {
+    const rp2040 = new RP2040();
+    initPllUsb(rp2040);
+    let calls = 0;
+    rp2040.uart[0].onBaudRateChange = () => calls++;
+    rp2040.writeUint32(
+      RP2040_CLOCKS_BASE + CLK_PERI_CTRL,
+      CLK_PERI_ENABLE | CLK_PERI_AUXSRC_PLL_USB
+    );
+    expect(calls).toEqual(0);
+  });
+});
+
+describe('RPClocks: clk_peri (RP2350)', () => {
+  /** Configures PLL_USB the way pico-sdk's `clocks_init()` does: 12 / 1 * 40 / (5 * 2) = 48 MHz */
+  function initPllUsb(rp2350: RP2350) {
+    initPll(rp2350, RP2350_PLL_USB_BASE, { fbdiv: 40, postdiv1: 5, postdiv2: 2 });
+  }
+
+  /** Configures PLL_SYS to the 150 MHz RP2350 boot default, as `clocks_init()` does. */
+  function setSysClock150(rp2350: RP2350) {
+    initPll(rp2350, RP2350_PLL_SYS_BASE, { fbdiv: 125, postdiv1: 5, postdiv2: 2 });
+    rp2350.writeUint32(RP2350_CLOCKS_BASE + CLK_REF_CTRL, CLK_REF_SRC_XOSC);
+    rp2350.writeUint32(RP2350_CLOCKS_BASE + CLK_SYS_CTRL, CLK_SYS_SRC_AUX | CLK_SYS_AUXSRC_PLL_SYS);
+  }
+
+  it('should follow clk_sys when AUXSRC selects it', () => {
+    const rp2350 = new RP2350();
+    setSysClock150(rp2350);
+    rp2350.writeUint32(
+      RP2350_CLOCKS_BASE + CLK_PERI_CTRL,
+      CLK_PERI_ENABLE | CLK_PERI_AUXSRC_CLK_SYS
+    );
+    expect(rp2350.clkPeri).toEqual(150 * MHz);
+  });
+
+  it('should run at 48 MHz off the USB PLL', () => {
+    const rp2350 = new RP2350();
+    initPllUsb(rp2350);
+    setSysClock150(rp2350);
+    rp2350.writeUint32(
+      RP2350_CLOCKS_BASE + CLK_PERI_CTRL,
+      CLK_PERI_ENABLE | CLK_PERI_AUXSRC_PLL_USB
+    );
+    expect(rp2350.clkPeri).toEqual(48 * MHz);
+  });
+
+  it('should apply the RP2350 CLK_PERI_DIV integer divisor, which the RP2040 lacks', () => {
+    const rp2350 = new RP2350();
+    initPllUsb(rp2350);
+    setSysClock150(rp2350);
+    rp2350.writeUint32(
+      RP2350_CLOCKS_BASE + CLK_PERI_CTRL,
+      CLK_PERI_ENABLE | CLK_PERI_AUXSRC_PLL_USB
+    );
+    rp2350.writeUint32(RP2350_CLOCKS_BASE + CLK_PERI_DIV, RP2350_CLK_PERI_DIV_2); // divide by 2
+    expect(rp2350.clkPeri).toEqual(24 * MHz);
+  });
+
+  it('should keep the last known good frequency while the clock generator is stopped', () => {
+    const rp2350 = new RP2350();
+    initPllUsb(rp2350);
+    rp2350.writeUint32(RP2350_CLOCKS_BASE + CLK_PERI_CTRL, CLK_PERI_AUXSRC_PLL_USB); // ENABLE clear
+    expect(rp2350.clkPeri).toEqual(150 * MHz);
+  });
+
+  it('should re-notify the UART when clk_peri changes after the divider is set', () => {
+    const rp2350 = new RP2350();
+    initPllUsb(rp2350);
+    rp2350.writeUint32(RP2350_UART0_BASE + UARTIBRD, 26);
+    rp2350.writeUint32(RP2350_UART0_BASE + UARTFBRD, 3);
+    const seen: number[] = [];
+    rp2350.uart[0].onBaudRateChange = (baudRate) => seen.push(baudRate);
+    rp2350.writeUint32(
+      RP2350_CLOCKS_BASE + CLK_PERI_CTRL,
+      CLK_PERI_ENABLE | CLK_PERI_AUXSRC_PLL_USB
+    );
+    expect(seen).toEqual([115177]);
+  });
+
+  it('should not notify a UART whose divider the firmware has not set yet', () => {
+    const rp2350 = new RP2350();
+    initPllUsb(rp2350);
+    let calls = 0;
+    rp2350.uart[0].onBaudRateChange = () => calls++;
+    rp2350.writeUint32(
+      RP2350_CLOCKS_BASE + CLK_PERI_CTRL,
+      CLK_PERI_ENABLE | CLK_PERI_AUXSRC_PLL_USB
+    );
     expect(calls).toEqual(0);
   });
 });

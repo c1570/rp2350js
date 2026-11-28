@@ -335,13 +335,13 @@ export class RP2040 implements IRPChip {
   }
 
   /**
-   * Recomputes `clkSys` from the PLL and CLOCKS registers and updates the peripherals
-   * derived from it (see updateClkSys). Until firmware configures the clock tree,
-   * `clkSys` keeps its default. Called by the PLL and CLOCKS peripherals when their
-   * registers change.
+   * Recomputes `clkSys` and `clkPeri` from the PLL and CLOCKS registers and updates the
+   * peripherals derived from them. Until firmware configures the clock tree, each keeps
+   * its default. Called by the PLL and CLOCKS peripherals when their registers change.
    */
   updateClocks() {
     this.updateClkSys();
+    this.updateClkPeri();
   }
 
   private updateClkSys() {
@@ -356,6 +356,18 @@ export class RP2040 implements IRPChip {
     this.pwm.clkSysChanged();
     for (const listener of this.clockListeners) {
       listener.onClockChange(clkSys, oldClkSys);
+    }
+  }
+
+  private updateClkPeri() {
+    const clkPeri = this.clocks.periFreq;
+    // 0 means the clock generator is stopped, or the source is one we do not model
+    if (!clkPeri || clkPeri === this.clkPeri) {
+      return;
+    }
+    this.clkPeri = clkPeri;
+    for (const uart of this.uart) {
+      uart.clkPeriChanged();
     }
   }
 

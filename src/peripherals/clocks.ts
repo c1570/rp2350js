@@ -49,6 +49,19 @@ const CLK_SYS_CTRL_AUXSRC_PLL_USB = 0x1;
 const CLK_SYS_CTRL_AUXSRC_ROSC = 0x2;
 const CLK_SYS_CTRL_AUXSRC_XOSC = 0x3;
 
+// CLK_PERI_CTRL. clk_peri has no SRC mux: it is driven straight from AUXSRC, which uses
+// its own encoding (not the CLK_SYS one). Same bits on both chips; the RP2350 also has
+// a CLK_PERI_DIV integer divider (see clkPeriHasDiv).
+const CLK_PERI_CTRL_ENABLE = 1 << 11;
+const CLK_PERI_CTRL_KILL = 1 << 10;
+const CLK_PERI_CTRL_AUXSRC_SHIFT = 5;
+const CLK_PERI_CTRL_AUXSRC_MASK = 0x7;
+const CLK_PERI_CTRL_AUXSRC_CLK_SYS = 0x0;
+const CLK_PERI_CTRL_AUXSRC_PLL_SYS = 0x1;
+const CLK_PERI_CTRL_AUXSRC_PLL_USB = 0x2;
+const CLK_PERI_CTRL_AUXSRC_ROSC = 0x3;
+const CLK_PERI_CTRL_AUXSRC_XOSC = 0x4;
+
 /**
  * RP2040/RP2350 CLOCKS peripheral.
  *
@@ -157,6 +170,48 @@ export class RPClocks<ChipType extends IRPChip = IRPChip>
   /** clk_sys frequency, in Hz. GPIN0/GPIN1 are not modelled and yield 0. */
   get sysFreq(): Float64 {
     return this.sysSourceFreq / this.clockDivisor(this.sysDiv);
+  }
+
+  /**
+   * clk_peri frequency, in Hz. Feeds the UART and SPI baud rate generators. Returns 0
+   * while the clock generator is stopped, and for the GPIN0/GPIN1 sources we do not
+   * model. The RP2350's CLK_PERI_DIV applies on top of the source; the RP2040 has no
+   * clk_peri divider.
+   */
+  get periFreq(): Float64 {
+    if (!(this.periCtrl & CLK_PERI_CTRL_ENABLE) || this.periCtrl & CLK_PERI_CTRL_KILL) {
+      return 0;
+    }
+    let freq: Float64;
+    switch ((this.periCtrl >>> CLK_PERI_CTRL_AUXSRC_SHIFT) & CLK_PERI_CTRL_AUXSRC_MASK) {
+      case CLK_PERI_CTRL_AUXSRC_CLK_SYS:
+        freq = this.sysFreq;
+        break;
+      case CLK_PERI_CTRL_AUXSRC_PLL_SYS:
+        freq = this.rpchip.getPllSysFrequency();
+        break;
+      case CLK_PERI_CTRL_AUXSRC_PLL_USB:
+        freq = this.rpchip.getPllUsbFrequency();
+        break;
+      case CLK_PERI_CTRL_AUXSRC_ROSC:
+        freq = this.rpchip.roscFreq;
+        break;
+      case CLK_PERI_CTRL_AUXSRC_XOSC:
+        freq = this.rpchip.xoscFreq;
+        break;
+      default:
+        return 0;
+    }
+    return freq / this.periDivisor();
+  }
+
+  /** Decodes CLK_PERI_DIV: a no-op on the RP2040, an INT divisor on the RP2350. */
+  private periDivisor(): Float64 {
+    if (!this.clkPeriHasDiv) {
+      return 1;
+    }
+    const int = (this.periDiv >>> 16) & 0x3;
+    return int ? int : 0x10000;
   }
 
   private get refSourceFreq(): Float64 {
@@ -365,9 +420,13 @@ export class RPClocks<ChipType extends IRPChip = IRPChip>
         break;
       case CLK_PERI_CTRL:
         this.periCtrl = value;
+        this.rpchip.updateClocks();
         break;
       case CLK_PERI_DIV:
         this.periDiv = value;
+        if (this.clkPeriHasDiv) {
+          this.rpchip.updateClocks();
+        }
         break;
       case CLK_REF_SELECTED:
       case CLK_SYS_SELECTED:
