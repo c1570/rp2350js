@@ -2,7 +2,7 @@ import { ICpuCore } from '../cpu-core';
 import type { RP2350 } from '../rp2350';
 import { decodeWord } from './decode';
 import { getDecodeEntry } from './decode-cache';
-import { Uint32, Int53 } from '../utils/types';
+import { Uint32, Int53, int53Pack } from '../utils/types';
 import { SaveStateStream } from '../utils/save-state';
 
 // ─── Deliberately local, do not import these ───────────────────────
@@ -176,6 +176,12 @@ export class CPU implements ICpuCore {
   pc = 0;
   next_pc = 0;
   cycles: Int53 = 0; // avoids int32_t overflow past ~2.15B cycles
+  // Performance counters, backed by their own Int53 counters (exact to 2^53, like
+  // `cycles`) split into low/high halves at the CSR boundary. MCOUNTINHIBIT gates
+  // them, and resets with both inhibit bits set so they hold at 0 until firmware
+  // clears CY (mcycle) / IR (minstret).
+  mcycle: Int53 = 0;
+  minstret: Int53 = 0;
   currentMode: ExecutionModeRiscv = ExecutionModeRiscv.Mode_Machine;
 
   getRegister(index: number): number {
@@ -202,6 +208,7 @@ export class CPU implements ICpuCore {
 
   addCycles(delta: number) {
     this.cycles += delta;
+    if (!(this.csrs[0x320] & 1)) this.mcycle += delta; // MCOUNTINHIBIT.CY
   }
 
   interruptsUpdated = false;
@@ -298,7 +305,7 @@ export class CPU implements ICpuCore {
     this.privilege = 3;
     this.csrs[0x301] = 0b01000000100100000001000100000101;
     this.csrs[0x305] = 0x00001fff00;
-    this.csrs[0x320] = 0x101;
+    this.csrs[0x320] = 0x5; // MCOUNTINHIBIT: CY and IR set by default to save power
     //TODO 0x3a1 - 0x7b0
     this.csrs[0xbe4] = (1 << 31) >>> 0; // meinext: noirq
     this.csrs[0xbe5] = 1 << 15; // meicontext: noirq=1
@@ -316,6 +323,8 @@ export class CPU implements ICpuCore {
     this.pc = s.i32(this.pc);
     this.next_pc = s.i32(this.next_pc);
     this.cycles = s.i53(this.cycles);
+    this.mcycle = s.i53(this.mcycle);
+    this.minstret = s.i53(this.minstret);
     this.currentMode = s.i32(this.currentMode) as ExecutionModeRiscv;
     this.interruptsUpdated = s.bool(this.interruptsUpdated);
     s.i32array(this.meiea, 512);
@@ -356,6 +365,7 @@ export class CPU implements ICpuCore {
     this.checkForInterrupts();
     if (this.waiting) {
       this.cycles++;
+      if (!(this.csrs[0x320] & 1)) this.mcycle++; // MCOUNTINHIBIT.CY
       return this.cycles - before;
     }
     this.curPacked = getDecodeEntry(this.chip, this.pc);
@@ -366,7 +376,15 @@ export class CPU implements ICpuCore {
       throw e;
     }
     this.cycles++;
+    this.countPerformance();
     return this.cycles - before;
+  }
+
+  /** Advances mcycle/minstret per MCOUNTINHIBIT after a retired instruction. */
+  private countPerformance() {
+    const mcountinhibit = this.csrs[0x320];
+    if (!(mcountinhibit & 1)) this.mcycle++; // CY
+    if (!(mcountinhibit & 4)) this.minstret++; // IR
   }
 
   executeInstructionsUpTo(cycle: Int53) {
@@ -380,6 +398,7 @@ export class CPU implements ICpuCore {
     this.checkForInterrupts();
     if (this.waiting) {
       if (this.cycles < cycle) {
+        if (!(this.csrs[0x320] & 1)) this.mcycle += cycle - this.cycles; // MCOUNTINHIBIT.CY
         this.cycles = cycle;
       }
       return;
@@ -1320,6 +1339,21 @@ export class CPU implements ICpuCore {
       case 0x305: // MTVEC
         this.csrs[csr] = value;
         return;
+      case 0x320: // MCOUNTINHIBIT: only CY (bit 0) and IR (bit 2) are RW; rest reserved
+        this.csrs[csr] = value & 0x5;
+        return;
+      case 0xb00: // MCYCLE: write the low word, keep the high word
+        this.mcycle = int53Pack(value, int53High(this.mcycle));
+        return;
+      case 0xb80: // MCYCLEH
+        this.mcycle = int53Pack(this.mcycle >>> 0, value);
+        return;
+      case 0xb02: // MINSTRET
+        this.minstret = int53Pack(value, int53High(this.minstret));
+        return;
+      case 0xb82: // MINSTRETH
+        this.minstret = int53Pack(this.minstret >>> 0, value);
+        return;
       case 0x304: // MIE
         if (value & ~this.csrs[csr]) this.interruptsUpdated = true; // any bit in MIE has been set
         this.csrs[csr] = value;
@@ -1475,6 +1509,7 @@ export class CPU implements ICpuCore {
       case 0x303:
       case 0x304: // MIE
       case 0x305: // MTVEC
+      case 0x320: // MCOUNTINHIBIT
       case 0x340: // MSCRATCH
       case 0x341:
       case 0x342:
@@ -1482,6 +1517,14 @@ export class CPU implements ICpuCore {
       case 0x344:
       case 0xbf0:
         return this.csrs[csr];
+      case 0xb00: // MCYCLE
+        return this.mcycle >>> 0;
+      case 0xb80: // MCYCLEH
+        return int53High(this.mcycle);
+      case 0xb02: // MINSTRET
+        return this.minstret >>> 0;
+      case 0xb82: // MINSTRETH
+        return int53High(this.minstret);
       case 0xbe0:
         return (this.packReverse(this.meiea, (raw_write & 0b11111) * 16, 16, 1) << 16) >>> 0;
       case 0xbe1:
