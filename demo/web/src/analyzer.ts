@@ -80,6 +80,11 @@ export class Analyzer {
     this.data[cycle % RING_SIZE] = this.mask;
   }
 
+  /** Whether samples exist for every cycle in [from, to]. */
+  covers(from: number, to: number): boolean {
+    return this.firstCycle >= 0 && this.windowStart() <= from && this.lastCycle >= to;
+  }
+
   /** Sample for an absolute cycle, or undefined if not retained. */
   sampleAt(cycle: number): number | undefined {
     if (this.firstCycle < 0 || cycle < this.windowStart() || cycle > this.lastCycle) {

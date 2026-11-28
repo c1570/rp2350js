@@ -25,7 +25,7 @@ import { Runner } from './runner';
 export const PREPARE_ESTIMATE = 20_000_000;
 
 /** While dragging, the chip catches up at most this often (the view follows instantly). */
-const SCRUB_SEEK_MS = 500;
+const SCRUB_SEEK_MS = 150;
 /** Narrow-screen layout (phones): no PCB, the compact GPIO24 button next to the slider. */
 const NARROW_QUERY = '(max-width: 700px)'; // keep in sync with style.css
 

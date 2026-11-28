@@ -87,7 +87,12 @@ branch's root.
 - **Seek(T)**: unserialize the nearest snapshot at/before T, truncate the serial
   log to its recorded length, then replay forward — the final CPU instruction is
   split so the **PIO stops at exactly cycle T** (leftover ticks are kept as
-  `residual` and consumed first on the next step; snapshots store it).
+  `residual` and consumed first on the next step; snapshots store it). Rewinds
+  always work this way; forward jumps do too when they exceed one snapshot
+  interval and the initial run left a snapshot beyond the current position
+  (the whole timeline was recorded), so even a jump from the start to 18M cycles
+  is a ~100k-cycle replay rather than seconds of emulation. Short forward hops
+  just run the chip.
 - **Snapshots**: full chip serialize (~870 KB, flash/PSRAM omitted — never
   written by the RAM-resident firmware), one every 100k cycles during the
   initial run (~200 for the full run) plus one per seek target (a new snapshot

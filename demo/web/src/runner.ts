@@ -11,8 +11,9 @@
  *
  * Time axis: 0 .. the cycle when the firmware's serial output finishes (END
  * sentinel fully shifted out of UART0). Once the timeline is prepared, the chip
- * only ever moves through seek() — forward targets run it deterministically,
- * backward targets restore a snapshot and replay.
+ * only ever moves through seek(): rewinds and long forward jumps restore the
+ * nearest recorded snapshot and replay the remaining cycles; short forward hops
+ * run the chip directly (it is deterministic either way).
  *
  * Snapshot cadence: every SNAPSHOT_EVERY_CYCLES cycles (~870 KB each, ~200 for
  * the full run). Snapshots are only garbage collected when the GPIO24 button
@@ -77,7 +78,7 @@ export class Runner {
     this.snapshots.add({
       cycle: this.cycle,
       residual: this.residual,
-      serialLen: this.serialText.length,
+      serialText: this.serialText,
       data,
     });
   }
@@ -91,7 +92,7 @@ export class Runner {
     this.applyButton();
     this.cycle = snap.cycle;
     this.residual = snap.residual;
-    this.serialText = this.serialText.slice(0, snap.serialLen);
+    this.serialText = snap.serialText; // whole prefix: valid in both time directions
     this.nextSnapshotCycle = nextBoundary(this.cycle);
   }
 
@@ -154,8 +155,10 @@ export class Runner {
   }
 
   /**
-   * Seek to an exact PIO cycle. Forward targets run the chip; backward targets
-   * restore the nearest snapshot at/before the target and replay from there.
+   * Seek to an exact PIO cycle. Rewinds need a snapshot; long forward jumps use
+   * one too when the initial run recorded a snapshot beyond the current
+   * position — replaying ≤ one snapshot interval from it beats running the
+   * chip for the whole distance (seconds from the anchor to the far end).
    * A finish discovered speculatively is kept even after a rewind: it is a
    * deterministic property of the timeline (invalidateFuture() drops it).
    */
@@ -163,27 +166,34 @@ export class Runner {
     if (!Number.isFinite(target)) return;
     target = Math.max(0, target);
     if (target === this.cycle) return;
-    if (target < this.cycle) this.rewindTo(target);
+    const snap = this.snapshots.findBefore(target);
+    if (
+      target < this.cycle ||
+      (snap !== null && snap.cycle > this.cycle && target - this.cycle > SNAPSHOT_EVERY_CYCLES)
+    ) {
+      this.restoreForReplay(target);
+    }
     this.stepCycles(target - this.cycle);
     this.takeSnapshot();
     this.ensureFutureCoverage();
   }
 
   /**
-   * Rewind: pick a snapshot to replay from, restore it and reset the analyzer
-   * recording if needed.
+   * Pick a snapshot to replay to `target` from, restore it, and reset the
+   * analyzer recording if needed.
    *
    * The view needs VIEW_MARGIN cycles of history left of the target. A near
-   * rewind gets them from the retained ring — history and the recorded future
-   * stay untouched, and the replay overwrites the re-recorded cycles in place.
-   * A far rewind (neighborhood aged out of the ring) restarts the recording at
-   * the snapshot; if that snapshot is too close to the target to rebuild the
-   * margin, the replay starts from the previous snapshot instead.
+   * target (view fully in the retained ring) keeps the recording — history and
+   * the recorded future stay untouched, and the replay overwrites the
+   * re-recorded cycles in place. A far target (the ring lies ahead of it after
+   * a deep rewind, or behind it after a long forward jump) restarts the
+   * recording at the snapshot; if that snapshot is too close to the target to
+   * rebuild the margin, the replay starts from the previous snapshot instead.
    */
-  private rewindTo(target: number): void {
+  private restoreForReplay(target: number): void {
     const snap = this.snapshots.findBefore(target);
     if (!snap) throw new Error(`no snapshot at or before cycle ${target}`);
-    const far = this.analyzer.firstCycle < 0 || this.analyzer.windowStart() > target - VIEW_MARGIN;
+    const far = !this.analyzer.covers(target - VIEW_MARGIN, target + VIEW_WINDOW / 2);
     const base =
       far && snap.cycle > target - VIEW_MARGIN
         ? this.snapshots.findBefore(snap.cycle - 1) ?? snap
@@ -252,6 +262,7 @@ export class Runner {
       this.chip.stepThings(1);
       this.analyzer.record(this.cycle);
       this.cycle++;
+      this.residual = c - i - 1; // owed by the interrupted instruction: boundary snapshots must carry it
       this.maybeSnapshotCycle();
       if (this.finished && this.cycle >= this.finishedCycle!) {
         n = i + 1; // the finish cycle is a hard stop, even mid-instruction

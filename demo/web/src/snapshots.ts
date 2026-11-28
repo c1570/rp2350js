@@ -16,8 +16,8 @@ export interface Snapshot {
   cycle: number;
   /** PIO cycles still owed by the CPU instruction that was interrupted for the seek. */
   residual: number;
-  /** serialText.length at snapshot time; rewind truncates to this. */
-  serialLen: number;
+  /** Serial output up to this point (a sliced string — shares storage with the full log). */
+  serialText: string;
   data: Uint8Array;
 }
 

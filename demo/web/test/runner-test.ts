@@ -89,6 +89,20 @@ function serializeChip(chip: RP2350): Uint8Array {
   );
   check(runner.serialText.endsWith('### END OF OUTPUT ###\r\n'), 'serial log ends with sentinel');
   check(!runner.serialText.includes('button=PRESSED'), 'unpressed run has no PRESSED status line');
+  // A boundary snapshot may be taken mid-instruction (multi-cycle instruction
+  // straddling a 100k boundary): it must then carry the PIO ticks still owed,
+  // or a restore loses them and the timeline diverges from the direct run.
+  const stateAtFinish0 = serializeChip(chip); // the loop below restores every snapshot into the chip
+  let inconsistent = 0;
+  for (const s of runner.snapshots.list) {
+    chip.unserialize(s.data, s.data.length);
+    if (chip.core[0].cycles !== s.cycle + s.residual) inconsistent++;
+  }
+  check(
+    inconsistent === 0,
+    `every snapshot is self-consistent when restored (${inconsistent} bad)`
+  );
+  chip.unserialize(stateAtFinish0, stateAtFinish0.length); // back to the finish
   check(
     analyzer.firstCycle === 0 && analyzer.lastCycle === runner.cycle - 1,
     `analyzer covers cycle 0..${runner.cycle - 1} (first=${analyzer.firstCycle}, last=${
@@ -248,7 +262,7 @@ function serializeChip(chip: RP2350): Uint8Array {
 // --- 6. snapshot store: sorted insert, dedup, lookups -------------------------
 {
   const store = new SnapshotStore(500);
-  const snap = (cycle: number) => ({ cycle, residual: 0, serialLen: 0, data: new Uint8Array(0) });
+  const snap = (cycle: number) => ({ cycle, residual: 0, serialText: '', data: new Uint8Array(0) });
   const cycles = () => store.list.map((s) => s.cycle).join();
   check(store.findBefore(0) === null, 'empty store: findBefore is null');
   for (const c of [0, 1100, 600]) store.add(snap(c)); // unsorted input
@@ -318,6 +332,44 @@ function serializeChip(chip: RP2350): Uint8Array {
     describeSample(a7, lane, a7.lastCycle + 1) ===
       `GPIO16 has no recorded sample at cycle ${a7.lastCycle + 1}.`,
     'no sample -> explicit message'
+  );
+}
+
+// --- 8. long forward jump via a recorded snapshot --------------------------------
+{
+  // From the boot phase to 18M: the initial run recorded a snapshot at 18M, so
+  // this must be a restore + ~100k-cycle replay, not 18M cycles of emulation.
+  const a = boot();
+  playToFinish(a.runner);
+  a.runner.seek(5000);
+  const t0 = performance.now();
+  a.runner.seek(18_000_000);
+  const ms = performance.now() - t0;
+  check(
+    a.runner.cycle === 18_000_000 && a.runner.chipCyclesConsistent(),
+    `forward jump lands exactly on 18M (cycle=${a.runner.cycle}, residual=${a.runner.residual})`
+  );
+  check(ms < 400, `long forward jump goes via the snapshot (${ms.toFixed(0)} ms)`);
+  check(
+    a.analyzer.sampleAt(17_999_500) !== undefined && a.analyzer.sampleAt(18_000_400) !== undefined,
+    'view covered on both sides of the marker after the jump'
+  );
+  // Same position reached through the (known deterministic) rewind path.
+  const c = boot();
+  playToFinish(c.runner);
+  c.runner.seek(18_000_000);
+  check(
+    Buffer.compare(Buffer.from(serializeChip(a.chip)), Buffer.from(serializeChip(c.chip))) === 0,
+    'forward-jump state identical to the rewind-replay state'
+  );
+  check(a.runner.serialText === c.runner.serialText, 'serial identical after the forward jump');
+
+  // Short forward hops still run the chip directly (no snapshot within a hop's reach).
+  const before = a.runner.snapshots.list.length;
+  a.runner.seek(18_050_000);
+  check(
+    a.runner.cycle === 18_050_000 && a.runner.snapshots.list.length === before + 1,
+    'short forward hop runs directly and adds just its own snapshot'
   );
 }
 
