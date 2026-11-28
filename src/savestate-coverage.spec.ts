@@ -276,6 +276,9 @@ const CONSTANT_FIELDS: Record<string, string[]> = {
   ClockAlarm: ['id'],
   // A host-side timer handle from the old run() API that nothing sets any more.
   RPPIO: ['runTimer'],
+  // Board wiring the host sets once (per-board crystal), not runtime state.
+  RP2040: ['xoscFreq', 'roscFreq'],
+  RP2350: ['xoscFreq', 'roscFreq'],
   // Recomputed from reg[] by every PLL write; only used in a log line.
   RP2350PLL: ['foutpostdiv'],
 };

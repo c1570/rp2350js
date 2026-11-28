@@ -13,6 +13,7 @@ import { RPIO } from './peripherals/io';
 import { RPPADS } from './peripherals/pads';
 import { Peripheral, UnimplementedPeripheral } from './peripherals/peripheral';
 import { RPPIO, StateMachine, WaitType } from './peripherals/pio';
+import { RPPLL } from './peripherals/pll';
 import { RPPPB } from './peripherals/ppb';
 import { RPPWM } from './peripherals/pwm';
 import { RPReset } from './peripherals/reset';
@@ -113,6 +114,11 @@ export class RP2040 implements IRPChip {
   clkSys = 125 * MHz;
   clkPeri = 125 * MHz;
 
+  /** Crystal oscillator frequency. 12 MHz on the Raspberry Pi Pico and most other boards. */
+  xoscFreq = 12 * MHz;
+  /** Ring oscillator frequency. Varies with voltage/temperature on real silicon. */
+  roscFreq = 6.5 * MHz;
+
   readonly ppb = new RPPPB(this, 'PPB');
   readonly sio = new RPSIO(this, IRQ.SIO_PROC0, IRQ.SIO_PROC1);
 
@@ -163,6 +169,8 @@ export class RP2040 implements IRPChip {
   // Built as fields rather than inside the address map, so transferState() can name them.
   private readonly ssi = new RPSSI(this, 'SSI');
   private readonly clocks = new RPClocks(this, 'CLOCKS_BASE');
+  private readonly pllSys = new RPPLL(this, 'PLL_SYS_BASE');
+  private readonly pllUsb = new RPPLL(this, 'PLL_USB_BASE');
   private readonly resets = new RPReset(this, 'RESETS_BASE');
   private readonly padsBank0 = new RPPADS(this, 'PADS_BANK0_BASE', 'bank0');
   private readonly padsQspi = new RPPADS(this, 'PADS_QSPI_BASE', 'qspi');
@@ -186,8 +194,8 @@ export class RP2040 implements IRPChip {
     0x4001c: this.padsBank0,
     0x40020: this.padsQspi,
     0x40024: new UnimplementedPeripheral(this, 'XOSC_BASE'),
-    0x40028: new UnimplementedPeripheral(this, 'PLL_SYS_BASE'),
-    0x4002c: new UnimplementedPeripheral(this, 'PLL_USB_BASE'),
+    0x40028: this.pllSys,
+    0x4002c: this.pllUsb,
     0x40030: this.busctrl,
     0x40034: this.uart[0],
     0x40038: this.uart[1],
@@ -304,6 +312,32 @@ export class RP2040 implements IRPChip {
 
     this.logger.warn(LOG_NAME, `Read from invalid memory address: ${address.toString(16)}`);
     return 0xffffffff;
+  }
+
+  /** PLL_SYS output frequency, in Hz, derived from its divider registers. */
+  getPllSysFrequency(): number {
+    return this.pllSys.frequency;
+  }
+
+  /** PLL_USB output frequency, in Hz, derived from its divider registers. */
+  getPllUsbFrequency(): number {
+    return this.pllUsb.frequency;
+  }
+
+  /**
+   * Recomputes `clkSys` from the PLL and CLOCKS registers and retunes the timers that
+   * count clk_sys cycles. Until firmware configures the clock tree, `clkSys` keeps its
+   * default. Called by the PLL and CLOCKS peripherals when their registers change.
+   */
+  updateClocks() {
+    const clkSys = this.clocks.sysFreq;
+    // 0 means clk_sys is fed from an unmodelled or unconfigured source: keep the last value
+    if (!clkSys || clkSys === this.clkSys) {
+      return;
+    }
+    this.clkSys = clkSys;
+    this.ppb.systickTimer.frequency = clkSys;
+    this.pwm.clkSysChanged();
   }
 
   findPeripheral(address: Uint32): Peripheral {
@@ -703,6 +737,8 @@ export class RP2040 implements IRPChip {
     this.timer0.transferState(s);
     this.rtc.transferState(s);
     this.vreg.transferState(s);
+    this.pllSys.transferState(s);
+    this.pllUsb.transferState(s);
     // Explicit lengths: typed-array length is erased in C.
     s.u32array(this.sram32, SRAM_SIZE / 4);
     s.u8array(this.usbDPRAM, 4 * KB);

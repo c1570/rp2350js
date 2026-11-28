@@ -236,6 +236,12 @@ export class RPPPB2350<ChipType extends IRPChip = IRPChip> extends BasePeriphera
     this.coreState = [this.makeCoreState(0), this.makeCoreState(1)];
   }
 
+  /** Retunes both cores' SysTick timers after a clk_sys change. */
+  setSystickFrequency(frequency: number) {
+    this.coreState[0].systickTimer.frequency = frequency;
+    this.coreState[1].systickTimer.frequency = frequency;
+  }
+
   private makeCoreState(coreIndex: number): M33CoreState {
     const systickTimer = new Timer32(
       'M33_SysTick',

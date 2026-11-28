@@ -47,6 +47,7 @@ const FILES = [
     mode: 'shared',
   },
   { file: 'src/peripherals/ppb.ts', classes: ['RPPPB'], mode: 'rp2040-only' },
+  { file: 'src/peripherals/pll.ts', classes: ['RPPLL'], mode: 'rp2040-only' },
   { file: 'src/peripherals/syscfg.ts', classes: ['RP2040SysCfg'], mode: 'rp2040-only' },
   // ChipType-generic but constructed ONLY by rp2040.ts (rp2350.ts has separate,
   // differently-named RP2350DMA/RP2350IO/RP2350PADS classes). Same cts2c-defaults-

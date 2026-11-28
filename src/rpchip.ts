@@ -1,6 +1,7 @@
 import { GPIOPin } from './gpio-pin';
 import { IClock } from './clock/clock';
 import { ICpuCore } from './cpu-core';
+import { Float64 } from './utils/types';
 import { Logger } from './utils/logging';
 import { RPPIO } from './peripherals/pio';
 
@@ -45,6 +46,23 @@ export interface IRPChip {
   readonly cycles: number;
   readonly clkSys: number;
   readonly clkPeri: number;
+
+  /** Crystal oscillator frequency, in Hz. 12 MHz on the Raspberry Pi Pico boards. */
+  xoscFreq: number;
+  /** Ring oscillator frequency, in Hz. Varies with voltage/temperature on real silicon. */
+  roscFreq: number;
+
+  /** PLL_SYS output frequency, in Hz, derived from its divider registers. */
+  getPllSysFrequency(): Float64;
+  /** PLL_USB output frequency, in Hz, derived from its divider registers. */
+  getPllUsbFrequency(): Float64;
+
+  /**
+   * Recomputes `clkSys` and `clkPeri` from the PLL and CLOCKS registers and updates the
+   * peripherals derived from them. Until firmware configures the clock tree, each keeps
+   * its default. Called by the PLL and CLOCKS peripherals when their registers change.
+   */
+  updateClocks(): void;
 
   readUint32(address: number): number;
   readUint16(address: number): number;

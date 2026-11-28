@@ -410,6 +410,13 @@ export class RPPWM<ChipType extends IRPChip = IRPChip>
     return this.rpchip.clkSys;
   }
 
+  /** Called after a clk_sys change: retunes every channel's counter to the new rate. */
+  clkSysChanged() {
+    for (const channel of this.channels) {
+      channel.timer.frequency = this.clockFreq;
+    }
+  }
+
   channelInterrupt(index: number) {
     this.intRaw |= 1 << index;
     this.checkInterrupts();

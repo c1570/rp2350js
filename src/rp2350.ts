@@ -201,6 +201,11 @@ export class RP2350 implements IRPChip {
   clkSys = 150 * MHz;
   clkPeri = 150 * MHz;
 
+  /** Crystal oscillator frequency. 12 MHz on the Raspberry Pi Pico 2 and most other boards. */
+  xoscFreq = 12 * MHz;
+  /** Ring oscillator frequency. Varies with voltage/temperature on real silicon. */
+  roscFreq = 6.5 * MHz;
+
   readonly sio = new RP2350SIO(
     this,
     IRQ2350.SIO_IRQ_FIFO,
@@ -299,6 +304,7 @@ export class RP2350 implements IRPChip {
   private readonly padsBank0 = new RP2350PADS(this, 'PADS_BANK0_BASE', 'bank0');
   private readonly padsQspi = new RP2350PADS(this, 'PADS_QSPI_BASE', 'qspi');
   private readonly pllSys = new RP2350PLL(this, 'PLL_SYS_BASE');
+  private readonly pllUsb = new RP2350PLL(this, 'PLL_USB_BASE');
   private readonly bootRam = new RPBootRAM(this, 'BOOTRAM_BASE');
   private readonly trng = new RP2350TRNG(this, 'TRNG_BASE');
   private readonly sha256 = new RP2350SHA256(this, 'SHA256_BASE');
@@ -316,7 +322,7 @@ export class RP2350 implements IRPChip {
     0x40040: this.padsQspi,
     0x40048: new UnimplementedPeripheral(this, 'XOSC_BASE'),
     0x40050: this.pllSys,
-    0x40058: new UnimplementedPeripheral(this, 'PLL_USB_BASE'),
+    0x40058: this.pllUsb,
     0x40060: new UnimplementedPeripheral(this, 'ACCESSCTRL_BASE'),
     0x40068: new UnimplementedPeripheral(this, 'BUSCTRL_BASE'), //TODO new RPBUSCTRL(this, 'BUSCTRL_BASE'),
     0x40070: this.uart[0],
@@ -535,6 +541,34 @@ export class RP2350 implements IRPChip {
       );
     }
     //return 0xffffffff;
+  }
+
+  /** PLL_SYS output frequency, in Hz, derived from its divider registers. */
+  getPllSysFrequency(): number {
+    return this.pllSys.frequency;
+  }
+
+  /** PLL_USB output frequency, in Hz, derived from its divider registers. */
+  getPllUsbFrequency(): number {
+    return this.pllUsb.frequency;
+  }
+
+  /**
+   * Recomputes `clkSys` from the PLL and CLOCKS registers and retunes the timers that
+   * count clk_sys cycles. Until firmware configures the clock tree, `clkSys` keeps its
+   * default. Called by the PLL and CLOCKS peripherals when their registers change.
+   */
+  updateClocks() {
+    const clkSys = this.clocks.sysFreq;
+    // 0 means clk_sys is fed from an unmodelled or unconfigured source: keep the last value
+    if (!clkSys || clkSys === this.clkSys) {
+      return;
+    }
+    this.clkSys = clkSys;
+    if (this.ppb) {
+      this.ppb.setSystickFrequency(clkSys);
+    }
+    this.pwm.clkSysChanged();
   }
 
   findPeripheral(address: Uint32): Peripheral {
@@ -1096,6 +1130,7 @@ export class RP2350 implements IRPChip {
     this.trng.transferState(s);
     this.sha256.transferState(s);
     this.powman.transferState(s);
+    this.pllUsb.transferState(s);
     // Explicit lengths: typed-array length is erased in C.
     s.u32array(this.sram32, SRAM_SIZE / 4);
     s.u8array(this.usbDPRAM, 4 * KB);
