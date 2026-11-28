@@ -110,7 +110,8 @@ describe('RPClocks (RP2040)', () => {
     const rp2040 = new RP2040();
     setSysClock(rp2040, RP2040_CLOCKS_BASE, RP2040_PLL_SYS_BASE);
     rp2040.writeUint32(RP2040_CLOCKS_BASE + CLK_SYS_DIV, 0);
-    expect(rp2040.clkSys).toEqual((125 * MHz) / 0x10000);
+    // clkSys is an int32 field (in the C build too), so the sub-Hz fraction drops.
+    expect(rp2040.clkSys).toEqual(Math.trunc((125 * MHz) / 0x10000));
   });
 
   it('should run clk_sys straight off the crystal when AUXSRC selects xosc', () => {
@@ -215,7 +216,8 @@ describe('RPClocks (RP2350)', () => {
     rp2350.writeUint32(RP2350_CLOCKS_BASE + CLK_REF_CTRL, CLK_REF_SRC_XOSC);
     rp2350.writeUint32(RP2350_CLOCKS_BASE + CLK_SYS_CTRL, CLK_SYS_SRC_AUX | CLK_SYS_AUXSRC_PLL_SYS);
     rp2350.writeUint32(RP2350_CLOCKS_BASE + CLK_SYS_DIV, 0);
-    expect(rp2350.clkSys).toEqual((150 * MHz) / 0x10000);
+    // clkSys is an int32 field (in the C build too), so the sub-Hz fraction drops.
+    expect(rp2350.clkSys).toEqual(Math.trunc((150 * MHz) / 0x10000));
   });
 
   it('should run clk_sys straight off the crystal when AUXSRC selects xosc', () => {

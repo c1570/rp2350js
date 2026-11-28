@@ -1,5 +1,5 @@
 import { IRPChip } from './rpchip';
-import { Uint32 } from './utils/types';
+import { Uint32, Float64 } from './utils/types';
 import { SimulationClock } from './clock/simulation-clock';
 import { CortexM0Core } from './cortex-m0-core';
 import { GPIOPin, FUNCTION_PWM, FUNCTION_SIO, FUNCTION_PIO0, FUNCTION_PIO1 } from './gpio-pin';
@@ -325,12 +325,12 @@ export class RP2040 implements IRPChip {
   }
 
   /** PLL_SYS output frequency, in Hz, derived from its divider registers. */
-  getPllSysFrequency(): number {
+  getPllSysFrequency(): Float64 {
     return this.pllSys.frequency;
   }
 
   /** PLL_USB output frequency, in Hz, derived from its divider registers. */
-  getPllUsbFrequency(): number {
+  getPllUsbFrequency(): Float64 {
     return this.pllUsb.frequency;
   }
 
@@ -345,7 +345,10 @@ export class RP2040 implements IRPChip {
   }
 
   private updateClkSys() {
-    const clkSys = this.clocks.sysFreq;
+    // Truncate up front to the C build's int32_t clkSys field, so both sides compare,
+    // store and hand down the same value even when a fractional divider makes sysFreq
+    // non-integer.
+    const clkSys = this.clocks.sysFreq | 0;
     // 0 means clk_sys is fed from an unmodelled or unconfigured source: keep the last value
     if (!clkSys || clkSys === this.clkSys) {
       return;
@@ -360,7 +363,8 @@ export class RP2040 implements IRPChip {
   }
 
   private updateClkPeri() {
-    const clkPeri = this.clocks.periFreq;
+    // See updateClkSys: match the C build's int32_t clkPeri field.
+    const clkPeri = this.clocks.periFreq | 0;
     // 0 means the clock generator is stopped, or the source is one we do not model
     if (!clkPeri || clkPeri === this.clkPeri) {
       return;
@@ -653,7 +657,12 @@ export class RP2040 implements IRPChip {
     if (this.pioActiveSmCount) {
       this.stepPios(cycles);
     }
-    const cycleNanos = 1e9 / this.clkSys;
+    // Float64, not plain `number`: nanos-per-cycle is fractional whenever clk_sys
+    // doesn't divide 1e9 (e.g. 6.5MHz ROSC → 153.846 while firmware brings the clock
+    // tree up), and int32_t would truncate it, running the simulated clock fast in the
+    // C build only. (125MHz divides 1e9 exactly, which is why the RP2040 could lean on
+    // plain `number` before the CLOCKS registers actually drove clkSys.)
+    const cycleNanos: Float64 = 1e9 / this.clkSys;
     this.clock.tick(cycles * cycleNanos);
   }
 

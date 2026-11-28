@@ -553,12 +553,12 @@ export class RP2350 implements IRPChip {
   }
 
   /** PLL_SYS output frequency, in Hz, derived from its divider registers. */
-  getPllSysFrequency(): number {
+  getPllSysFrequency(): Float64 {
     return this.pllSys.frequency;
   }
 
   /** PLL_USB output frequency, in Hz, derived from its divider registers. */
-  getPllUsbFrequency(): number {
+  getPllUsbFrequency(): Float64 {
     return this.pllUsb.frequency;
   }
 
@@ -573,7 +573,10 @@ export class RP2350 implements IRPChip {
   }
 
   private updateClkSys() {
-    const clkSys = this.clocks.sysFreq;
+    // Truncate up front to the C build's int32_t clkSys field, so both sides compare,
+    // store and hand down the same value even when a fractional divider makes sysFreq
+    // non-integer.
+    const clkSys = this.clocks.sysFreq | 0;
     // 0 means clk_sys is fed from an unmodelled or unconfigured source: keep the last value
     if (!clkSys || clkSys === this.clkSys) {
       return;
@@ -590,7 +593,8 @@ export class RP2350 implements IRPChip {
   }
 
   private updateClkPeri() {
-    const clkPeri = this.clocks.periFreq;
+    // See updateClkSys: match the C build's int32_t clkPeri field.
+    const clkPeri = this.clocks.periFreq | 0;
     // 0 means the clock generator is stopped, or the source is one we do not model
     if (!clkPeri || clkPeri === this.clkPeri) {
       return;
